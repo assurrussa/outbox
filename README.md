@@ -6,7 +6,7 @@ A simple outbox for Go projects.
 
 Use go get.
 ```sh
-$ go get github.com/assurrussa/outbox@v0.1
+$ go get github.com/assurrussa/outbox@v0.2.0
 ```
 
 Then import the package into your own code:
