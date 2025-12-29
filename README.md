@@ -5,16 +5,19 @@ A simple outbox for Go projects.
 ## Install
 
 Use go get.
+
 ```sh
-$ go get github.com/assurrussa/outbox@v0.2.0
+$ go get github.com/assurrussa/outbox@v0.3.0
 ```
 
 Then import the package into your own code:
+
 ```
 import "github.com/assurrussa/outbox/outbox"
 ```
 
 ## Usage
+
 ```go
 package main
 
@@ -76,6 +79,7 @@ func main() {
 ## Migrations
 
 Use embedded migrations for tools like goose:
+
 ```go
 package main
 
@@ -96,11 +100,12 @@ func main() {
 		migrator.WithCommand(command),
 		migrator.WithDirectory(dir),
 		migrator.WithArgs(...),
-        ...,
-    )
+	...,
+)
 }
 ```
 
 ## License
 
-This project is released under the MIT licence. See [LICENSE](https://github.com/assurrussa/outbox/blob/master/LICENSE) for more details.
+This project is released under the MIT licence. See [LICENSE](https://github.com/assurrussa/outbox/blob/master/LICENSE)
+for more details.

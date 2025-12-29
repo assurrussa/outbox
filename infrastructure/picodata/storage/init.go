@@ -14,40 +14,36 @@ import (
 	"github.com/assurrussa/outbox/outbox/logger"
 )
 
-type Option struct {
+type Option func(o *Options)
+
+type Options struct {
 	dsn       string
 	checkPing bool
 	log       logger.Logger
 	strategy  strats.BalanceStrategy
 }
 
-func NewOption(dsn string, strategy strats.BalanceStrategy, log logger.Logger, checkPing bool) *Option {
-	if strategy == nil {
-		strategy = strats.NewRoundRobinStrategy()
-	}
-
-	if log == nil {
-		log = logger.Default()
-	}
-
-	return &Option{
-		dsn:       dsn,
-		strategy:  strategy,
-		log:       log,
-		checkPing: checkPing,
-	}
-}
-
 var logInitOnce sync.Once
 
-func Create(ctx context.Context, opts *Option) (*ClientPicoData, error) {
-	if opts == nil {
-		return nil, errors.New("nil options")
+func Create(ctx context.Context, dsn string, opts ...Option) (*ClientPicoData, error) {
+	options := &Options{
+		dsn:       dsn,
+		strategy:  strats.NewRoundRobinStrategy(),
+		log:       logger.Default(),
+		checkPing: true,
 	}
 
-	adapterLog := NewAdapterLog(opts.log)
+	for _, opt := range opts {
+		opt(options)
+	}
 
-	cfgPgx, err := pgxpool.ParseConfig(opts.dsn)
+	if err := options.Validate(); err != nil {
+		return nil, fmt.Errorf("validate options: %w", err)
+	}
+
+	adapterLog := NewAdapterLog(options.log)
+
+	cfgPgx, err := pgxpool.ParseConfig(options.dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -66,17 +62,58 @@ func Create(ctx context.Context, opts *Option) (*ClientPicoData, error) {
 	pool, err := picogo.NewWithConfig(
 		ctx,
 		cfgPgx,
-		picogo.WithBalanceStrategy(opts.strategy),
+		picogo.WithBalanceStrategy(options.strategy),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("picodata: unable to connect to database: %w", err)
 	}
 
-	if opts.checkPing {
+	if options.checkPing {
 		if err := pool.Ping(ctx); err != nil {
 			return nil, fmt.Errorf("picodata: unable to ping database: %w", err)
 		}
 	}
 
 	return newClient(pool), nil
+}
+
+func WithDSN(dsn string) Option {
+	return func(o *Options) {
+		o.dsn = dsn
+	}
+}
+
+func WithCheckPing(checkPing bool) Option {
+	return func(o *Options) {
+		o.checkPing = checkPing
+	}
+}
+
+func WithLogger(log logger.Logger) Option {
+	return func(o *Options) {
+		o.log = log
+	}
+}
+
+func WithBalanceStrategy(strategy strats.BalanceStrategy) Option {
+	return func(o *Options) {
+		o.strategy = strategy
+	}
+}
+
+func (o *Options) Validate() error {
+	if o == nil {
+		return errors.New("nil options")
+	}
+	if o.log == nil {
+		return errors.New("nil logger")
+	}
+	if o.strategy == nil {
+		return errors.New("nil balance strategy")
+	}
+	if o.dsn == "" {
+		return errors.New("nil dsn")
+	}
+
+	return nil
 }

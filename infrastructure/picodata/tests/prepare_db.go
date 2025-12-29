@@ -124,7 +124,14 @@ func PrepareDB(
 	options.migrationTableName = migrationTableName(dbName)
 
 	dsn := os.Getenv("TEST_OUTBOXLIB_PICODATA_DSN")
-	poolMain, err := picodatastorage.Create(ctx, picodatastorage.NewOption(dsn, strats.NewRoundRobinStrategy(), lg, true))
+	poolMain, err := picodatastorage.Create(
+		ctx,
+		dsn,
+		picodatastorage.WithBalanceStrategy(strats.NewRoundRobinStrategy()),
+		picodatastorage.WithLogger(lg),
+		picodatastorage.WithCheckPing(true),
+	)
+
 	require.NoError(t, err)
 	migrationDatabase(t, ctx, poolMain, "up", options, lg)
 

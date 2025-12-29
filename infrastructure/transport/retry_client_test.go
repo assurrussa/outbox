@@ -130,10 +130,11 @@ func TestRetryClient_Do_Error(t *testing.T) {
 
 func createRequest() transporthttp.Request {
 	return transporthttp.Request{
-		ExpectStatusCode: nethttp.StatusOK,
-		Method:           "POST",
-		URL:              "https://example.com/blog/comments",
-		Body:             bytes.NewBufferString(`{"message": "lol kek"}`),
+		ExpectStatusCode:   nethttp.StatusOK,
+		ReadResponseAlways: true,
+		Method:             "POST",
+		URL:                "https://example.com/blog/comments",
+		Body:               bytes.NewBufferString(`{"message": "lol kek"}`),
 		Headers: map[string]string{
 			"Content-Type": "application/json",
 		},
