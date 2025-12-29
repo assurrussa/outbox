@@ -1,0 +1,39 @@
+services:
+  integration-postgres-tests:
+    image: postgres:17-alpine
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${TEST_PSQL_DATABASENAME:-tests-db-pgsql}
+      POSTGRES_USER: ${TEST_PSQL_USERNAME:-tests-service}
+      POSTGRES_PASSWORD: ${TEST_PSQL_PASSWORD:-tests-service}
+    volumes:
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    ports:
+      - "127.0.0.1:${TEST_POSTGRES_PORT:-54325}:5432"
+    expose:
+      - "${TEST_POSTGRES_PORT:-54325}"
+
+  integration-picodata-tests:
+    build:
+      context: ./
+      dockerfile: ./docker/picodata/Dockerfile
+    hostname: integration-picodata-tests
+    user: "${PICODATA_UID:-1000}:${PICODATA_GID:-1000}"
+    environment:
+      PICODATA_INSTANCE_NAME: integration-picodata-tests
+      PICODATA_INSTANCE_DIR: /pico/data/integration-picodata-tests
+      PICODATA_IPROTO_LISTEN: 0.0.0.0:${PICODATA_LISTEN_PEER_TESTS:-3349}
+      PICODATA_IPROTO_ADVERTISE: 0.0.0.0:${PICODATA_LISTEN_PEER_TESTS:-3349}
+      PICODATA_PG_LISTEN: 0.0.0.0:${PICODATA_LISTEN_PG_TESTS:-5049}
+      PICODATA_PG_SSL: ${TEST_OUTBOXLIB_PICODATA_PG_SSL:-false}
+      PICODATA_ADMIN_PASSWORD: ${TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD}
+      PICODATA_CONFIG_FILE: /app/cluster-storage.yml
+    ports:
+      - ${PICODATA_LISTEN_PEER_TESTS:-3349}:3349
+      - ${PICODATA_LISTEN_PG_TESTS:-5049}:5049
+      - ${PICODATA_LISTEN_HTTP_TESTS:-8049}:8049
+    volumes:
+      - ./docker/picodata/cluster-storage-tests.yml:/app/cluster-storage.yml
+      - ./docker/picodata/share_dir:/app/share_dir
+      - $PWD/data/picodata/tests:/pico
