@@ -60,9 +60,10 @@ func Test_DoWithRequestAndParse_NotFound(t *testing.T) {
 	c.Client = server.Client()
 
 	req := transporthttp.Request{
-		Method:           http.MethodGet,
-		URL:              server.URL,
-		ExpectStatusCode: http.StatusOK,
+		Method:             http.MethodGet,
+		URL:                server.URL,
+		ExpectStatusCode:   http.StatusOK,
+		ReadResponseAlways: true,
 	}
 	var body testData
 	err := c.DoWithRequestAndParse(t.Context(), req, &body)

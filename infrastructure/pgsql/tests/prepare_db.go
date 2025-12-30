@@ -117,12 +117,12 @@ func PrepareDB(
 		MaxConnIdleTime:     tests3.Config.MaxConnIdleTime,
 		MaxConnLifeTime:     tests3.Config.MaxConnLifeTime,
 	}
-	poolMain, err := pgsqlinit.NewPool(ctx, cfg, pgsqlclient.WithEnvironment(tests3.Config.Env), pgsqlclient.WithLogger(lg))
+	poolMain, err := pgsqlinit.CreateWithConfig(ctx, cfg, pgsqlclient.WithEnvironment(tests3.Config.Env), pgsqlclient.WithLogger(lg))
 	require.NoError(t, err)
 	require.NoError(t, createDatabase(ctx, dbName, poolMain))
 
 	cfg.Database = dbName
-	pool, err := pgsqlinit.NewPool(ctx, cfg, pgsqlclient.WithEnvironment(tests3.Config.Env), pgsqlclient.WithLogger(lg))
+	pool, err := pgsqlinit.CreateWithConfig(ctx, cfg, pgsqlclient.WithEnvironment(tests3.Config.Env), pgsqlclient.WithLogger(lg))
 	require.NoError(t, err)
 	migrationDatabase(t, ctx, pool, "up", options, lg)
 

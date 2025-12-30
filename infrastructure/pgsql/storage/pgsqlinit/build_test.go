@@ -13,10 +13,28 @@ import (
 	"github.com/assurrussa/outbox/infrastructure/pgsql/storage/pgsqlinit"
 )
 
+func TestCreate_Success(t *testing.T) {
+	ctx := context.Background()
+
+	dsn := "postgres://jack:secret@pg.example.com:5432/mydb?sslmode=verify-ca&pool_max_conns=10"
+	pool, err := pgsqlinit.Create(ctx, dsn, pgsqlclient.WithCheck(false))
+	require.NoError(t, err)
+	assert.NotNil(t, pool)
+}
+
+func TestCreate_Error(t *testing.T) {
+	ctx := context.Background()
+
+	dsn := "postgres://jack:secret@pg.example.com:5432/mydb?sslmode=verify-ca&pool_max_conns=10"
+	pool, err := pgsqlinit.Create(ctx, dsn)
+	require.Error(t, err)
+	assert.Nil(t, pool)
+}
+
 func TestNewPool_Success(t *testing.T) {
 	ctx := context.Background()
 
-	pool, err := pgsqlinit.NewPool(ctx, pgsql.PSQLConfig{
+	pool, err := pgsqlinit.CreateWithConfig(ctx, pgsql.PSQLConfig{
 		Address:             "localhost:54752",
 		Username:            "test-username",
 		Password:            "test-pwd",
@@ -35,7 +53,7 @@ func TestNewPool_Success(t *testing.T) {
 func TestNewPool_Error(t *testing.T) {
 	ctx := context.Background()
 
-	pool, err := pgsqlinit.NewPool(ctx, pgsql.PSQLConfig{
+	pool, err := pgsqlinit.CreateWithConfig(ctx, pgsql.PSQLConfig{
 		Address:             "localhost:54752",
 		Username:            "test-username",
 		Password:            "test-pwd",
