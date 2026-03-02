@@ -69,9 +69,11 @@ func main() {
 	}
 
 	//go:generate mockgen -source=$GOFILE -destination=mocks/usecase_mock.gen.go -package=${GOPACKAGE}mocks
+	//nolint:gosec // internal tool for code generation so args are trusted
 	log.Println("//go:generate mockgen", strings.Join(cmdArgs, " "))
 
 	ctx := context.Background()
+	//nolint:gosec // internal tool for code generation so args are trusted
 	cmd := exec.CommandContext(ctx, "mockgen", cmdArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

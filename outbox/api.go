@@ -18,6 +18,8 @@ func (s *Service) Put(ctx context.Context, name, payload string, availableAt tim
 	return jobID, nil
 }
 
+// GetQueueStats returns queue totals when JobsStatRepository is configured.
+// If stats repo is not set, returns sharederrors.ErrJobStatNotInit.
 func (s *Service) GetQueueStats(ctx context.Context) (QueueStats, error) {
 	if s.jobsStatRepo == nil {
 		return QueueStats{}, sharederrors.ErrJobStatNotInit

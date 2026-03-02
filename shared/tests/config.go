@@ -38,6 +38,14 @@ type configIntegration struct {
 	TLSKey               string        `env:"TEST_OUTBOXLIB_PSQL_TLS_KEY"`
 	MaxConnIdleTime      time.Duration `env:"TEST_OUTBOXLIB_PSQL_MAX_CONN_IDLE_TIME" env-default:"5m" validate:"min=1s,max=1h"`
 	MaxConnLifeTime      time.Duration `env:"TEST_OUTBOXLIB_PSQL_MAX_CONN_LIFE_TIME" env-default:"1h" validate:"min=1m"`
+
+	MySQLAddress      string `env:"TEST_OUTBOXLIB_MYSQL_ADDRESS" env-default:"integration-mysql-tests" validate:"required"`
+	MySQLPort         int    `env:"TEST_OUTBOXLIB_MYSQL_PORT" env-default:"3306" validate:"required"`
+	MySQLAddressLocal string `env:"TEST_OUTBOXLIB_MYSQL_ADDRESS_LOCAL"`
+	MySQLPortLocal    int    `env:"TEST_OUTBOXLIB_MYSQL_PORT_LOCAL"`
+	MySQLUser         string `env:"TEST_OUTBOXLIB_MYSQL_USERNAME" env-default:"root" validate:"required"`
+	MySQLPassword     string `env:"TEST_OUTBOXLIB_MYSQL_PASSWORD" env-default:"tests-service" validate:"required"`
+	MySQLDatabase     string `env:"TEST_OUTBOXLIB_MYSQL_DATABASENAME" env-default:"tests-db-mysql" validate:"required"`
 }
 
 func init() {

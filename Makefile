@@ -1,32 +1,65 @@
 .DEFAULT_GOAL := check
-GO_MODULE := $(shell go list -m)
-GO_FILES := $(shell find . -type f -name '*.go')
+BACKEND_DIRS := backends/mysql backends/sqlite backends/pgsql backends/picodata
+CORE_PKGS := ./outbox/... ./shared/... ./tools/...
+CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
+BACKEND_GO_FILES := $(shell find backends -type f -name '*.go')
 
-check: picodata-render-all generate fmt vet lint test test-race cover-html
-check-all: devup check test-integration devdown
+check: picodata-render-all generate fmt vet lint test-core test-backends test-race-core cover-html
+check-all: devup check test-integration-all devdown
 
 generate:
 	go generate ./...
+	@for d in $(BACKEND_DIRS); do (cd $$d && go generate ./...); done
 
-fmt:
+fmt: fmt-core fmt-backends
+
+fmt-core:
 	go fmt ./...
-	gofumpt -l -w $(GO_FILES)
-	gci write -s standard -s default -s "prefix($(GO_MODULE))" .
+	gofumpt -l -w $(CORE_GO_FILES)
+	gci write -s standard -s default -s "prefix(github.com/assurrussa/outbox)" outbox shared tools
 
-lint:
-	golangci-lint run -v --fix --timeout=5m ./...
+fmt-backends:
+	gofumpt -l -w $(BACKEND_GO_FILES)
 
-vet:
+lint: lint-core
+
+lint-core:
+	golangci-lint run -v --fix --timeout=5m $(CORE_PKGS)
+
+vet: vet-core vet-backends
+
+vet-core:
 	go vet ./...
 
-test:
+vet-backends:
+	@for d in $(BACKEND_DIRS); do (cd $$d && go vet ./...); done
+
+test: test-core test-backends
+
+test-core:
 	go test ./...
 
-test-race:
+test-backends:
+	@for d in $(BACKEND_DIRS); do (cd $$d && go test ./...); done
+
+test-race-core:
 	go test -race -count=5 ./...
 
-test-integration:
-	go test -tags integration -race ./...
+test-integration: test-integration-all
+
+test-integration-all: test-integration-mysql test-integration-sqlite test-integration-pgsql test-integration-picodata
+
+test-integration-mysql:
+	cd backends/mysql && go test -tags integration -race ./...
+
+test-integration-sqlite:
+	cd backends/sqlite && go test -tags integration -race ./...
+
+test-integration-pgsql:
+	cd backends/pgsql && go test -tags integration -race ./...
+
+test-integration-picodata:
+	cd backends/picodata && go test -tags integration -race ./...
 
 cover-html:
 	@go test -coverprofile=./coverage.text -covermode=atomic $(shell go list ./...)
@@ -34,9 +67,11 @@ cover-html:
 
 bench-all:
 	go test -bench=. -benchmem ./...
+	@for d in $(BACKEND_DIRS); do (cd $$d && go test -bench=. -benchmem ./...); done
 
 devup:
-	docker compose up -d
+	docker compose --profile mysql --profile pgsql --profile picodata up -d
+
 devdown:
 	docker compose down --remove-orphans
 
@@ -52,6 +87,7 @@ picodata-render-app:
 	PICO_HTTP_LISTEN=0.0.0.0:8001 \
 	PICO_PG_LISTEN=0.0.0.0:5001 \
 	./docker/picodata/scripts/render_picodata_config.sh docker/picodata/cluster-storage.tmpl.yml docker/picodata/cluster-storage.yml
+
 picodata-render-local:
 	@PICO_CLUSTER_NAME=app_outbox_local \
 	PICO_REPLICATION_FACTOR=1 \
@@ -64,6 +100,7 @@ picodata-render-local:
 	PICO_HTTP_LISTEN=0.0.0.0:8042 \
 	PICO_PG_LISTEN=0.0.0.0:5042 \
 	./docker/picodata/scripts/render_picodata_config.sh docker/picodata/cluster-storage.tmpl.yml docker/picodata/cluster-storage-local.yml
+
 picodata-render-tests:
 	@PICO_CLUSTER_NAME=app_outbox_tests \
 	PICO_REPLICATION_FACTOR=1 \

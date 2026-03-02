@@ -1,22 +1,25 @@
-# GO Outbox
+# GO Outbox (Core)
 
-A simple outbox for Go projects.
+`github.com/assurrussa/outbox` is the core outbox library.
 
-## Install
+The repository is now a multi-module monorepo:
+- core module: `github.com/assurrussa/outbox`
+- MySQL backend: `github.com/assurrussa/outbox/backends/mysql`
+- SQLite backend: `github.com/assurrussa/outbox/backends/sqlite`
+- Postgres backend: `github.com/assurrussa/outbox/backends/pgsql`
+- Picodata backend: `github.com/assurrussa/outbox/backends/picodata`
 
-Use go get.
+## Install core
 
 ```sh
-$ go get github.com/assurrussa/outbox@v0.3.0
+go get github.com/assurrussa/outbox@latest
 ```
 
-Then import the package into your own code:
-
-```
+```go
 import "github.com/assurrussa/outbox/outbox"
 ```
 
-## Usage
+## Core usage
 
 ```go
 package main
@@ -27,22 +30,16 @@ import (
 
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
-	"github.com/assurrussa/outbox/shared/job"
+	sharedjob "github.com/assurrussa/outbox/shared/job"
 )
 
 type SendEmailJob struct {
 	sharedjob.DefaultJob
 }
 
-func (*SendEmailJob) Name() string {
-	return "send_email"
-}
+func (*SendEmailJob) Name() string { return "send_email" }
 
-func (*SendEmailJob) Handle(ctx context.Context, payload string) error {
-	_ = ctx
-	_ = payload
-	return nil
-}
+func (*SendEmailJob) Handle(_ context.Context, _ string) error { return nil }
 
 func main() {
 	ctx := context.Background()
@@ -51,8 +48,9 @@ func main() {
 		outbox.WithWorkers(1),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithIdleTime(5*time.Minute),
-		outbox.WithLogger(outboxlogger.WrapNamed(log, "any_custom_name_outbox_logger")),
+		outbox.WithLogger(outboxlogger.Default()),
 		outbox.WithJobsRepo(jobsRepo),
+		// Optional: only needed for svc.GetQueueStats(...)
 		outbox.WithJobsStatRepo(jobsRepo),
 		outbox.WithJobsFailedRepo(jobsFailedRepo),
 		outbox.WithTransactor(txManager),
@@ -63,49 +61,60 @@ func main() {
 
 	emailJob := &SendEmailJob{}
 	svc.MustRegisterJob(emailJob)
-	go func() {
-		_ = svc.Run(ctx)
-	}()
 
+	go func() { _ = svc.Run(ctx) }()
 	_, _ = svc.Put(ctx, "send_email", `{"id":"1"}`, time.Now())
 }
 ```
 
-## Storage drivers
+`JobsStatRepository` is optional.  
+Set `WithJobsStatRepo(...)` only if you need `svc.GetQueueStats(...)`.
 
-- Postgres storage: `github.com/assurrussa/outbox/infrastructure/pgsql/storage`
-- Picodata storage: `github.com/assurrussa/outbox/infrastructure/picodata/storage`
+## Backend modules
 
-## Migrations
+Pick only the backend module you need for a project.
 
-Use embedded migrations for tools like goose:
+- [MySQL backend](./backends/mysql/README.md)
+- [SQLite backend](./backends/sqlite/README.md)
+- [Postgres backend](./backends/pgsql/README.md)
+- [Picodata backend](./backends/picodata/README.md)
 
-```go
-package main
+## Example app
 
-import (
-	"context"
+Runnable examples:
+- [examples/base-app](examples/base-app/README.md) (core only, in-memory stubs)
+- [examples/base-app-mysql](examples/base-app-mysql/README.md)
+- [examples/base-app-picodata](examples/base-app-picodata/README.md)
+- [examples/base-app-pgsql](examples/base-app-pgsql/README.md)
+- [examples/base-app-sqlite](examples/base-app-sqlite/README.md)
 
-	"github.com/assurrussa/outbox/infrastructure/pgsql/migrator"
-	"github.com/assurrussa/outbox/infrastructure/picodata/migrator"
-)
+## Migration from old import paths
 
-func main() {
-	ctx := context.Background()
+Old `infrastructure/*` paths were removed (hard break).
 
-	migrator.Run(
-		ctx,
-		db,
-		lg,
-		migrator.WithCommand(command),
-		migrator.WithDirectory(dir),
-		migrator.WithArgs(...),
-	...,
-)
-}
+See [MIGRATION.md](./MIGRATION.md).
+
+## Notes on `shared/*`
+
+`shared/*` is kept in core for internal library/backend reuse, but should be treated as unstable internal API by external consumers.
+
+## Development
+
+Use workspace-aware commands:
+
+```sh
+make test-core
+make test-backends
+make test-integration-all
+```
+
+For integration services:
+
+```sh
+make devup
+make devdown
 ```
 
 ## License
 
-This project is released under the MIT licence. See [LICENSE](https://github.com/assurrussa/outbox/blob/master/LICENSE)
-for more details.
+MIT. See [LICENSE](./LICENSE).

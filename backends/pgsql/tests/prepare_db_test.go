@@ -1,0 +1,34 @@
+//go:build integration
+
+package tests_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/outbox/backends/pgsql/tests"
+	"github.com/assurrussa/outbox/shared/tools"
+)
+
+func TestInitDB(t *testing.T) {
+	ctx := context.Background()
+	dbTestPath := tools.FindFileDir("testdata", tools.CallerCurrentFile())
+	pgsql, db, cleanUp := tests.PrepareDB(
+		ctx,
+		t,
+		"tests-dbname",
+		tests.WithDatabasePathFilesMigration(dbTestPath),
+		tests.WithDatabaseFixedName(false),
+		tests.WithDatabaseVerbose(true),
+		tests.WithDatabaseLog(t.Logf),
+	)
+	require.NotNil(t, pgsql)
+	require.NotNil(t, db)
+	require.NotNil(t, cleanUp)
+	assert.NotPanics(t, func() {
+		cleanUp(ctx)
+	})
+}

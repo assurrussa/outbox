@@ -109,6 +109,8 @@ func WithJobsRepo(jobsRepo JobsRepository) OptOptionsSetter {
 	}
 }
 
+// WithJobsStatRepo configures optional queue stats provider.
+// It is required only for Service.GetQueueStats.
 func WithJobsStatRepo(jobsStatRepo JobsStatRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.jobsStatRepo = jobsStatRepo

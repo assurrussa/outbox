@@ -6,21 +6,26 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/assurrussa/outbox/outbox/logger"
+	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/types"
 )
 
 const serviceName = "outbox"
 
+var ErrServiceRunning = errors.New("outbox service is already running")
+
 type Service struct {
 	Options
-	jobs map[string]Job
-	mu   *sync.Mutex
+	jobs    map[string]Job
+	mu      sync.RWMutex
+	running atomic.Bool
 }
 
 func New(options ...OptOptionsSetter) (*Service, error) {
@@ -32,13 +37,20 @@ func New(options ...OptOptionsSetter) (*Service, error) {
 	return &Service{
 		Options: opts,
 		jobs:    make(map[string]Job),
-		mu:      &sync.Mutex{},
 	}, nil
 }
 
 func (s *Service) RegisterJob(job Job) error {
-	defer s.mu.Unlock()
+	if job == nil {
+		return errors.New("nil job")
+	}
+
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.running.Load() {
+		return ErrServiceRunning
+	}
 
 	if _, ok := s.jobs[job.Name()]; ok {
 		return fmt.Errorf("job %q already registered", job.Name())
@@ -56,6 +68,11 @@ func (s *Service) MustRegisterJob(job Job) {
 }
 
 func (s *Service) Run(ctx context.Context) error {
+	if !s.running.CompareAndSwap(false, true) {
+		return ErrServiceRunning
+	}
+	defer s.running.Store(false)
+
 	eg, ctx := errgroup.WithContext(ctx)
 
 	for i := 0; i < s.workers; i++ {
@@ -112,7 +129,9 @@ func (s *Service) findAndProcessJob(ctx context.Context, log logger.Logger) erro
 		return fmt.Errorf("find and reserve job: %w", err)
 	}
 
+	s.mu.RLock()
 	j, ok := s.jobs[job.Name]
+	s.mu.RUnlock()
 	if !ok {
 		log.WarnContext(ctx, "drop to dlq: job is not registered",
 			slog.String("job_name", job.Name),
@@ -122,15 +141,7 @@ func (s *Service) findAndProcessJob(ctx context.Context, log logger.Logger) erro
 		return s.dlq(ctx, job.ID, job.Name, job.Payload, "unknown job")
 	}
 
-	func() {
-		ctx, cancel := context.WithTimeout(ctx, j.ExecutionTimeout())
-		defer cancel()
-
-		ctx = withJobID(ctx, job.ID)
-
-		err = j.Handle(ctx, job.Payload)
-	}()
-
+	err = s.executeJob(ctx, j, job)
 	if err != nil {
 		log.ErrorContext(ctx, "handle job error",
 			logger.Error(err),
@@ -166,6 +177,21 @@ func (s *Service) findAndProcessJob(ctx context.Context, log logger.Logger) erro
 	}
 
 	return nil
+}
+
+func (s *Service) executeJob(ctx context.Context, j Job, job models.Job) (err error) {
+	ctx, cancel := context.WithTimeout(ctx, j.ExecutionTimeout())
+	defer cancel()
+
+	ctx = withJobID(ctx, job.ID)
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in job %q: %v", job.Name, r)
+		}
+	}()
+
+	return j.Handle(ctx, job.Payload)
 }
 
 func (s *Service) dlq(ctx context.Context, jobID types.JobID, name, payload, reason string) error {

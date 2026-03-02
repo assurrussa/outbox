@@ -1,0 +1,8 @@
+package sqlite
+
+import "database/sql"
+
+type Client interface {
+	DB() *sql.DB
+	Close() error
+}
