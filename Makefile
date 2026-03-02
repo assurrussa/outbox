@@ -3,12 +3,13 @@ BACKEND_DIRS := backends/mysql backends/sqlite backends/pgsql backends/picodata
 CORE_PKGS := ./outbox/... ./shared/... ./tools/...
 CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
 BACKEND_GO_FILES := $(shell find backends -type f -name '*.go')
+CORE_VERSION ?= v0.9.0
 
 check: picodata-render-all generate fmt vet lint test-core test-backends test-race-core cover-html
 check-all: devup check test-integration-all devdown
 
 generate:
-	go generate ./...
+	go generate $(CORE_PKGS)
 	@for d in $(BACKEND_DIRS); do (cd $$d && go generate ./...); done
 
 fmt: fmt-core fmt-backends
@@ -60,6 +61,21 @@ test-integration-pgsql:
 
 test-integration-picodata:
 	cd backends/picodata && go test -tags integration -race ./...
+
+release-ready-backends:
+	@for d in $(BACKEND_DIRS); do \
+		echo "==> $$d use core $(CORE_VERSION)"; \
+		(cd $$d && \
+			go mod edit -require=github.com/assurrussa/outbox@$(CORE_VERSION)); \
+	done
+
+release-verify-backends:
+	@for d in $(BACKEND_DIRS); do \
+		echo "==> verify $$d (GOWORK=off)"; \
+		(cd $$d && \
+			GOWORK=off go mod tidy && \
+			GOWORK=off go test ./...); \
+	done
 
 cover-html:
 	@go test -coverprofile=./coverage.text -covermode=atomic $(shell go list ./...)
