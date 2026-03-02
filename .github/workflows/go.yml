@@ -1,31 +1,77 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
 name: Go
 
 on:
   push:
-    branches: [ "master", "release/*" ]
+    branches: ["master", "release/*"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 jobs:
-
-  build:
+  core:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
 
-    - name: Build
-      run: go build -v ./...
+      - name: Test core
+        run: go test -v ./...
 
-    - name: Test
-      run: go test -v ./...
+      - name: Test core race
+        run: go test -race -v ./...
 
-    - name: Test Race
-      run: go test -race -v ./...
+  backends-unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [mysql, sqlite, pgsql]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Test backend unit
+        working-directory: backends/${{ matrix.backend }}
+        run: go test -v ./...
+
+  backends-integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: mysql
+            profile: mysql
+          - backend: sqlite
+            profile: ""
+          - backend: pgsql
+            profile: pgsql
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Prepare integration env
+        run: cp .env.example .env
+
+      - name: Start integration services
+        if: matrix.profile != ''
+        run: docker compose --profile ${{ matrix.profile }} up -d
+
+      - name: Test backend integration
+        working-directory: backends/${{ matrix.backend }}
+        run: go test -tags integration -race -v ./...
+
+      - name: Stop integration services
+        if: always() && matrix.profile != ''
+        run: docker compose down --remove-orphans

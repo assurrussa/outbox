@@ -31,7 +31,11 @@ type JobsRepository interface {
 	DeleteJob(ctx context.Context, jobID types.JobID) (int64, error)
 }
 
-// JobsStatRepository provides access to stats the outbox jobs store.
+// JobsStatRepository provides access to outbox queue stats.
+//
+// Optional:
+// this repository is required only when calling Service.GetQueueStats.
+// The worker flow (Put/Run processing) works without it.
 type JobsStatRepository interface {
 	CountExact(ctx context.Context) (int64, error)
 	CountAvailable(ctx context.Context, now time.Time) (int64, error)

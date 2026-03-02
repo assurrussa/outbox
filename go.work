@@ -1,0 +1,14 @@
+go 1.26
+
+use (
+	.
+	./backends/mysql
+	./backends/pgsql
+	./backends/picodata
+	./backends/sqlite
+	./examples/base-app
+	./examples/base-app-mysql
+	./examples/base-app-picodata
+	./examples/base-app-sqlite
+	./examples/base-app-pgsql
+)

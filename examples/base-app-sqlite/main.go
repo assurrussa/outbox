@@ -1,0 +1,183 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	sqlitemigrator "github.com/assurrussa/outbox/backends/sqlite/migrator"
+	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsfailedrepo"
+	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsrepo"
+	sqlitestorage "github.com/assurrussa/outbox/backends/sqlite/storage"
+	sqlitetx "github.com/assurrussa/outbox/backends/sqlite/storage/transaction"
+	"github.com/assurrussa/outbox/outbox"
+	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
+	sharedjob "github.com/assurrussa/outbox/shared/job"
+)
+
+func main() {
+	ctx := context.Background()
+	lg := outboxlogger.DefaultText().Named("base-app-sqlite")
+
+	if err := run(ctx, lg); err != nil {
+		lg.ErrorContext(ctx, "base-app-sqlite error", outboxlogger.Error(err))
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, log outboxlogger.Logger) error {
+	dsn := filepath.Join("data", "outbox.db")
+
+	client, err := sqlitestorage.Create(
+		ctx,
+		dsn,
+		sqlitestorage.WithLogger(log),
+		// SQLite is single-writer. Use one pooled connection in example to avoid SQLITE_BUSY races.
+		sqlitestorage.WithMaxOpenConns(1),
+		sqlitestorage.WithMaxIdleConns(1),
+	)
+	if err != nil {
+		return fmt.Errorf("init sqlite: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+	log.InfoContext(ctx, fmt.Sprintf("db file: %s", dsn))
+
+	if err := sqlitemigrator.RunEmbedded(
+		ctx,
+		client.DB(),
+		log,
+		sqlitemigrator.WithCommand("up"),
+	); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
+	}
+
+	jobs := jobsrepo.Must(client)
+	failed := jobsfailedrepo.Must(client)
+	trx := sqlitetx.New(client.DB())
+
+	svc, err := outbox.New(
+		outbox.WithWorkers(1),
+		outbox.WithIdleTime(200*time.Millisecond),
+		outbox.WithReserveFor(5*time.Second),
+		outbox.WithJobsRepo(jobs),
+		outbox.WithJobsStatRepo(jobs),
+		outbox.WithJobsFailedRepo(failed),
+		outbox.WithTransactor(trx),
+		outbox.WithLogger(log),
+	)
+	if err != nil {
+		return fmt.Errorf("create outbox service: %w", err)
+	}
+
+	svc.MustRegisterJob(newPrintJob(log))
+
+	if err := putDemoJobs(ctx, svc); err != nil {
+		return err
+	}
+
+	if err := checkStats(ctx, log, svc, failed); err != nil {
+		return fmt.Errorf("check stats: %w", err)
+	}
+
+	runCtx, cancelRun := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelRun()
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- svc.Run(runCtx)
+	}()
+
+	if err := <-runErrCh; err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("run service: %w", err)
+	}
+
+	if err := checkStats(ctx, log, svc, failed); err != nil {
+		return fmt.Errorf("check stats: %w", err)
+	}
+
+	return nil
+}
+
+const jobNamePrint = "print_message"
+
+type printPayload struct {
+	Message string `json:"message"`
+}
+
+type printJob struct {
+	sharedjob.DefaultJob
+	log outboxlogger.Logger
+}
+
+func newPrintJob(log outboxlogger.Logger) *printJob {
+	return &printJob{log: log}
+}
+
+func (j *printJob) Name() string {
+	return jobNamePrint
+}
+
+func (j *printJob) Handle(ctx context.Context, payloadRaw string) error {
+	var payload printPayload
+	if err := json.Unmarshal([]byte(payloadRaw), &payload); err != nil {
+		return fmt.Errorf("decode payload: %w", err)
+	}
+
+	jobID := outbox.JobIDFromContext(ctx)
+	j.log.InfoContext(ctx, fmt.Sprintf("handled job: id=%s message=%q", jobID.String(), payload.Message))
+
+	return nil
+}
+
+func (j *printJob) ExecutionTimeout() time.Duration {
+	return 2 * time.Second
+}
+
+func (j *printJob) MaxAttempts() int {
+	return 5
+}
+
+func checkStats(ctx context.Context, log outboxlogger.Logger, svc *outbox.Service, failed *jobsfailedrepo.Repo) error {
+	stats, err := svc.GetQueueStats(ctx)
+	if err != nil {
+		return fmt.Errorf("queue stats: %w", err)
+	}
+	failedCount, err := failed.CountExact(ctx)
+	if err != nil {
+		return fmt.Errorf("failed count: %w", err)
+	}
+
+	log.InfoContext(ctx, fmt.Sprintf(
+		"queue stats: total=%d available=%d processing=%d",
+		stats.Total, stats.Available, stats.Processing,
+	))
+	log.InfoContext(ctx, fmt.Sprintf("failed jobs: %d", failedCount))
+
+	return nil
+}
+
+func putDemoJobs(ctx context.Context, svc *outbox.Service) error {
+	now := time.Now().UTC()
+
+	payload1, err := json.Marshal(printPayload{Message: "hello from outbox #1"})
+	if err != nil {
+		return err
+	}
+	payload2, err := json.Marshal(printPayload{Message: "hello from outbox #2 (delayed)"})
+	if err != nil {
+		return err
+	}
+
+	if _, err := svc.Put(ctx, jobNamePrint, string(payload1), now); err != nil {
+		return fmt.Errorf("put job #1: %w", err)
+	}
+	if _, err := svc.Put(ctx, jobNamePrint, string(payload2), now.Add(1200*time.Millisecond)); err != nil {
+		return fmt.Errorf("put job #2: %w", err)
+	}
+
+	return nil
+}
