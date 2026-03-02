@@ -3,7 +3,7 @@ module github.com/assurrussa/outbox/backends/sqlite
 go 1.26
 
 require (
-	github.com/assurrussa/outbox v0.0.0
+	github.com/assurrussa/outbox v0.9.0
 	github.com/google/uuid v1.6.0
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/stretchr/testify v1.11.1
@@ -20,6 +20,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.1 // indirect
 	github.com/ilyakaznacheev/cleanenv v1.5.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
@@ -39,5 +40,3 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	olympos.io/encoding/edn v0.0.0-20201019073823-d3554ca0b0a3 // indirect
 )
-
-replace github.com/assurrussa/outbox => ../..
