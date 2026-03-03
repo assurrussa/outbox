@@ -103,6 +103,32 @@ func Test_CreateFailedJob_Multiple(t *testing.T) {
 	ts.Equal(int64(fJobs), count)
 }
 
+func Test_Create_StoresFailedAtAndCreatedAt(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	failedAtExpected := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	createdAtExpected := time.Date(2026, 1, 2, 4, 5, 6, 0, time.UTC)
+
+	id, err := ts.repo.Create(ctx, models.JobFailed{
+		JobID:      types.NewJobID(),
+		Queue:      "queue",
+		Name:       "job",
+		Payload:    "payload",
+		Reason:     "reason",
+		FailedAt:   failedAtExpected,
+		CreatedAt:  createdAtExpected,
+		Connection: "conn",
+		Exception:  "exc",
+	})
+	ts.Require().NoError(err)
+
+	got, err := ts.repo.GetByID(ctx, id)
+	ts.Require().NoError(err)
+	ts.Equal(failedAtExpected.UnixMilli(), got.FailedAt.UnixMilli())
+	ts.Equal(createdAtExpected.UnixMilli(), got.CreatedAt.UnixMilli())
+}
+
 func Test_DeleteJob(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)

@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	pgsql2 "github.com/assurrussa/outbox/backends/pgsql/storage"
+	pgsqlstorage "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/prettier"
 	"github.com/assurrussa/outbox/outbox/logger"
 )
@@ -20,7 +20,7 @@ type clientPG struct {
 	log  logger.Logger
 }
 
-func NewDBEngine(pool *pgxpool.Pool, env string, log logger.Logger) pgsql2.DBEngine {
+func NewDBEngine(pool *pgxpool.Pool, env string, log logger.Logger) pgsqlstorage.DBEngine {
 	return &clientPG{
 		pool: pool,
 		env:  env,
@@ -30,7 +30,7 @@ func NewDBEngine(pool *pgxpool.Pool, env string, log logger.Logger) pgsql2.DBEng
 
 func (c *clientPG) ScanOne(ctx context.Context, operationName string, dest any, sql string, args ...any) error {
 	c.logQuery(ctx, sql, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "ScanOne."+operationName, sql, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "ScanOne."+operationName, sql, args)
 	defer closer()
 
 	rows, err := c.Query(ctx, operationName, sql, args...)
@@ -43,7 +43,7 @@ func (c *clientPG) ScanOne(ctx context.Context, operationName string, dest any, 
 
 func (c *clientPG) ScanAll(ctx context.Context, operationName string, dest any, sql string, args ...any) error {
 	c.logQuery(ctx, sql, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "ScanAll."+operationName, sql, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "ScanAll."+operationName, sql, args)
 	defer closer()
 
 	rows, err := c.Query(ctx, operationName, sql, args...)
@@ -54,14 +54,14 @@ func (c *clientPG) ScanAll(ctx context.Context, operationName string, dest any, 
 	return pgxscan.ScanAll(dest, rows)
 }
 
-func (c *clientPG) ScanOnex(ctx context.Context, operationName string, dest any, sqlizer pgsql2.Sqlizer) error {
+func (c *clientPG) ScanOnex(ctx context.Context, operationName string, dest any, sqlizer pgsqlstorage.Sqlizer) error {
 	sql, args, err := sqlizer.ToSql()
 	if err != nil {
 		return fmt.Errorf("postgres: to sql: %w", err)
 	}
 
 	c.logQuery(ctx, sql, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "ScanOnex."+operationName, sql, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "ScanOnex."+operationName, sql, args)
 	defer closer()
 
 	rows, err := c.Query(ctx, operationName, sql, args...)
@@ -72,14 +72,14 @@ func (c *clientPG) ScanOnex(ctx context.Context, operationName string, dest any,
 	return pgxscan.ScanOne(dest, rows)
 }
 
-func (c *clientPG) ScanAllx(ctx context.Context, operationName string, dest any, sqlizer pgsql2.Sqlizer) error {
+func (c *clientPG) ScanAllx(ctx context.Context, operationName string, dest any, sqlizer pgsqlstorage.Sqlizer) error {
 	sql, args, err := sqlizer.ToSql()
 	if err != nil {
 		return fmt.Errorf("postgres: to sql: %w", err)
 	}
 
 	c.logQuery(ctx, sql, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "ScanAllx."+operationName, sql, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "ScanAllx."+operationName, sql, args)
 	defer closer()
 
 	rows, err := c.Query(ctx, operationName, sql, args...)
@@ -93,10 +93,10 @@ func (c *clientPG) ScanAllx(ctx context.Context, operationName string, dest any,
 // Query - pgx.Query.
 func (c *clientPG) Query(ctx context.Context, operationName string, sql string, args ...any) (pgx.Rows, error) {
 	c.logQuery(ctx, sql, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "Query."+operationName, sql, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "Query."+operationName, sql, args)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
 		return tx.Query(ctx, sql, args...) //nolint:sqlclosecheck // because not here closed conn
 	}
 
@@ -106,10 +106,10 @@ func (c *clientPG) Query(ctx context.Context, operationName string, sql string, 
 // Exec - pgx.Exec.
 func (c *clientPG) Exec(ctx context.Context, operationName string, sql string, args ...any) (pgconn.CommandTag, error) {
 	c.logQuery(ctx, sql, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "Exec."+operationName, sql, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "Exec."+operationName, sql, args)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
 		return tx.Exec(ctx, sql, args...)
 	}
 
@@ -119,10 +119,10 @@ func (c *clientPG) Exec(ctx context.Context, operationName string, sql string, a
 // QueryRow - pgx.QueryRow.
 func (c *clientPG) QueryRow(ctx context.Context, operationName string, sql string, args ...any) pgx.Row {
 	c.logQuery(ctx, sql, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "QueryRow."+operationName, sql, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "QueryRow."+operationName, sql, args)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
 		return tx.QueryRow(ctx, sql, args...)
 	}
 
@@ -130,17 +130,17 @@ func (c *clientPG) QueryRow(ctx context.Context, operationName string, sql strin
 }
 
 // Getx - aka QueryRow.
-func (c *clientPG) Getx(ctx context.Context, operationName string, dest any, sqlizer pgsql2.Sqlizer) error {
+func (c *clientPG) Getx(ctx context.Context, operationName string, dest any, sqlizer pgsqlstorage.Sqlizer) error {
 	query, args, err := sqlizer.ToSql()
 	if err != nil {
 		return fmt.Errorf("postgres: to sql: %w", err)
 	}
 
 	c.logQuery(ctx, query, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "Getx."+operationName, query, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "Getx."+operationName, query, args)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
 		return pgxscan.Get(ctx, tx, dest, query, args...)
 	}
 
@@ -148,35 +148,35 @@ func (c *clientPG) Getx(ctx context.Context, operationName string, dest any, sql
 }
 
 // Selectx - aka Query.
-func (c *clientPG) Selectx(ctx context.Context, operationName string, dest any, sqlizer pgsql2.Sqlizer) error {
+func (c *clientPG) Selectx(ctx context.Context, operationName string, dest any, sqlizer pgsqlstorage.Sqlizer) error {
 	query, args, err := sqlizer.ToSql()
 	if err != nil {
 		return fmt.Errorf("postgres: to sql: %w", err)
 	}
 
 	c.logQuery(ctx, query, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "Selectx."+operationName, query, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "Selectx."+operationName, query, args)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
-		return pgxscan.Get(ctx, tx, dest, query, args...)
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
+		return pgxscan.Select(ctx, tx, dest, query, args...)
 	}
 
 	return pgxscan.Select(ctx, c.pool, dest, query, args...)
 }
 
 // Execx - aka Exec.
-func (c *clientPG) Execx(ctx context.Context, operationName string, sqlizer pgsql2.Sqlizer) (pgconn.CommandTag, error) {
+func (c *clientPG) Execx(ctx context.Context, operationName string, sqlizer pgsqlstorage.Sqlizer) (pgconn.CommandTag, error) {
 	query, args, err := sqlizer.ToSql()
 	if err != nil {
 		return pgconn.CommandTag{}, fmt.Errorf("postgres: to sql: %w", err)
 	}
 
 	c.logQuery(ctx, query, operationName, args)
-	ctx, closer := pgsql2.CreateSpan(ctx, "Execx."+operationName, query, args)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "Execx."+operationName, query, args)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
 		return tx.Exec(ctx, query, args...)
 	}
 
@@ -190,10 +190,10 @@ func (c *clientPG) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx
 
 // SendBatch - pgx.SendBatch.
 func (c *clientPG) SendBatch(ctx context.Context, operationName string, b *pgx.Batch) pgx.BatchResults {
-	ctx, closer := pgsql2.CreateSpan(ctx, "SendBatch."+operationName, "", nil)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "SendBatch."+operationName, "", nil)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
 		return tx.SendBatch(ctx, b)
 	}
 
@@ -204,10 +204,10 @@ func (c *clientPG) SendBatch(ctx context.Context, operationName string, b *pgx.B
 func (c *clientPG) CopyFrom(
 	ctx context.Context, operationName string, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource,
 ) (int64, error) {
-	ctx, closer := pgsql2.CreateSpan(ctx, "CopyFrom."+operationName, "", nil)
+	ctx, closer := pgsqlstorage.CreateSpan(ctx, "CopyFrom."+operationName, "", nil)
 	defer closer()
 
-	if tx := pgsql2.GetTx(ctx); tx != nil {
+	if tx := pgsqlstorage.GetTx(ctx); tx != nil {
 		return tx.CopyFrom(ctx, tableName, columnNames, rowSrc)
 	}
 

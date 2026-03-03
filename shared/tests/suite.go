@@ -85,11 +85,15 @@ func NewSuiteWithContext[T suiteTest](
 	}
 
 	if v, ok := any(ts).(suite.TearDownAllSuite); ok {
-		defer v.TearDownSuite()
+		t.Cleanup(func() {
+			v.TearDownSuite()
+		})
 	}
 
 	if v, ok := any(ts).(suite.TearDownTestSuite); ok {
-		defer v.TearDownTest()
+		t.Cleanup(func() {
+			v.TearDownTest()
+		})
 	}
 
 	return ctx, cancelCtx, ts

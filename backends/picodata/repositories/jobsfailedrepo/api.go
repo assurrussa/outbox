@@ -40,14 +40,14 @@ func (r *Repo) Create(ctx context.Context, model models.JobFailed) (types.JobID,
 	query := strings.Concate(`
 INSERT INTO %s (
     id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9);
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 `, r.tableName)
 
 	id := types.NewJobID()
 	exec := r.executor(ctx)
 	if _, err := exec.Exec(ctx, query,
 		id, model.JobID, model.Queue, model.Name, model.Payload, model.Reason,
-		model.CreatedAt, model.Connection, model.Exception,
+		model.FailedAt, model.CreatedAt, model.Connection, model.Exception,
 	); err != nil {
 		return types.JobIDNil, err
 	}

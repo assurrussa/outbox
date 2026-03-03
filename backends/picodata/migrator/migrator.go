@@ -37,6 +37,17 @@ type Options struct {
 	databaseTableReplacesList map[string]string
 }
 
+func newDefaultOptions(directory string) Options {
+	return Options{
+		command:                   "status",
+		directory:                 directory,
+		tableName:                 defaultMigrationsTableName,
+		args:                      nil,
+		databaseTableReplacesList: nil,
+		steps:                     1,
+	}
+}
+
 func WithCommand(command string) Option {
 	return func(o *Options) {
 		o.command = command
@@ -87,14 +98,7 @@ type appliedMigration struct {
 }
 
 func Run(ctx context.Context, picoPool picodata.Client, log logger.Logger, opts ...Option) (errReturn error) {
-	options := Options{
-		command:                   "status",
-		directory:                 "migrations",
-		tableName:                 "public",
-		args:                      nil,
-		databaseTableReplacesList: nil,
-		steps:                     1,
-	}
+	options := newDefaultOptions("migrations")
 
 	for _, o := range opts {
 		o(&options)
@@ -150,14 +154,7 @@ func Run(ctx context.Context, picoPool picodata.Client, log logger.Logger, opts 
 
 // RunEmbedded executes migrations bundled into the backend module.
 func RunEmbedded(ctx context.Context, picoPool picodata.Client, log logger.Logger, opts ...Option) error {
-	options := Options{
-		command:                   "status",
-		directory:                 ".",
-		tableName:                 "public",
-		args:                      nil,
-		databaseTableReplacesList: nil,
-		steps:                     1,
-	}
+	options := newDefaultOptions(".")
 
 	for _, o := range opts {
 		o(&options)
