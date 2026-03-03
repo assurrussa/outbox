@@ -31,6 +31,7 @@ func TestInitDB(t *testing.T) {
 	)
 	require.NotNil(t, pgsql)
 	require.NotNil(t, db)
+	require.NotNil(t, db.DB)
 	require.NotNil(t, cleanUp)
 	assert.NotPanics(t, func() {
 		cleanUp(ctx)

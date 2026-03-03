@@ -2,6 +2,7 @@ package transaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -55,7 +56,7 @@ func (m *Manager) runTransaction(ctx context.Context, txOpts pgx.TxOptions, fn p
 
 		if err != nil {
 			if errRollback := tx.Rollback(ctx); errRollback != nil {
-				err = fmt.Errorf("rollback failed: %w", errRollback)
+				err = errors.Join(err, fmt.Errorf("rollback failed: %w", errRollback))
 			}
 		}
 	}()

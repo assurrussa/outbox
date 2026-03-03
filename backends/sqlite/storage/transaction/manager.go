@@ -45,7 +45,7 @@ func (m *Manager) RunInTx(ctx context.Context, fn func(context.Context) error) (
 		}
 
 		if rbErr := tx.Rollback(); rbErr != nil {
-			err = fmt.Errorf("rollback: %w", rbErr)
+			err = errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
 		}
 	}()
 

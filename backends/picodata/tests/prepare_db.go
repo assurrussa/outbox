@@ -135,7 +135,7 @@ func PrepareDB(
 	require.NoError(t, err)
 	migrationDatabase(t, ctx, poolMain, "up", options, lg)
 
-	db = &DBHelper{T: t, DB: pool, FnGetReplaceName: options.databaseFnReplaceTableNameGetter}
+	db = &DBHelper{T: t, DB: poolMain, FnGetReplaceName: options.databaseFnReplaceTableNameGetter}
 
 	return poolMain, db, func(ctx context.Context) {
 		defer poolMain.Close()

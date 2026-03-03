@@ -74,6 +74,10 @@ WHERE id = $1 and attempts = $2;
 		return job, nil
 	}
 
+	if err := rows.Err(); err != nil {
+		return models.Job{}, err
+	}
+
 	return models.Job{}, sharederrors.ErrNoJobs
 }
 
