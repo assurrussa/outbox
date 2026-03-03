@@ -2,8 +2,8 @@ github.com/BurntSushi/toml v1.2.1 h1:9F2/+DoOYIOksmaJFPw1tGFy1eDnIJXg+UHjuD8lTak
 github.com/BurntSushi/toml v1.2.1/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
 github.com/Masterminds/squirrel v1.5.4 h1:uUcX/aBc8O7Fg9kaISIUsHXdKuqehiXAMQTYX8afzqM=
 github.com/Masterminds/squirrel v1.5.4/go.mod h1:NNaOrjSoIDfDA40n7sr2tPNZRfjzjA400rg+riTZj10=
-github.com/assurrussa/outbox v0.9.0 h1:v7FZBLZ+HxuGiOL6xQByBsWwcTqczJaCsGQmrL+F3xY=
-github.com/assurrussa/outbox v0.9.0/go.mod h1:LvHFrBodald169Oysm6Xr514HsmiwjaX1phMvvjuhM4=
+github.com/assurrussa/outbox v0.9.2 h1:gugj9f7geh32AgZSQ9em2z/mU34XJHJc1G7YLtjTWh4=
+github.com/assurrussa/outbox v0.9.2/go.mod h1:LvHFrBodald169Oysm6Xr514HsmiwjaX1phMvvjuhM4=
 github.com/cockroachdb/cockroach-go/v2 v2.2.0 h1:/5znzg5n373N/3ESjHF5SMLxiW4RKB05Ql//KWfeTFs=
 github.com/cockroachdb/cockroach-go/v2 v2.2.0/go.mod h1:u3MiKYGupPPjkn3ozknpMUpxPaNLTFWAya419/zv6eI=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

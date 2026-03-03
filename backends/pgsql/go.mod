@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
-	github.com/assurrussa/outbox v0.9.0
+	github.com/assurrussa/outbox v0.9.2
 	github.com/georgysavva/scany/v2 v2.1.4
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5
