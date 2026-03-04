@@ -3,7 +3,7 @@ module github.com/assurrussa/outbox/examples/base-app-picodata
 go 1.26
 
 require (
-	github.com/assurrussa/outbox v0.9.2
+	github.com/assurrussa/outbox v0.9.4
 	github.com/assurrussa/outbox/backends/picodata v0.0.0
 )
 
