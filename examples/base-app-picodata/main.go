@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/assurrussa/outbox/backends/picodata"
+	"github.com/assurrussa/outbox/backends/picodata/deployenv"
 	picomigrator "github.com/assurrussa/outbox/backends/picodata/migrator"
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsrepo"
@@ -31,7 +31,12 @@ func main() {
 }
 
 func run(ctx context.Context, log outboxlogger.Logger) error {
-	dsn := resolvePicodataDSN()
+	connCfg, err := deployenv.LoadAppConnFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("load picodata connection config: %w", err)
+	}
+	dsn := connCfg.ConnectionURL()
+
 	client, err := picostorage.Create(ctx, dsn, picostorage.WithLogger(log))
 	if err != nil {
 		return fmt.Errorf("init picodata: %w", err)
@@ -177,60 +182,6 @@ func putDemoJobs(ctx context.Context, svc *outbox.Service) error {
 	}
 
 	return nil
-}
-
-func resolvePicodataDSN() string {
-	if dsn := strings.TrimSpace(os.Getenv("OUTBOX_PICODATA_DSN")); dsn != "" {
-		return dsn
-	}
-	if dsn := strings.TrimSpace(os.Getenv("TEST_OUTBOXLIB_PICODATA_DSN")); dsn != "" {
-		return dsn
-	}
-
-	host := firstNonEmpty(
-		os.Getenv("OUTBOX_PICODATA_HOST"),
-		"127.0.0.1",
-	)
-	port := firstNonEmpty(
-		os.Getenv("OUTBOX_PICODATA_PORT"),
-		"5049",
-	)
-	user := firstNonEmpty(
-		os.Getenv("OUTBOX_PICODATA_USER"),
-		"admin",
-	)
-	password := firstNonEmpty(
-		os.Getenv("OUTBOX_PICODATA_PASSWORD"),
-		"passWord!123",
-	)
-	sslMode := firstNonEmpty(
-		os.Getenv("OUTBOX_PICODATA_SSLMODE"),
-		"disable",
-	)
-
-	if strings.EqualFold(host, "localhost") {
-		host = "127.0.0.1"
-	}
-
-	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%s?sslmode=%s",
-		user,
-		password,
-		host,
-		port,
-		sslMode,
-	)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		v = strings.TrimSpace(v)
-		if v != "" {
-			return v
-		}
-	}
-
-	return ""
 }
 
 func resetDemoData(ctx context.Context, client picodata.Client) error {

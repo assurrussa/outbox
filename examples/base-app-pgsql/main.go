@@ -195,7 +195,7 @@ func resolvePostgresDSN() string {
 	port := firstNonEmpty(
 		os.Getenv("OUTBOX_PG_PORT"),
 		os.Getenv("TEST_OUTBOXLIB_PSQL_PORT_LOCAL"),
-		"54325",
+		"54335",
 	)
 	user := firstNonEmpty(
 		os.Getenv("OUTBOX_PG_USER"),

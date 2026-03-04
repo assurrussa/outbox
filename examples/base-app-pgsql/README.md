@@ -29,7 +29,7 @@ The app resolves DSN in this order:
 1. `OUTBOX_PG_DSN`
 2. Built from separate env vars (with defaults):
    - `OUTBOX_PG_HOST` (default `127.0.0.1`)
-   - `OUTBOX_PG_PORT` (default `54325`)
+   - `OUTBOX_PG_PORT` (default `54335`)
    - `OUTBOX_PG_USER` (default `tests-service`)
    - `OUTBOX_PG_PASSWORD` (default `tests-service`)
    - `OUTBOX_PG_DB` (default `tests-db-pgsql`)

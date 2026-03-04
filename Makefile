@@ -5,7 +5,7 @@ CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
 BACKEND_GO_FILES := $(shell find backends -type f -name '*.go')
 CORE_VERSION ?= v0.9.0
 
-check: picodata-render-all generate fmt vet lint test-core test-backends test-race-core cover-html
+check: generate fmt vet lint test-core test-backends test-race-core cover-html
 check-all: devup check test-integration-all devdown
 
 generate:
@@ -77,6 +77,29 @@ release-verify-backends:
 			GOWORK=off go test ./...); \
 	done
 
+refresh-backends:
+	@echo "==> refresh go.work"
+	@(go mod tidy)
+	@echo "==> refresh examples/base-app"
+	@(cd examples/base-app && \
+		go mod tidy)
+	@echo "==> refresh examples/base-app-pgsql"
+	@(cd examples/base-app-pgsql && \
+		go get github.com/assurrussa/outbox/backends/pgsql && \
+		go mod tidy)
+	@echo "==> refresh examples/base-app-mysql"
+	@(cd examples/base-app-mysql && \
+		go get github.com/assurrussa/outbox/backends/mysql && \
+		go mod tidy)
+	@echo "==> refresh examples/base-app-sqlite"
+	@(cd examples/base-app-sqlite && \
+		go get github.com/assurrussa/outbox/backends/sqlite && \
+		go mod tidy)
+	@echo "==> refresh examples/base-app-picodata"
+	@(cd examples/base-app-picodata && \
+		go get github.com/assurrussa/outbox/backends/picodata && \
+		go mod tidy)
+
 cover-html:
 	@go test -coverprofile=./coverage.text -covermode=atomic $(shell go list ./...)
 	@go tool cover -html=./coverage.text -o ./cover.html && rm ./coverage.text
@@ -89,45 +112,4 @@ devup:
 	docker compose --profile mysql --profile pgsql --profile picodata up -d
 
 devdown:
-	docker compose down --remove-orphans
-
-picodata-render-app:
-	@PICO_CLUSTER_NAME=app_outbox \
-	PICO_REPLICATION_FACTOR=1 \
-	PICO_BUCKET_COUNT=1500 \
-	PICO_INSTANCE_NAME=picodata-storage-1 \
-	PICO_INSTANCE_DIR=/pico/data/picodata-storage-1 \
-	PICO_PEER=picodata-storage-1:3301 \
-	PICO_IPROTO_LISTEN=0.0.0.0:3301 \
-	PICO_IPROTO_ADVERTISE=0.0.0.0:3301 \
-	PICO_HTTP_LISTEN=0.0.0.0:8001 \
-	PICO_PG_LISTEN=0.0.0.0:5001 \
-	./docker/picodata/scripts/render_picodata_config.sh docker/picodata/cluster-storage.tmpl.yml docker/picodata/cluster-storage.yml
-
-picodata-render-local:
-	@PICO_CLUSTER_NAME=app_outbox_local \
-	PICO_REPLICATION_FACTOR=1 \
-	PICO_BUCKET_COUNT=1500 \
-	PICO_INSTANCE_NAME=picodata-storage-local \
-	PICO_INSTANCE_DIR=/pico/data/picodata-storage-local \
-	PICO_PEER=0.0.0.0:3342 \
-	PICO_IPROTO_LISTEN=0.0.0.0:3342 \
-	PICO_IPROTO_ADVERTISE=0.0.0.0:3342 \
-	PICO_HTTP_LISTEN=0.0.0.0:8042 \
-	PICO_PG_LISTEN=0.0.0.0:5042 \
-	./docker/picodata/scripts/render_picodata_config.sh docker/picodata/cluster-storage.tmpl.yml docker/picodata/cluster-storage-local.yml
-
-picodata-render-tests:
-	@PICO_CLUSTER_NAME=app_outbox_tests \
-	PICO_REPLICATION_FACTOR=1 \
-	PICO_BUCKET_COUNT=10 \
-	PICO_INSTANCE_NAME=integration-picodata-tests \
-	PICO_INSTANCE_DIR=/pico/data/integration-picodata-tests \
-	PICO_PEER=0.0.0.0:3349 \
-	PICO_IPROTO_LISTEN=0.0.0.0:3349 \
-	PICO_IPROTO_ADVERTISE=0.0.0.0:3349 \
-	PICO_HTTP_LISTEN=0.0.0.0:8049 \
-	PICO_PG_LISTEN=0.0.0.0:5049 \
-	./docker/picodata/scripts/render_picodata_config.sh docker/picodata/cluster-storage.tmpl.yml docker/picodata/cluster-storage-tests.yml
-
-picodata-render-all: picodata-render-app picodata-render-local picodata-render-tests
+	docker compose --profile mysql --profile pgsql --profile picodata down --remove-orphans

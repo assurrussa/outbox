@@ -11,7 +11,7 @@ services:
     volumes:
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
     ports:
-      - "127.0.0.1:${TEST_OUTBOXLIB_PSQL_PORT_LOCAL:-54325}:5432"
+      - "127.0.0.1:${TEST_OUTBOXLIB_PSQL_PORT_LOCAL:-54335}:5432"
     expose:
       - "${TEST_OUTBOXLIB_PSQL_PORT:-5432}"
 
@@ -31,23 +31,29 @@ services:
 
   integration-picodata-tests:
     profiles: ["picodata"]
-    build:
-      context: ./
-      dockerfile: ./docker/picodata/Dockerfile
+    image: docker-public.binary.picodata.io/picodata:25.2.2
     hostname: integration-picodata-tests
     environment:
+      PICODATA_CLUSTER_NAME: ${TEST_OUTBOXLIB_PICODATA_CLUSTER_NAME:-app_outbox_tests}
       PICODATA_INSTANCE_NAME: integration-picodata-tests
       PICODATA_INSTANCE_DIR: /tmp/pico/data/integration-picodata-tests
-      PICODATA_IPROTO_LISTEN: 0.0.0.0:${PICODATA_LISTEN_PEER_TESTS:-3349}
-      PICODATA_IPROTO_ADVERTISE: 0.0.0.0:${PICODATA_LISTEN_PEER_TESTS:-3349}
-      PICODATA_PG_LISTEN: 0.0.0.0:${PICODATA_LISTEN_PG_TESTS:-5049}
+      PICODATA_PEER: integration-picodata-tests:${TEST_OUTBOXLIB_PICODATA_LISTEN_PEER:-3349}
+      PICODATA_IPROTO_LISTEN: 0.0.0.0:${TEST_OUTBOXLIB_PICODATA_LISTEN_PEER:-3349}
+      PICODATA_IPROTO_ADVERTISE: integration-picodata-tests:${TEST_OUTBOXLIB_PICODATA_LISTEN_PEER:-3349}
+      PICODATA_FAILURE_DOMAIN: HOST=integration-picodata-tests
+      PICODATA_INIT_REPLICATION_FACTOR: ${TEST_OUTBOXLIB_PICODATA_INIT_REPLICATION_FACTOR:-1}
+      PICODATA_INIT_BUCKET_COUNT: ${TEST_OUTBOXLIB_PICODATA_INIT_BUCKET_COUNT:-10}
+      PICODATA_HTTP_LISTEN: 0.0.0.0:${TEST_OUTBOXLIB_PICODATA_LISTEN_HTTP:-8049}
+      PICODATA_PG_LISTEN: 0.0.0.0:${TEST_OUTBOXLIB_PICODATA_LISTEN_PG:-5049}
+      PICODATA_MEMTX_MEMORY: ${TEST_OUTBOXLIB_PICODATA_MEMTX_MEMORY:-64M}
+      PICODATA_MEMTX_SYSTEM_MEMORY: ${TEST_OUTBOXLIB_PICODATA_MEMTX_SYSTEM_MEMORY:-256M}
+      PICODATA_MEMTX_MAX_TUPLE_SIZE: ${TEST_OUTBOXLIB_PICODATA_MEMTX_MAX_TUPLE_SIZE:-1M}
+      PICODATA_LOG_LEVEL: info
       PICODATA_PG_SSL: ${TEST_OUTBOXLIB_PICODATA_PG_SSL:-false}
       PICODATA_ADMIN_PASSWORD: ${TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD}
-      PICODATA_CONFIG_FILE: /app/cluster-storage.yml
     ports:
-      - ${PICODATA_LISTEN_PEER_TESTS:-3349}:3349
-      - ${PICODATA_LISTEN_PG_TESTS:-5049}:5049
-      - ${PICODATA_LISTEN_HTTP_TESTS:-8049}:8049
+      - ${TEST_OUTBOXLIB_PICODATA_LISTEN_PEER:-3349}:3349
+      - ${TEST_OUTBOXLIB_PICODATA_LISTEN_PG:-5049}:5049
+      - ${TEST_OUTBOXLIB_PICODATA_LISTEN_HTTP:-8049}:8049
     volumes:
-      - ./docker/picodata/cluster-storage-tests.yml:/app/cluster-storage.yml
       - ./docker/picodata/share_dir:/app/share_dir
