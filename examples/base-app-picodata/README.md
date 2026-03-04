@@ -4,7 +4,7 @@ This is a minimal runnable app that shows how to connect:
 - core module `github.com/assurrussa/outbox`
 - one backend module `github.com/assurrussa/outbox/backends/picodata`
 
-The example uses Picodata + embedded migrations.
+The example uses Picodata + embedded migrations and resolves connection settings via `deployenv.LoadAppConnFromEnv`.
 
 ## Quick Start (with local compose)
 
@@ -26,7 +26,7 @@ docker compose down --remove-orphans
 
 ## Configuration
 
-The app resolves DSN in this order:
+`deployenv.LoadAppConnFromEnv` resolves connection values in this order:
 1. `OUTBOX_PICODATA_DSN`
 2. `TEST_OUTBOXLIB_PICODATA_DSN`
 3. Built from separate env vars (with defaults):
@@ -35,6 +35,10 @@ The app resolves DSN in this order:
    - `OUTBOX_PICODATA_USER` (default `admin`)
    - `OUTBOX_PICODATA_PASSWORD` (default `passWord!123`)
    - `OUTBOX_PICODATA_SSLMODE` (default `disable`)
+
+Rules:
+- `localhost` is normalized to `127.0.0.1`.
+- Host `0.0.0.0` is rejected for client DSN.
 
 ## What this example does
 

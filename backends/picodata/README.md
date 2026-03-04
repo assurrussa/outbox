@@ -13,8 +13,10 @@ go get github.com/assurrussa/outbox/backends/picodata@latest
 ```go
 import (
 	"context"
+	"os"
 	"time"
 
+	"github.com/assurrussa/outbox/backends/picodata/deployenv"
 	picomigrator "github.com/assurrussa/outbox/backends/picodata/migrator"
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsrepo"
@@ -54,6 +56,17 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 }
 ```
 
+Connection config helper:
+
+```go
+cfg, err := deployenv.LoadAppConnFromEnv(os.Getenv)
+if err != nil {
+	return nil, err
+}
+
+dsn := cfg.ConnectionURL()
+```
+
 `JobsStatRepository` is optional.  
 Keep `WithJobsStatRepo(...)` only when queue stats are needed.
 
@@ -75,3 +88,24 @@ _ = picomigrator.Run(ctx, client, log,
 	picomigrator.WithDirectory("/path/to/migrations"),
 )
 ```
+
+## Deployment Contract (env-only)
+
+Picodata runtime in this repository is configured via `PICODATA_*` env vars only.
+`PICODATA_CONFIG_FILE` and `cluster-storage*.yml` render flow are not supported anymore.
+
+Required invariants:
+- Do not set both `PICODATA_LISTEN` and `PICODATA_IPROTO_LISTEN`.
+- Do not set both `PICODATA_PG_ADVERTISE` and `PICODATA_IPROTO_ADVERTISE`.
+- Do not use `0.0.0.0` as client host in DSN or `OUTBOX_PICODATA_HOST`.
+- For Dokploy deployment use alias/hostname `picodata_storage_1` for app-to-db DSN resolution.
+
+### Advanced Picodata Tuning (env-only)
+
+- `memtx` settings can be configured directly via environment variables:
+  - `PICODATA_MEMTX_MEMORY`
+  - `PICODATA_MEMTX_SYSTEM_MEMORY`
+  - `PICODATA_MEMTX_MAX_TUPLE_SIZE`
+- Tier-level settings like `can_vote` are not exposed as dedicated top-level env vars.
+  - Use `PICODATA_CONFIG_PARAMETERS`, for example:
+    - `PICODATA_CONFIG_PARAMETERS=cluster.tier.default.can_vote=false`
