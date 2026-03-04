@@ -3,7 +3,7 @@ module github.com/assurrussa/outbox/examples/base-app-pgsql
 go 1.26
 
 require (
-	github.com/assurrussa/outbox v0.9.2
+	github.com/assurrussa/outbox v0.9.4
 	github.com/assurrussa/outbox/backends/pgsql v0.0.0
 	github.com/jackc/pgx/v5 v5.7.5
 )
