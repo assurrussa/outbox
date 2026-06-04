@@ -20,23 +20,22 @@ Primary source-of-truth files:
 
 ## Shared Agent Context
 
-Use `$project-context-router` for tasks that need cross-project context or the
-shared wiki.
+Use `$project-context-router` for tasks that need cross-project context from a
+local shared wiki.
 
-Shared wiki root lookup order:
-1. `$AGENT_CONTEXT_ROOT`
-2. `/Users/amir/agents/agent-context`
-3. `/Users/amir/dev/projects/agent-context`
+Do not hard-code machine-local absolute paths in this public repository. If a
+local shared wiki is available, expose its root through `AGENT_CONTEXT_ROOT` or
+let `$project-context-router` resolve it for the current session.
 
 Local docs and code in this repository remain the source of truth for commands,
 public APIs, config keys, supported imports, runtime behavior, and release gates.
 Read this repo's `AGENTS.md`, `README.md`, `docs/`, backend READMEs, examples,
 code, tests, and configs before shared wiki pages.
 
-Then read:
-- `/Users/amir/agents/agent-context/streams/wiki/index.md`
-- `/Users/amir/agents/agent-context/streams/wiki/glossary.md`
-- `/Users/amir/agents/agent-context/streams/wiki/platforms/outbox.md`
+When shared context is available, read these paths from the resolved wiki root:
+- `streams/wiki/index.md`
+- `streams/wiki/glossary.md`
+- `streams/wiki/platforms/outbox.md`
 
 If local verified docs/code conflict with the shared wiki, treat the wiki as
 stale. When the task includes documentation upkeep, update the matching shared
