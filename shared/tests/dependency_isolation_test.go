@@ -10,13 +10,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	coreModule     = "github.com/assurrussa/outbox"
+	mysqlDriver    = "github.com/go-sql-driver/mysql"
+	sqliteDriver   = "modernc.org/sqlite"
+	pgxDriver      = "github.com/jackc/pgx/v5"
+	picodataDriver = "github.com/picodata/picodata-go"
+)
+
 func TestDependencyIsolation_CoreDoesNotImportDBDrivers(t *testing.T) {
 	mods := listPackageModules(t, ".", "github.com/assurrussa/outbox/outbox")
 
-	require.NotContains(t, mods, "github.com/go-sql-driver/mysql")
-	require.NotContains(t, mods, "modernc.org/sqlite")
-	require.NotContains(t, mods, "github.com/jackc/pgx/v5")
-	require.NotContains(t, mods, "github.com/picodata/picodata-go")
+	require.NotContains(t, mods, mysqlDriver)
+	require.NotContains(t, mods, sqliteDriver)
+	require.NotContains(t, mods, pgxDriver)
+	require.NotContains(t, mods, picodataDriver)
 }
 
 func TestDependencyIsolation_BackendModulesImportOnlyOwnDriver(t *testing.T) {
@@ -32,45 +40,45 @@ func TestDependencyIsolation_BackendModulesImportOnlyOwnDriver(t *testing.T) {
 			name:       "mysql",
 			dir:        filepath.Join("..", "..", "backends", "mysql"),
 			pkg:        "github.com/assurrussa/outbox/backends/mysql/storage",
-			shouldHave: "github.com/go-sql-driver/mysql",
+			shouldHave: mysqlDriver,
 			expectCore: true,
 			shouldNotHave: []string{
-				"modernc.org/sqlite",
-				"github.com/picodata/picodata-go",
+				sqliteDriver,
+				picodataDriver,
 			},
 		},
 		{
 			name:       "sqlite",
 			dir:        filepath.Join("..", "..", "backends", "sqlite"),
 			pkg:        "github.com/assurrussa/outbox/backends/sqlite/storage",
-			shouldHave: "modernc.org/sqlite",
+			shouldHave: sqliteDriver,
 			expectCore: true,
 			shouldNotHave: []string{
-				"github.com/go-sql-driver/mysql",
-				"github.com/picodata/picodata-go",
+				mysqlDriver,
+				picodataDriver,
 			},
 		},
 		{
 			name:       "pgsql",
 			dir:        filepath.Join("..", "..", "backends", "pgsql"),
 			pkg:        "github.com/assurrussa/outbox/backends/pgsql/storage",
-			shouldHave: "github.com/jackc/pgx/v5",
+			shouldHave: pgxDriver,
 			expectCore: false,
 			shouldNotHave: []string{
-				"github.com/go-sql-driver/mysql",
-				"modernc.org/sqlite",
-				"github.com/picodata/picodata-go",
+				mysqlDriver,
+				sqliteDriver,
+				picodataDriver,
 			},
 		},
 		{
 			name:       "picodata",
 			dir:        filepath.Join("..", "..", "backends", "picodata"),
 			pkg:        "github.com/assurrussa/outbox/backends/picodata/storage",
-			shouldHave: "github.com/picodata/picodata-go",
+			shouldHave: picodataDriver,
 			expectCore: true,
 			shouldNotHave: []string{
-				"github.com/go-sql-driver/mysql",
-				"modernc.org/sqlite",
+				mysqlDriver,
+				sqliteDriver,
 			},
 		},
 	}
@@ -84,7 +92,7 @@ func TestDependencyIsolation_BackendModulesImportOnlyOwnDriver(t *testing.T) {
 				require.NotContains(t, mods, mod)
 			}
 			if tt.expectCore {
-				require.Contains(t, mods, "github.com/assurrussa/outbox")
+				require.Contains(t, mods, coreModule)
 			}
 		})
 	}

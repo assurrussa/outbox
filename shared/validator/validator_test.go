@@ -10,6 +10,8 @@ import (
 	"github.com/assurrussa/outbox/shared/validator"
 )
 
+const validSize = "4KB"
+
 type options struct {
 	DB      *sql.DB      `validate:"required"`
 	Handler http.Handler `validate:"required"`
@@ -23,15 +25,15 @@ func TestValidate_TrickyNils(t *testing.T) {
 	}{
 		// Negative.
 		{
-			in:      options{DB: nil, Handler: new(handlerMock), Size: "4KB"},
+			in:      options{DB: nil, Handler: new(handlerMock), Size: validSize},
 			wantErr: true,
 		},
 		{
-			in:      options{DB: new(sql.DB), Handler: http.HandlerFunc(nil), Size: "4KB"},
+			in:      options{DB: new(sql.DB), Handler: http.HandlerFunc(nil), Size: validSize},
 			wantErr: true,
 		},
 		{
-			in:      options{DB: new(sql.DB), Handler: (*handlerMock)(nil), Size: "4KB"},
+			in:      options{DB: new(sql.DB), Handler: (*handlerMock)(nil), Size: validSize},
 			wantErr: true,
 		},
 		{
@@ -49,14 +51,14 @@ func TestValidate_TrickyNils(t *testing.T) {
 
 		// Positive.
 		{
-			in:      options{DB: new(sql.DB), Handler: new(handlerMock), Size: "4KB"},
+			in:      options{DB: new(sql.DB), Handler: new(handlerMock), Size: validSize},
 			wantErr: false,
 		},
 		{
 			in: options{
 				DB:      new(sql.DB),
 				Handler: http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}),
-				Size:    "4KB",
+				Size:    validSize,
 			},
 			wantErr: false,
 		},

@@ -1,4 +1,4 @@
-package strings //nolint:revive // it's valid name
+package strings
 
 import "fmt"
 

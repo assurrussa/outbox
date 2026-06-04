@@ -1,4 +1,4 @@
-package types //nolint:revive // it's valid name
+package types
 
 import (
 	"database/sql/driver"
