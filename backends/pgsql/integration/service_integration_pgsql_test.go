@@ -4,8 +4,10 @@ package outbox_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/goleak"
-	"go.uber.org/mock/gomock"
 
 	"github.com/assurrussa/outbox/backends/pgsql"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsfailedrepo"
@@ -22,7 +23,9 @@ import (
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/logger"
+	outboxmodels "github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/tests"
+	"github.com/assurrussa/outbox/shared/types"
 )
 
 var (
@@ -42,8 +45,6 @@ type TestSuite struct {
 	dbHelper *pgsqltests.DBHelper
 	cleanUp  func(context.Context)
 
-	ctrl *gomock.Controller
-
 	outboxSvc *outbox.Service
 
 	jobsRepo       *jobsrepo.Repo
@@ -51,7 +52,11 @@ type TestSuite struct {
 }
 
 func NewTestRepoSuite(t *testing.T, opts ...pgsqltests.OptionDatabase) (context.Context, context.CancelFunc, *TestSuite) {
+	t.Helper()
+
 	return tests.NewSuite[*TestSuite](t, func(t *testing.T, ctx context.Context) *TestSuite {
+		t.Helper()
+
 		db, dbHelper, cleanUp := pgsqltests.PrepareDB(ctx, t, "TestJobsSuite", opts...)
 		trx := transaction.New(db.DB())
 		jobsRepo := jobsrepo.Must(jobsrepo.NewOptions(db))
@@ -292,6 +297,176 @@ func TestQueueStats_ReservedJobIsNotAvailable(t *testing.T) {
 	ts.Equal(int64(1), stats.Processing)
 }
 
+func TestFanoutCrashAfterCommitBeforeAckDoesNotDuplicateDeliveries(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	txManager := transaction.New(ts.db.DB())
+	losingRepo := &loseFirstAckRepo{Repo: ts.jobsRepo}
+	svc := newFanoutIntegrationService(t, losingRepo, losingRepo, ts.jobsFailedRepo, txManager)
+	event := integrationFanoutEvent()
+	targets := integrationFanoutTargets()
+
+	_, err := svc.PutFanout(ctx, event, targets, time.Now().UTC())
+	ts.Require().NoError(err)
+	err = runServiceFor(ctx, svc, 500*time.Millisecond)
+	ts.Require().ErrorIs(err, outbox.ErrLeaseLost)
+
+	jobs, err := ts.jobsRepo.All(ctx)
+	ts.Require().NoError(err)
+	ts.Len(jobs, len(targets)+1)
+
+	time.Sleep(reserveFor + 100*time.Millisecond)
+	retrySvc := newFanoutIntegrationService(t, ts.jobsRepo, ts.jobsRepo, ts.jobsFailedRepo, txManager)
+	ts.Require().NoError(runServiceFor(ctx, retrySvc, 300*time.Millisecond))
+
+	jobs, err = ts.jobsRepo.All(ctx)
+	ts.Require().NoError(err)
+	ts.Len(jobs, len(targets))
+	assertUniqueIntegrationDeliveries(t, jobs)
+}
+
+func TestFanoutPartialPlanningRollsBackCompleteDeliverySet(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	txManager := transaction.New(ts.db.DB())
+	failingRepo := &failSecondDeliveryRepo{Repo: ts.jobsRepo}
+	svc := newFanoutIntegrationService(t, ts.jobsRepo, failingRepo, ts.jobsFailedRepo, txManager)
+	event := integrationFanoutEvent()
+	targets := integrationFanoutTargets()
+
+	_, err := svc.PutFanout(ctx, event, targets, time.Now().UTC())
+	ts.Require().NoError(err)
+	ts.Require().NoError(runServiceFor(ctx, svc, 300*time.Millisecond))
+
+	jobs, err := ts.jobsRepo.All(ctx)
+	ts.Require().NoError(err)
+	ts.Len(jobs, 1)
+	ts.Equal(outbox.FanoutDispatcherJobName, jobs[0].Name)
+
+	time.Sleep(reserveFor + 100*time.Millisecond)
+	retrySvc := newFanoutIntegrationService(t, ts.jobsRepo, ts.jobsRepo, ts.jobsFailedRepo, txManager)
+	ts.Require().NoError(runServiceFor(ctx, retrySvc, 300*time.Millisecond))
+
+	jobs, err = ts.jobsRepo.All(ctx)
+	ts.Require().NoError(err)
+	ts.Len(jobs, len(targets))
+	assertUniqueIntegrationDeliveries(t, jobs)
+}
+
+func newFanoutIntegrationService(
+	t *testing.T,
+	capabilityRepo outbox.CapabilityJobsRepository,
+	fanoutRepo outbox.FanoutJobsRepository,
+	failedRepo *jobsfailedrepo.Repo,
+	txManager outbox.Transactor,
+) *outbox.Service {
+	t.Helper()
+
+	legacyRepo, ok := capabilityRepo.(outbox.JobsRepository)
+	require.True(t, ok)
+
+	svc, err := outbox.New(
+		outbox.WithWorkers(1),
+		outbox.WithIdleTime(100*time.Millisecond),
+		outbox.WithReserveFor(reserveFor),
+		outbox.WithJobsRepo(legacyRepo),
+		outbox.WithCapabilityJobsRepo(capabilityRepo),
+		outbox.WithFanoutJobsRepo(fanoutRepo),
+		outbox.WithJobsFailedRepo(failedRepo),
+		outbox.WithCapabilityJobsFailedRepo(failedRepo),
+		outbox.WithTransactor(txManager),
+		outbox.WithLogger(logger.Discard()),
+	)
+	require.NoError(t, err)
+
+	return svc
+}
+
+func integrationFanoutEvent() outbox.FanoutEvent {
+	return outbox.FanoutEvent{
+		ID:            types.NewMessageID(),
+		Topic:         "cms.entry.published",
+		SchemaVersion: 2,
+		Payload:       json.RawMessage(`{"entryId":"entry-1"}`),
+		OccurredAt:    time.Now().UTC(),
+	}
+}
+
+func integrationFanoutTargets() []outbox.FanoutTarget {
+	return []outbox.FanoutTarget{
+		{Kind: "nitro", ID: "site", Snapshot: json.RawMessage(`{"namespace":"public"}`)},
+		{Kind: "webhook", ID: "subscription-a", Snapshot: json.RawMessage(`{"revision":1}`)},
+		{Kind: "webhook", ID: "subscription-b", Snapshot: json.RawMessage(`{"revision":2}`)},
+	}
+}
+
+func assertUniqueIntegrationDeliveries(t *testing.T, jobs []outboxmodels.Job) {
+	t.Helper()
+
+	ids := make(map[types.MessageID]struct{}, len(jobs))
+	for _, job := range jobs {
+		delivery, err := outbox.DecodeFanoutDelivery(job.Payload)
+		require.NoError(t, err)
+		require.Zero(t, job.Attempts)
+		ids[delivery.ID] = struct{}{}
+	}
+	require.Len(t, ids, len(jobs))
+}
+
+func runServiceFor(ctx context.Context, svc *outbox.Service, duration time.Duration) error {
+	runCtx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+
+	return svc.Run(runCtx)
+}
+
+type loseFirstAckRepo struct {
+	*jobsrepo.Repo
+	lost atomic.Bool
+}
+
+func (r *loseFirstAckRepo) DeleteJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	if r.lost.CompareAndSwap(false, true) {
+		return 0, nil
+	}
+
+	return r.Repo.DeleteJobWithLease(ctx, jobID, leaseToken, now)
+}
+
+type failSecondDeliveryRepo struct {
+	*jobsrepo.Repo
+	deliveries atomic.Int32
+}
+
+func (r *failSecondDeliveryRepo) CreateJobVersionedUnique(
+	ctx context.Context,
+	deduplicationKey string,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (types.JobID, error) {
+	if strings.HasPrefix(name, "fanout.") && r.deliveries.Add(1) == 2 {
+		return types.JobIDNil, errors.New("injected partial planning failure")
+	}
+
+	return r.Repo.CreateJobVersionedUnique(
+		ctx,
+		deduplicationKey,
+		name,
+		schemaVersion,
+		payload,
+		availableAt,
+	)
+}
+
 func runOutboxFor(ctx context.Context, ts *TestSuite, timeout time.Duration) {
 	ts.T().Helper()
 
@@ -314,7 +489,7 @@ func runOutbox(ctx context.Context, ts *TestSuite) (context.CancelFunc, <-chan e
 	return cancel, errCh
 }
 
-var nop = func(ctx context.Context, s string) error {
+var nop = func(_ context.Context, _ string) error {
 	time.Sleep(10 * time.Millisecond) // Prevent PSQL DDoS.
 	return nil
 }

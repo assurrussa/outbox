@@ -122,6 +122,48 @@ The PostgreSQL backend currently implements the capability repository
 contracts. Other backends remain available through the legacy API until they
 gain their own additive implementations.
 
+## Durable fan-out (opt-in)
+
+Configure `WithFanoutJobsRepo(jobsRepo)` together with capability mode when one
+integration event must produce independently retried deliveries. `PutFanout`
+stores the event plus the exact eligible target snapshots under the event ID.
+The built-in dispatcher is registered during construction and creates one job
+per target in a transaction.
+
+```go
+event := outbox.FanoutEvent{
+	ID:            types.NewMessageID(),
+	Topic:         "cms.entry.published",
+	SchemaVersion: 1,
+	Payload:       json.RawMessage(`{"entryId":"1"}`),
+	OccurredAt:    time.Now(),
+}
+
+_, err = svc.PutFanout(ctx, event, []outbox.FanoutTarget{
+	{
+		Kind:     "nitro",
+		ID:       "site-1",
+		Snapshot: json.RawMessage(`{"namespace":"public"}`),
+	},
+	{
+		Kind:     "webhook",
+		ID:       "subscription-7",
+		Snapshot: json.RawMessage(`{"configRevision":4,"secretRevision":2}`),
+	},
+}, time.Now())
+```
+
+Delivery handlers register
+`FanoutDeliveryJobName(targetKind, eventTopic)` for the event schema they
+understand and decode payloads with `DecodeFanoutDelivery`. Every delivery has
+a deterministic ID suitable for webhook idempotency. Unsupported delivery
+capabilities stay pending with zero attempts.
+
+Fan-out retries are idempotent even after a delivery job was acknowledged and
+deleted: PostgreSQL retains a compact key/fingerprint tombstone separately
+from active jobs. Prune tombstones in bounded batches only after the host's
+event replay, audit, and webhook retry retention windows have elapsed.
+
 ## Backend modules
 
 Pick only the backend module you need for a project.

@@ -2,9 +2,12 @@ package jobsrepo
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -20,12 +23,16 @@ import (
 )
 
 const (
-	tableName = "jobs"
+	tableName         = "jobs"
+	columnAvailableAt = "available_at"
+	columnLeaseToken  = "lease_token"
+	columnQueue       = "queue"
+	columnReservedAt  = "reserved_at"
 )
 
 var columns = []string{
-	"id", "queue", "name", "schema_version", "payload", "attempts", "reserved_at", "lease_token",
-	"available_at", "created_at",
+	"id", columnQueue, "name", "schema_version", "payload", "attempts", columnReservedAt, columnLeaseToken,
+	"deduplication_key", columnAvailableAt, "created_at",
 }
 
 func (r *Repo) FindAndReserveJob(ctx context.Context, now time.Time, until time.Time) (models.Job, error) {
@@ -50,6 +57,7 @@ func (r *Repo) FindAndReserveJob(ctx context.Context, now time.Time, until time.
 		"j".attempts,
 		"j".reserved_at,
 		"j".lease_token,
+		"j".deduplication_key,
 		"j".available_at,
 		"j".created_at;`
 
@@ -84,7 +92,7 @@ func (r *Repo) CreateJobVersioned(
 
 	return r.Create(ctx, models.Job{
 		ID:            types.NewJobID(),
-		Queue:         "queue",
+		Queue:         columnQueue,
 		Name:          name,
 		SchemaVersion: schemaVersion,
 		Payload:       payload,
@@ -94,6 +102,131 @@ func (r *Repo) CreateJobVersioned(
 		AvailableAt:   availableAt,
 		CreatedAt:     time.Now(),
 	})
+}
+
+func (r *Repo) CreateJobVersionedUnique(
+	ctx context.Context,
+	deduplicationKey string,
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (types.JobID, error) {
+	const op = "jobs.repo.CreateJobVersionedUnique"
+
+	if deduplicationKey == "" {
+		return types.JobIDNil, fmt.Errorf("%s: empty deduplication key", op)
+	}
+	capability := coreoutbox.JobCapability{Name: name, SchemaVersion: schemaVersion}
+	if err := capability.Validate(); err != nil {
+		return types.JobIDNil, fmt.Errorf("%s: validate capability: %w", op, err)
+	}
+
+	jobID := types.NewJobID()
+	createdAt := time.Now().UTC()
+	fingerprint := jobFingerprint(name, schemaVersion, payload, availableAt)
+
+	query := `
+	with key_row as (
+		insert into outbox_job_idempotency_keys (
+			deduplication_key, job_id, fingerprint, created_at
+		) values ($1, $2, $3, $4)
+		on conflict (deduplication_key) do update
+		set deduplication_key = excluded.deduplication_key
+		where outbox_job_idempotency_keys.fingerprint = excluded.fingerprint
+		returning job_id
+	), inserted_job as (
+		insert into jobs (
+			id, queue, name, schema_version, payload, attempts, reserved_at,
+			lease_token, deduplication_key, available_at, created_at
+		)
+		select
+			key_row.job_id, 'queue', $5, $6, $7, 0, $8,
+			$9, $1, $8, $4
+		from key_row
+		where key_row.job_id = $2
+		returning id
+	)
+	select job_id from key_row;`
+
+	var storedJobID types.JobID
+	err := r.pgsql.DB().ScanOne(
+		ctx,
+		op,
+		&storedJobID,
+		query,
+		deduplicationKey,
+		jobID,
+		fingerprint,
+		createdAt,
+		name,
+		schemaVersion,
+		payload,
+		availableAt,
+		types.LeaseTokenNil,
+	)
+	if err != nil {
+		if pgxscan.NotFound(err) {
+			return types.JobIDNil, coreoutbox.ErrIdempotencyConflict
+		}
+
+		return types.JobIDNil, fmt.Errorf("%s: create unique job: %w", op, pgsql.ErrorTransform(err))
+	}
+
+	return storedJobID, nil
+}
+
+func jobFingerprint(
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) string {
+	version := strconv.FormatInt(int64(schemaVersion), 10)
+	available := availableAt.UTC().Format(time.RFC3339Nano)
+	canonical := strconv.Itoa(len(name)) + ":" + name +
+		strconv.Itoa(len(version)) + ":" + version +
+		strconv.Itoa(len(payload)) + ":" + payload +
+		strconv.Itoa(len(available)) + ":" + available
+	digest := sha256.Sum256([]byte(canonical))
+
+	return hex.EncodeToString(digest[:])
+}
+
+func (r *Repo) PruneJobIdempotencyKeys(
+	ctx context.Context,
+	before time.Time,
+	limit int,
+) (int64, error) {
+	const op = "jobs.repo.PruneJobIdempotencyKeys"
+
+	if limit < 1 || limit > 10_000 {
+		return 0, fmt.Errorf("%s: limit must be between 1 and 10000", op)
+	}
+
+	query := `
+	with candidates as (
+		select registry.deduplication_key
+		from outbox_job_idempotency_keys as registry
+		where registry.created_at < $1
+			and not exists (
+				select 1 from jobs
+				where jobs.deduplication_key = registry.deduplication_key
+			)
+		order by registry.created_at, registry.deduplication_key
+		limit $2
+		for update skip locked
+	)
+	delete from outbox_job_idempotency_keys as registry
+	using candidates
+	where registry.deduplication_key = candidates.deduplication_key;`
+
+	result, err := r.pgsql.DB().Exec(ctx, op, query, before, limit)
+	if err != nil {
+		return 0, fmt.Errorf("%s: prune idempotency keys: %w", op, pgsql.ErrorTransform(err))
+	}
+
+	return result.RowsAffected(), nil
 }
 
 func (r *Repo) Create(ctx context.Context, job models.Job) (types.JobID, error) {
@@ -111,16 +244,17 @@ func (r *Repo) Create(ctx context.Context, job models.Job) (types.JobID, error) 
 		Insert(tableName).
 		Suffix("RETURNING id").
 		SetMap(querybuilder.Eq{
-			"id":             job.ID,
-			"queue":          job.Queue,
-			"name":           job.Name,
-			"schema_version": job.SchemaVersion,
-			"payload":        job.Payload,
-			"attempts":       job.Attempts,
-			"reserved_at":    reservedAt,
-			"lease_token":    job.LeaseToken,
-			"available_at":   job.AvailableAt,
-			"created_at":     job.CreatedAt,
+			"id":                job.ID,
+			columnQueue:         job.Queue,
+			"name":              job.Name,
+			"schema_version":    job.SchemaVersion,
+			"payload":           job.Payload,
+			"attempts":          job.Attempts,
+			columnReservedAt:    reservedAt,
+			columnLeaseToken:    job.LeaseToken,
+			"deduplication_key": job.DeduplicationKey,
+			columnAvailableAt:   job.AvailableAt,
+			"created_at":        job.CreatedAt,
 		})
 
 	var lastID types.JobID
@@ -186,6 +320,7 @@ func (r *Repo) FindAndReserveJobForCapabilities(
 		j.attempts,
 		j.reserved_at,
 		j.lease_token,
+		j.deduplication_key,
 		j.available_at,
 		j.created_at;`
 
@@ -220,9 +355,9 @@ func (r *Repo) ExtendJobLease(
 
 	sqlBuilder := querybuilder.BuilderDollar().
 		Update(tableName).
-		Set("reserved_at", until).
-		Where(squirrel.Eq{"id": jobID, "lease_token": leaseToken}).
-		Where(squirrel.Gt{"reserved_at": now})
+		Set(columnReservedAt, until).
+		Where(squirrel.Eq{"id": jobID, columnLeaseToken: leaseToken}).
+		Where(squirrel.Gt{columnReservedAt: now})
 
 	result, err := r.pgsql.DB().Execx(ctx, op, sqlBuilder)
 	if err != nil {
@@ -249,8 +384,8 @@ func (r *Repo) DeleteJobWithLease(
 
 	sqlBuilder := querybuilder.BuilderDollar().
 		Delete(tableName).
-		Where(squirrel.Eq{"id": jobID, "lease_token": leaseToken}).
-		Where(squirrel.Gt{"reserved_at": now})
+		Where(squirrel.Eq{"id": jobID, columnLeaseToken: leaseToken}).
+		Where(squirrel.Gt{columnReservedAt: now})
 
 	result, err := r.pgsql.DB().Execx(ctx, op, sqlBuilder)
 	if err != nil {
@@ -334,8 +469,8 @@ func (r *Repo) CountAvailable(ctx context.Context, now time.Time) (int64, error)
 	sqlBuilderCount := querybuilder.BuilderDollar().
 		Select("count(id) as total").
 		From(tableName).
-		Where(squirrel.LtOrEq{"available_at": now}).
-		Where(squirrel.Or{squirrel.Eq{"reserved_at": nil}, squirrel.LtOrEq{"reserved_at": now}})
+		Where(squirrel.LtOrEq{columnAvailableAt: now}).
+		Where(squirrel.Or{squirrel.Eq{columnReservedAt: nil}, squirrel.LtOrEq{columnReservedAt: now}})
 
 	var count int64
 	if err := r.pgsql.DB().ScanOnex(ctx, op, &count, sqlBuilderCount); err != nil {
@@ -351,7 +486,7 @@ func (r *Repo) CountReserved(ctx context.Context, now time.Time) (int64, error) 
 	sqlBuilderCount := querybuilder.BuilderDollar().
 		Select("count(id) as total").
 		From(tableName).
-		Where(squirrel.Gt{"reserved_at": now})
+		Where(squirrel.Gt{columnReservedAt: now})
 
 	var count int64
 	if err := r.pgsql.DB().ScanOnex(ctx, op, &count, sqlBuilderCount); err != nil {

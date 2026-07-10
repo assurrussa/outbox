@@ -18,6 +18,7 @@ type Options struct {
 	reserveFor               time.Duration
 	jobsRepo                 JobsRepository
 	capabilityJobsRepo       CapabilityJobsRepository
+	fanoutJobsRepo           FanoutJobsRepository
 	jobsStatRepo             JobsStatRepository
 	jobsFailedRepo           JobsFailedRepository
 	capabilityJobsFailedRepo CapabilityJobsFailedRepository
@@ -62,6 +63,9 @@ func (o *Options) Validate() error {
 	}
 	if o.capabilityJobsRepo == nil && o.capabilityJobsFailedRepo != nil {
 		return errors.New("nil capabilityJobsRepo")
+	}
+	if o.fanoutJobsRepo != nil && o.capabilityJobsRepo == nil {
+		return errors.New("fanoutJobsRepo requires capabilityJobsRepo")
 	}
 	if o.transactor == nil {
 		return errors.New("nil transactor")
@@ -122,6 +126,14 @@ func WithJobsRepo(jobsRepo JobsRepository) OptOptionsSetter {
 func WithCapabilityJobsRepo(jobsRepo CapabilityJobsRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.capabilityJobsRepo = jobsRepo
+	}
+}
+
+// WithFanoutJobsRepo enables immutable fan-out source and delivery jobs.
+// Capability mode must be enabled so unsupported delivery schemas remain pending.
+func WithFanoutJobsRepo(jobsRepo FanoutJobsRepository) OptOptionsSetter {
+	return func(o *Options) {
+		o.fanoutJobsRepo = jobsRepo
 	}
 }
 

@@ -4,9 +4,7 @@ package jobsrepo_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"strconv"
 	"testing"
 	"time"
 
@@ -43,7 +41,11 @@ type TestRepoSuite struct {
 }
 
 func NewTestRepoSuite(t *testing.T, opts ...pgsqltests.OptionDatabase) (context.Context, context.CancelFunc, *TestRepoSuite) {
+	t.Helper()
+
 	return tests.NewSuite[*TestRepoSuite](t, func(t *testing.T, ctx context.Context) *TestRepoSuite {
+		t.Helper()
+
 		db, dbHelper, cleanUp := pgsqltests.PrepareDB(ctx, t, "TestJobsRepoSuite", opts...)
 		repo := jobsrepo.Must(jobsrepo.NewOptions(db))
 
@@ -292,6 +294,97 @@ func Test_CreateJob(t *testing.T) {
 	)
 }
 
+func Test_CreateJobVersionedUniqueRetainsIdempotencyAfterAck(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	availableAt := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
+	firstID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"delivery-1"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	secondID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"delivery-1"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.Equal(firstID, secondID)
+	pruned, err := ts.repo.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	ts.Require().NoError(err)
+	ts.Zero(pruned)
+
+	job, err := ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		time.Now().UTC(),
+		time.Now().UTC().Add(time.Minute),
+		types.NewLeaseToken(),
+		[]coreoutbox.JobCapability{{
+			Name:          "fanout.webhook.cms.entry.published",
+			SchemaVersion: 2,
+		}},
+	)
+	ts.Require().NoError(err)
+	_, err = ts.repo.DeleteJob(ctx, job.ID)
+	ts.Require().NoError(err)
+
+	replayedID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"delivery-1"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.Equal(firstID, replayedID)
+
+	_, err = ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		time.Now().UTC(),
+		time.Now().UTC().Add(time.Minute),
+		types.NewLeaseToken(),
+		[]coreoutbox.JobCapability{{
+			Name:          "fanout.webhook.cms.entry.published",
+			SchemaVersion: 2,
+		}},
+	)
+	ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
+
+	_, err = ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"different"}`,
+		availableAt,
+	)
+	ts.Require().ErrorIs(err, coreoutbox.ErrIdempotencyConflict)
+
+	pruned, err = ts.repo.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	ts.Require().NoError(err)
+	ts.Equal(int64(1), pruned)
+
+	newID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"different"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.NotEqual(firstID, newID)
+}
+
 func Test_CreateJob_Multiple(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
@@ -362,36 +455,4 @@ func createModel() models.Job {
 		AvailableAt: availableAt,
 		CreatedAt:   availableAt,
 	}
-}
-
-func createModels(t *testing.T, ts *TestRepoSuite, ctx context.Context, size int) []models.Job {
-	t.Helper()
-
-	tmCreate := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	list := make([]models.Job, 0, 100)
-	for i := 1; i <= size; i++ {
-		strIndex := "__" + strconv.Itoa(i)
-		rowModel := models.Job{
-			Queue:       "queue",
-			Name:        "TestName_" + strIndex,
-			Payload:     payload,
-			Attempts:    i % 3,
-			ReservedAt:  sql.NullTime{Valid: true, Time: tmCreate.Add(time.Duration(i) * time.Minute)}, // разные времена создания
-			AvailableAt: tmCreate.Add(time.Duration(i) * time.Minute),                                  // разные времена создания
-			CreatedAt:   tmCreate.Add(time.Duration(i) * time.Minute),                                  // разные времена создания
-		}
-
-		if i%3 == 0 {
-			rowModel.ReservedAt = sql.NullTime{}
-		}
-
-		id, err := ts.repo.Create(ctx, rowModel)
-		ts.Require().NoError(err)
-		rowModel.ID = id
-
-		list = append(list, rowModel)
-	}
-
-	return list
 }

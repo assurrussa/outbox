@@ -54,6 +54,8 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 		outbox.WithJobsRepo(jobs),
 		// Opt-in version-aware claims and fenced leases.
 		outbox.WithCapabilityJobsRepo(jobs),
+		// Opt-in immutable source snapshots and independent fan-out jobs.
+		outbox.WithFanoutJobsRepo(jobs),
 		// Optional: only if you call svc.GetQueueStats(...)
 		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
@@ -84,6 +86,12 @@ Migration `00003_add_capability_leases.sql` upgrades existing jobs and failed
 jobs to schema v1, adds fenced lease tokens, and creates the capability claim
 index. Apply it before enabling the capability options. Keep producers on v1
 until no legacy worker remains.
+
+Migration `00004_add_job_deduplication.sql` adds active-job deduplication and a
+durable idempotency registry used by fan-out. The registry deliberately
+survives job deletion. Use `jobsrepo.Repo.PruneJobIdempotencyKeys(...)` only
+with a cutoff older than the application's complete replay and audit retention
+window.
 
 Filesystem mode:
 

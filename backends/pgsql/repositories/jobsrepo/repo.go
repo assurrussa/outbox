@@ -12,7 +12,11 @@ type Options struct {
 	pgsql pgsql.Client
 }
 
-var _ coreoutbox.CapabilityJobsRepository = (*Repo)(nil)
+var (
+	_ coreoutbox.CapabilityJobsRepository    = (*Repo)(nil)
+	_ coreoutbox.FanoutJobsRepository        = (*Repo)(nil)
+	_ coreoutbox.FanoutMaintenanceRepository = (*Repo)(nil)
+)
 
 func NewOptions(pgsql pgsql.Client) Options {
 	return Options{pgsql: pgsql}

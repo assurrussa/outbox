@@ -190,8 +190,9 @@ func (j capabilityJob) MaxAttempts() int {
 type capabilityRepo struct {
 	mu sync.Mutex
 
-	jobs   []models.Job
-	failed []models.JobFailed
+	jobs            []models.Job
+	failed          []models.JobFailed
+	idempotencyJobs map[string]idempotencyJob
 
 	extendCount       int
 	loseLeaseOnExtend bool
@@ -199,7 +200,15 @@ type capabilityRepo struct {
 }
 
 func newCapabilityRepo() *capabilityRepo {
-	return &capabilityRepo{}
+	return &capabilityRepo{idempotencyJobs: make(map[string]idempotencyJob)}
+}
+
+type idempotencyJob struct {
+	id            types.JobID
+	name          string
+	schemaVersion outbox.SchemaVersion
+	payload       string
+	availableAt   time.Time
 }
 
 func (r *capabilityRepo) CreateJob(
@@ -222,6 +231,48 @@ func (r *capabilityRepo) CreateJobVersioned(
 	defer r.mu.Unlock()
 
 	id := types.NewJobID()
+	r.jobs = append(r.jobs, models.Job{
+		ID:            id,
+		Queue:         testQueue,
+		Name:          name,
+		SchemaVersion: schemaVersion,
+		Payload:       payload,
+		ReservedAt:    sql.NullTime{Time: availableAt, Valid: true},
+		AvailableAt:   availableAt,
+		CreatedAt:     time.Now().UTC(),
+	})
+
+	return id, nil
+}
+
+func (r *capabilityRepo) CreateJobVersionedUnique(
+	_ context.Context,
+	deduplicationKey string,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (types.JobID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if existing, ok := r.idempotencyJobs[deduplicationKey]; ok {
+		if existing.name != name || existing.schemaVersion != schemaVersion ||
+			existing.payload != payload || !existing.availableAt.Equal(availableAt) {
+			return types.JobIDNil, outbox.ErrIdempotencyConflict
+		}
+
+		return existing.id, nil
+	}
+
+	id := types.NewJobID()
+	r.idempotencyJobs[deduplicationKey] = idempotencyJob{
+		id:            id,
+		name:          name,
+		schemaVersion: schemaVersion,
+		payload:       payload,
+		availableAt:   availableAt,
+	}
 	r.jobs = append(r.jobs, models.Job{
 		ID:            id,
 		Queue:         testQueue,
@@ -453,6 +504,7 @@ var (
 	_ outbox.VersionedJob                   = capabilityJob{}
 	_ outbox.JobsRepository                 = (*capabilityRepo)(nil)
 	_ outbox.CapabilityJobsRepository       = (*capabilityRepo)(nil)
+	_ outbox.FanoutJobsRepository           = (*capabilityRepo)(nil)
 	_ outbox.JobsFailedRepository           = (*capabilityRepo)(nil)
 	_ outbox.CapabilityJobsFailedRepository = (*capabilityRepo)(nil)
 	_ outbox.Transactor                     = (*capabilityRepo)(nil)

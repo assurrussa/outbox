@@ -24,6 +24,15 @@ type VersionedPutter interface {
 	) (types.JobID, error)
 }
 
+type FanoutPutter interface {
+	PutFanout(
+		ctx context.Context,
+		event FanoutEvent,
+		targets []FanoutTarget,
+		availableAt time.Time,
+	) (types.JobID, error)
+}
+
 type QueueStats struct {
 	Total      int64
 	Available  int64
@@ -71,6 +80,25 @@ type CapabilityJobsRepository interface {
 		leaseToken LeaseToken,
 		now time.Time,
 	) (int64, error)
+}
+
+// FanoutJobsRepository creates jobs under an immutable idempotency key.
+// Reusing a key with different job content must return ErrIdempotencyConflict.
+type FanoutJobsRepository interface {
+	CreateJobVersionedUnique(
+		ctx context.Context,
+		deduplicationKey string,
+		name string,
+		schemaVersion SchemaVersion,
+		payload string,
+		availableAt time.Time,
+	) (types.JobID, error)
+}
+
+// FanoutMaintenanceRepository prunes completed idempotency tombstones only
+// after the host's replay and audit retention window has elapsed.
+type FanoutMaintenanceRepository interface {
+	PruneJobIdempotencyKeys(ctx context.Context, before time.Time, limit int) (int64, error)
 }
 
 // JobsStatRepository provides access to outbox queue stats.

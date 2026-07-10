@@ -96,6 +96,49 @@ Capability rollout is expand-first. Legacy workers do not understand schema
 filters, so producers must stay on v1 until all legacy workers have drained.
 Capability-aware workers can register v1 and v2 together during the transition.
 
+## Durable Fan-Out
+
+Fan-out is a second opt-in layer enabled by `WithFanoutJobsRepo(...)`. It also
+requires capability mode. `PutFanout(...)` writes one source job containing:
+
+- a stable event ID, topic, schema version, payload, and occurrence time;
+- the complete eligible target set fixed at event commit;
+- an opaque immutable snapshot per target, such as config and secret revisions;
+- the requested delivery availability time.
+
+Call `PutFanout` inside the same host transaction that commits the source
+domain event when atomic domain-state/event publication is required. Target
+ordering is canonicalized. Reusing an event ID with different event data,
+target eligibility, snapshots, or availability returns
+`ErrIdempotencyConflict`.
+
+Snapshots and event payloads are byte-immutable idempotency inputs. Store only
+secret identifiers/revisions in a target snapshot, never plaintext signing
+secrets. The consumer resolves the referenced encrypted secret version and the
+host retains that version until every related delivery reaches terminal state.
+
+Target kinds use `[A-Za-z0-9_-]`; topics use `[A-Za-z0-9._-]`. The derived
+delivery capability name must fit the PostgreSQL `varchar(255)` job-name
+contract.
+
+The internal `outbox.fanout.dispatch` v1 handler materializes all target jobs
+inside one transaction. Its source job is acknowledged only after that commit.
+A crash before commit leaves no partial set; a crash after commit but before
+source ack may replay the dispatcher, but stable delivery keys prevent duplicate
+jobs. Each materialized job has:
+
+- capability name `FanoutDeliveryJobName(target.Kind, event.Topic)`;
+- the event schema version;
+- a deterministic delivery ID;
+- the original event and target snapshot in its payload;
+- its own attempts, lease/fence, retry, ack, and DLQ lifecycle.
+
+Idempotency keys live in a separate PostgreSQL registry, so deleting a completed
+job does not reopen its delivery key. `PruneJobIdempotencyKeys` removes only
+tombstones without an active job and works in bounded batches. The caller owns
+the retention cutoff and must keep tombstones at least as long as any event can
+be replayed or audited.
+
 ## Repository Interfaces
 
 Core storage dependencies are interfaces:
@@ -167,7 +210,11 @@ Postgres:
   `schema_version`, lease tokens, a capability claim index, and DLQ schema
   versions without rewriting existing v1 rows.
 - `jobsrepo.Repo` and `jobsfailedrepo.Repo` implement the opt-in capability
-  contracts.
+contracts.
+
+`FanoutJobsRepository` is another additive interface for immutable unique job
+creation. `FanoutMaintenanceRepository` is optional operational maintenance;
+normal producer and worker execution does not depend on pruning.
 
 Picodata:
 - Client contract exposes `Pool() *picodata-go.Pool` and `Close() error`.

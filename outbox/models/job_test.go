@@ -20,6 +20,7 @@ func TestJobJSONOmitsLeaseToken(t *testing.T) {
 	var payload map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &payload))
 	require.NotContains(t, payload, "leaseToken")
+	require.NotContains(t, payload, "deduplicationKey")
 
 	var schemaVersion int32
 	require.NoError(t, json.Unmarshal(payload["schemaVersion"], &schemaVersion))

@@ -34,10 +34,21 @@ func New(options ...OptOptionsSetter) (*Service, error) {
 		return nil, fmt.Errorf("validate options: %w", err)
 	}
 
-	return &Service{
+	service := &Service{
 		Options: opts,
 		jobs:    make(map[JobCapability]Job),
-	}, nil
+	}
+
+	if opts.fanoutJobsRepo != nil {
+		if err := service.RegisterJob(fanoutDispatcher{
+			repo:       opts.fanoutJobsRepo,
+			transactor: opts.transactor,
+		}); err != nil {
+			return nil, fmt.Errorf("register fan-out dispatcher: %w", err)
+		}
+	}
+
+	return service, nil
 }
 
 func (s *Service) RegisterJob(job Job) error {
