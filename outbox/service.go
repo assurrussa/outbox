@@ -23,7 +23,7 @@ var ErrServiceRunning = errors.New("outbox service is already running")
 
 type Service struct {
 	Options
-	jobs    map[string]Job
+	jobs    map[JobCapability]Job
 	mu      sync.RWMutex
 	running atomic.Bool
 }
@@ -36,13 +36,21 @@ func New(options ...OptOptionsSetter) (*Service, error) {
 
 	return &Service{
 		Options: opts,
-		jobs:    make(map[string]Job),
+		jobs:    make(map[JobCapability]Job),
 	}, nil
 }
 
 func (s *Service) RegisterJob(job Job) error {
 	if job == nil {
 		return errors.New("nil job")
+	}
+
+	capability, err := capabilityForJob(job)
+	if err != nil {
+		return fmt.Errorf("job capability: %w", err)
+	}
+	if capability.SchemaVersion != DefaultSchemaVersion && s.capabilityJobsRepo == nil {
+		return ErrCapabilityRepositoryNotConfigured
 	}
 
 	s.mu.Lock()
@@ -52,11 +60,15 @@ func (s *Service) RegisterJob(job Job) error {
 		return ErrServiceRunning
 	}
 
-	if _, ok := s.jobs[job.Name()]; ok {
-		return fmt.Errorf("job %q already registered", job.Name())
+	if _, ok := s.jobs[capability]; ok {
+		return fmt.Errorf(
+			"job %q schema version %d already registered",
+			capability.Name,
+			capability.SchemaVersion,
+		)
 	}
 
-	s.jobs[job.Name()] = job
+	s.jobs[capability] = job
 
 	return nil
 }
@@ -74,6 +86,7 @@ func (s *Service) Run(ctx context.Context) error {
 	defer s.running.Store(false)
 
 	eg, ctx := errgroup.WithContext(ctx)
+	capabilities := s.registeredCapabilities()
 
 	for i := 0; i < s.workers; i++ {
 		log := logger.WrapWithAttrs(s.logger, slog.Int("worker", i+1))
@@ -85,7 +98,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 			for {
 				// Process all available jobsrepo in one go.
-				if err := s.processAvailableJobs(ctx, log); err != nil {
+				if err := s.processAvailableJobs(ctx, log, capabilities); err != nil {
 					if ctx.Err() != nil {
 						return nil
 					}
@@ -105,7 +118,11 @@ func (s *Service) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (s *Service) processAvailableJobs(ctx context.Context, log logger.Logger) error {
+func (s *Service) processAvailableJobs(
+	ctx context.Context,
+	log logger.Logger,
+	capabilities []JobCapability,
+) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -113,7 +130,7 @@ func (s *Service) processAvailableJobs(ctx context.Context, log logger.Logger) e
 		default:
 		}
 
-		if err := s.findAndProcessJob(ctx, log); err != nil {
+		if err := s.findAndProcessJob(ctx, log, capabilities); err != nil {
 			if errors.Is(err, sharederrors.ErrNoJobs) {
 				log.DebugContext(ctx, "no jobsrepo found to process")
 				return nil
@@ -123,14 +140,19 @@ func (s *Service) processAvailableJobs(ctx context.Context, log logger.Logger) e
 	}
 }
 
-func (s *Service) findAndProcessJob(ctx context.Context, log logger.Logger) error {
+func (s *Service) findAndProcessLegacyJob(ctx context.Context, log logger.Logger) error {
 	job, err := s.jobsRepo.FindAndReserveJob(ctx, time.Now().Local(), time.Now().Local().Add(s.reserveFor))
 	if err != nil {
 		return fmt.Errorf("find and reserve job: %w", err)
 	}
 
+	capability := JobCapability{
+		Name:          job.Name,
+		SchemaVersion: normalizeSchemaVersion(job.SchemaVersion),
+	}
+
 	s.mu.RLock()
-	j, ok := s.jobs[job.Name]
+	j, ok := s.jobs[capability]
 	s.mu.RUnlock()
 	if !ok {
 		log.WarnContext(ctx, "drop to dlq: job is not registered",
@@ -183,6 +205,10 @@ func (s *Service) executeJob(ctx context.Context, j Job, job models.Job) (err er
 	ctx, cancel := context.WithTimeout(ctx, j.ExecutionTimeout())
 	defer cancel()
 
+	return s.handleJob(ctx, j, job)
+}
+
+func (s *Service) handleJob(ctx context.Context, j Job, job models.Job) (err error) {
 	ctx = withJobID(ctx, job.ID)
 
 	defer func() {

@@ -73,6 +73,9 @@ Optional:
 - `WithLogger(...)` overrides the default logger.
 - `WithJobsStatRepo(...)` is needed only for `Service.GetQueueStats(...)`.
   `Put` and `Run` do not require it.
+- Capability-aware execution is opt-in and requires both
+  `WithCapabilityJobsRepo(...)` and `WithCapabilityJobsFailedRepo(...)` in
+  addition to the legacy repositories.
 
 Important behavior:
 - Register jobs before `Service.Run(...)`; registering while running returns
@@ -81,6 +84,9 @@ Important behavior:
   called twice concurrently.
 - Unknown job names and jobs that exceed `MaxAttempts()` are moved to the failed
   jobs repository through `dlq(...)`.
+- In capability mode, claim identity is `(name, schemaVersion)`; unsupported
+  schemas remain pending, active handlers heartbeat their fenced lease, and
+  ack/DLQ deletion require the current token.
 - Successful jobs are deleted from the jobs repository after `Handle(...)`
   succeeds.
 - `JobIDFromContext(ctx)` exposes the current job ID while a handler executes.
@@ -91,6 +97,10 @@ Important behavior:
 
 Each backend owns storage initialization, repositories, transaction manager, and
 embedded migrations. Prefer backend README examples when wiring a real consumer.
+
+The Postgres backend is currently the first backend implementing the additive
+capability repository contracts. MySQL, SQLite, and Picodata continue to use
+the legacy API until their own implementations land.
 
 Migration convention:
 - Use `RunEmbedded(..., WithCommand("up"))` for normal consumers.

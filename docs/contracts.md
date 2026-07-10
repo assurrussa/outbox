@@ -58,6 +58,44 @@ Execution behavior:
 DLQ behavior uses `Transactor.RunInTx(...)` to create the failed-job row and
 delete the original job.
 
+## Capability-Aware Execution
+
+Capability mode is enabled only when callers provide both:
+
+- `WithCapabilityJobsRepo(...)`;
+- `WithCapabilityJobsFailedRepo(...)`.
+
+The legacy repositories remain required, which keeps `Put(...)`, queue stats,
+and existing consumers source-compatible. A handler may implement
+`VersionedJob`; otherwise it is registered as schema v1. Registration identity
+is `(name, schemaVersion)`, so one worker can intentionally support more than
+one schema for the same job name.
+
+In capability mode:
+
+- `Put(...)` persists schema v1;
+- `PutVersioned(...)` validates and persists an explicit positive version;
+- the repository receives the complete registered capability set and must not
+  reserve anything else;
+- an unsupported job remains pending without consuming attempts or entering
+  DLQ;
+- every reservation receives a new non-zero lease token;
+- the service extends the lease every `reserveFor / 3` while the handler runs;
+- heartbeat failure or a lost fence cancels the handler and returns
+  `ErrLeaseLost`;
+- ack and DLQ deletion affect exactly one row only when token and lease are
+  still current;
+- versioned DLQ rows retain the source schema version.
+
+Delivery remains at-least-once. A handler may finish its external side effect
+and lose the fence before ack, so payloads need a stable delivery/idempotency
+identifier. Fencing prevents a stale worker from deleting a job owned by a
+newer worker; it cannot provide exactly-once semantics in a remote system.
+
+Capability rollout is expand-first. Legacy workers do not understand schema
+filters, so producers must stay on v1 until all legacy workers have drained.
+Capability-aware workers can register v1 and v2 together during the transition.
+
 ## Repository Interfaces
 
 Core storage dependencies are interfaces:
@@ -84,6 +122,12 @@ type Transactor interface {
 
 `JobsStatRepository` is separate so normal producer/worker flows do not depend
 on exact queue-count support.
+
+Capability storage is deliberately separate from `JobsRepository` so adding
+it does not break existing custom repository implementations. The opt-in
+interfaces cover versioned create/claim, lease heartbeat, conditional delete,
+and version-preserving DLQ writes. PostgreSQL is the first backend implementing
+the new contracts.
 
 ## Backend Pattern
 
@@ -119,6 +163,11 @@ Postgres:
 - Client contract exposes `DB() storage.DBEngine` and `Close() error`.
 - Compose maps local Postgres to `127.0.0.1:54335` by default.
 - The backend uses pgx under the storage/client layer.
+- Embedded migration `00003_add_capability_leases.sql` adds positive
+  `schema_version`, lease tokens, a capability claim index, and DLQ schema
+  versions without rewriting existing v1 rows.
+- `jobsrepo.Repo` and `jobsfailedrepo.Repo` implement the opt-in capability
+  contracts.
 
 Picodata:
 - Client contract exposes `Pool() *picodata-go.Pool` and `Close() error`.

@@ -17,6 +17,7 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/tests"
@@ -174,6 +175,96 @@ func Test_FindAndReserveJob_JobNotFound(t *testing.T) {
 	// Assert.
 	ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
 	ts.Empty(job.ID)
+}
+
+func Test_CapabilityClaimFiltersAndFences(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC()
+	unsupportedID, err := ts.repo.CreateJobVersioned(ctx, "publish", 2, `{"version":2}`, now)
+	ts.Require().NoError(err)
+	supportedID, err := ts.repo.CreateJobVersioned(ctx, "publish", 1, `{"version":1}`, now)
+	ts.Require().NoError(err)
+
+	leaseToken := types.NewLeaseToken()
+	reservedUntil := now.Add(time.Minute)
+	job, err := ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		now.Add(time.Second),
+		reservedUntil,
+		leaseToken,
+		[]coreoutbox.JobCapability{{Name: "publish", SchemaVersion: 1}},
+	)
+	ts.Require().NoError(err)
+	ts.Equal(supportedID, job.ID)
+	ts.Equal(coreoutbox.SchemaVersion(1), job.SchemaVersion)
+	ts.Equal(leaseToken, job.LeaseToken)
+
+	unsupported, err := ts.repo.GetByID(ctx, unsupportedID)
+	ts.Require().NoError(err)
+	ts.Zero(unsupported.Attempts)
+	ts.True(unsupported.LeaseToken.IsZero())
+
+	affected, err := ts.repo.ExtendJobLease(
+		ctx,
+		job.ID,
+		types.NewLeaseToken(),
+		now.Add(2*time.Second),
+		reservedUntil.Add(time.Minute),
+	)
+	ts.Require().NoError(err)
+	ts.Zero(affected)
+
+	affected, err = ts.repo.ExtendJobLease(
+		ctx,
+		job.ID,
+		leaseToken,
+		now.Add(2*time.Second),
+		reservedUntil.Add(time.Minute),
+	)
+	ts.Require().NoError(err)
+	ts.Equal(int64(1), affected)
+
+	affected, err = ts.repo.DeleteJobWithLease(
+		ctx,
+		job.ID,
+		types.NewLeaseToken(),
+		now.Add(3*time.Second),
+	)
+	ts.Require().NoError(err)
+	ts.Zero(affected)
+
+	affected, err = ts.repo.DeleteJobWithLease(
+		ctx,
+		job.ID,
+		leaseToken,
+		now.Add(3*time.Second),
+	)
+	ts.Require().NoError(err)
+	ts.Equal(int64(1), affected)
+}
+
+func Test_CapabilityClaimWithEmptyCapabilitiesLeavesJobsPending(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC()
+	jobID, err := ts.repo.CreateJobVersioned(ctx, "publish", 2, `{}`, now)
+	ts.Require().NoError(err)
+
+	_, err = ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		now.Add(time.Second),
+		now.Add(time.Minute),
+		types.NewLeaseToken(),
+		nil,
+	)
+	ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
+
+	job, err := ts.repo.GetByID(ctx, jobID)
+	ts.Require().NoError(err)
+	ts.Zero(job.Attempts)
 }
 
 func Test_CreateJob(t *testing.T) {

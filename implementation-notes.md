@@ -1,5 +1,40 @@
 # Implementation Notes
 
+## 2026-07-10 CMS Capability-Aware Outbox Foundation
+
+Request: implement the accepted CMS platform plan, starting with the clean
+shared outbox prerequisite.
+
+Decisions made:
+- Kept the existing `JobsRepository`, `Put`, and legacy worker behavior intact.
+- Added a separate opt-in capability repository so current consumers do not
+  change unknown-job/DLQ behavior merely by upgrading the module.
+- Capability identity is `(name, schemaVersion)`; handlers without an explicit
+  version remain schema v1.
+- Lease ownership uses a generated token, heartbeat extension, and conditional
+  acknowledgement. Constructors still perform validation/wiring only; no
+  goroutine starts before `Service.Run`.
+- The first vertical slice targets core plus PostgreSQL. Other backends remain
+  legacy-compatible and will implement the additive contract in later slices.
+
+Verification baseline before edits:
+- Core `go test ./...` passed with isolated `GOCACHE` and `GOMODCACHE`.
+- PostgreSQL module `go test ./...` passed with the same isolated caches.
+- The default global module cache is sandbox-read-only, so implementation
+  checks use temporary caches outside the repository.
+- Added core unit/race coverage for unsupported schemas, heartbeat extension,
+  lost fences, conditional ack, and schema-preserving DLQ.
+- Added PostgreSQL migration/repository integration coverage for capability
+  filtering, lease extension/deletion, empty capability sets, and versioned
+  failed jobs.
+- PostgreSQL integration tests passed against the repository Compose service
+  with the race detector enabled.
+- Final slice gates passed: core tests, every backend unit module, `go vet`,
+  core race tests with five repetitions, core lint with zero issues, and the
+  full PostgreSQL integration suite with the race detector.
+- Lease tokens are database-only model state and are excluded from JSON to
+  avoid leaking the fencing credential through logs or transport DTOs.
+
 ## 2026-06-04 Project Documentation Initialization
 
 Request: initialize project documentation, analyze the repository, fill

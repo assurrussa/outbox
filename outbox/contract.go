@@ -14,6 +14,16 @@ type Putter interface {
 	Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error)
 }
 
+type VersionedPutter interface {
+	PutVersioned(
+		ctx context.Context,
+		name string,
+		schemaVersion SchemaVersion,
+		payload string,
+		availableAt time.Time,
+	) (types.JobID, error)
+}
+
 type QueueStats struct {
 	Total      int64
 	Available  int64
@@ -31,6 +41,38 @@ type JobsRepository interface {
 	DeleteJob(ctx context.Context, jobID types.JobID) (int64, error)
 }
 
+// CapabilityJobsRepository is an opt-in storage contract for version-aware claims
+// and fenced lease ownership. Unsupported capabilities must remain unclaimed.
+type CapabilityJobsRepository interface {
+	CreateJobVersioned(
+		ctx context.Context,
+		name string,
+		schemaVersion SchemaVersion,
+		payload string,
+		availableAt time.Time,
+	) (types.JobID, error)
+	FindAndReserveJobForCapabilities(
+		ctx context.Context,
+		now time.Time,
+		until time.Time,
+		leaseToken LeaseToken,
+		capabilities []JobCapability,
+	) (models.Job, error)
+	ExtendJobLease(
+		ctx context.Context,
+		jobID types.JobID,
+		leaseToken LeaseToken,
+		now time.Time,
+		until time.Time,
+	) (int64, error)
+	DeleteJobWithLease(
+		ctx context.Context,
+		jobID types.JobID,
+		leaseToken LeaseToken,
+		now time.Time,
+	) (int64, error)
+}
+
 // JobsStatRepository provides access to outbox queue stats.
 //
 // Optional:
@@ -45,6 +87,18 @@ type JobsStatRepository interface {
 // JobsFailedRepository persists failed jobs for DLQ.
 type JobsFailedRepository interface {
 	CreateFailedJob(ctx context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error)
+}
+
+// CapabilityJobsFailedRepository preserves the payload schema version in DLQ.
+type CapabilityJobsFailedRepository interface {
+	CreateFailedJobVersioned(
+		ctx context.Context,
+		jobID types.JobID,
+		name string,
+		schemaVersion SchemaVersion,
+		payload string,
+		reason string,
+	) (types.JobID, error)
 }
 
 // Transactor runs callbacks inside a transaction.

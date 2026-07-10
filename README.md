@@ -70,6 +70,58 @@ func main() {
 `JobsStatRepository` is optional.  
 Set `WithJobsStatRepo(...)` only if you need `svc.GetQueueStats(...)`.
 
+## Capability-aware workers (opt-in)
+
+Use capability mode when workers must claim only payload schemas they can
+decode. It is additive: legacy `Put`, repositories, and unknown-job/DLQ
+behavior stay unchanged until both capability repositories are configured.
+
+```go
+type PublishV2Job struct {
+	sharedjob.DefaultJob
+}
+
+func (*PublishV2Job) Name() string { return "cms.entry.publish" }
+
+func (*PublishV2Job) SchemaVersion() outbox.SchemaVersion { return 2 }
+
+func (*PublishV2Job) Handle(_ context.Context, _ string) error { return nil }
+
+svc, err := outbox.New(
+	outbox.WithJobsRepo(jobsRepo),
+	outbox.WithCapabilityJobsRepo(jobsRepo),
+	outbox.WithJobsFailedRepo(jobsFailedRepo),
+	outbox.WithCapabilityJobsFailedRepo(jobsFailedRepo),
+	outbox.WithTransactor(txManager),
+)
+if err != nil {
+	panic(err)
+}
+
+svc.MustRegisterJob(&PublishV2Job{})
+_, _ = svc.PutVersioned(
+	ctx,
+	"cms.entry.publish",
+	2,
+	`{"entryId":"1"}`,
+	time.Now(),
+)
+```
+
+Jobs without `SchemaVersion()` use schema v1. In capability mode, ordinary
+`Put(...)` also persists schema v1. Claims are filtered by the registered
+`(name, schemaVersion)` set, so unsupported jobs remain pending and do not move
+to DLQ. Active handlers refresh their lease every `reserveFor / 3`; successful
+ack and DLQ deletion require the same live lease token.
+
+Rollout rule: do not enqueue schemas newer than v1 while legacy workers are
+still running. Deploy capability-aware workers that understand both versions,
+remove legacy workers, and only then enable the new producer schema.
+
+The PostgreSQL backend currently implements the capability repository
+contracts. Other backends remain available through the legacy API until they
+gain their own additive implementations.
+
 ## Backend modules
 
 Pick only the backend module you need for a project.

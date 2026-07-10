@@ -11,6 +11,7 @@ import (
 
 	"github.com/assurrussa/outbox/backends/pgsql/repositories"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	"github.com/assurrussa/outbox/shared/sharederrors"
@@ -22,7 +23,8 @@ const (
 )
 
 var columns = []string{
-	"id", "job_id", "connection", "queue", "name", "payload", "reason", "exception", "failed_at", "created_at",
+	"id", "job_id", "connection", "queue", "name", "schema_version", "payload", "reason", "exception",
+	"failed_at", "created_at",
 }
 
 func (r *Repo) CreateFailedJob(
@@ -32,36 +34,64 @@ func (r *Repo) CreateFailedJob(
 	payload string,
 	reason string,
 ) (types.JobID, error) {
+	return r.CreateFailedJobVersioned(
+		ctx,
+		jobID,
+		name,
+		coreoutbox.DefaultSchemaVersion,
+		payload,
+		reason,
+	)
+}
+
+func (r *Repo) CreateFailedJobVersioned(
+	ctx context.Context,
+	jobID types.JobID,
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	reason string,
+) (types.JobID, error) {
+	capability := coreoutbox.JobCapability{Name: name, SchemaVersion: schemaVersion}
+	if err := capability.Validate(); err != nil {
+		return types.JobIDNil, fmt.Errorf("validate capability: %w", err)
+	}
+
 	return r.Create(ctx, models.JobFailed{
-		ID:         types.NewJobID(),
-		JobID:      jobID,
-		Connection: "",
-		Queue:      "queue",
-		Name:       name,
-		Payload:    payload,
-		Reason:     reason,
-		FailedAt:   time.Now(),
-		CreatedAt:  time.Now(),
+		ID:            types.NewJobID(),
+		JobID:         jobID,
+		Connection:    "",
+		Queue:         "queue",
+		Name:          name,
+		SchemaVersion: schemaVersion,
+		Payload:       payload,
+		Reason:        reason,
+		FailedAt:      time.Now(),
+		CreatedAt:     time.Now(),
 	})
 }
 
 func (r *Repo) Create(ctx context.Context, job models.JobFailed) (types.JobID, error) {
 	const op = "jobs_failed.repo.Create"
+	if job.SchemaVersion <= 0 {
+		job.SchemaVersion = coreoutbox.DefaultSchemaVersion
+	}
 
 	builder := querybuilder.BuilderDollar().
 		Insert(tableName).
 		Suffix("RETURNING id").
 		SetMap(querybuilder.Eq{
-			"id":         job.ID,
-			"job_id":     job.JobID,
-			"connection": job.Connection,
-			"queue":      job.Queue,
-			"name":       job.Name,
-			"payload":    job.Payload,
-			"reason":     job.Reason,
-			"exception":  job.Exception,
-			"failed_at":  job.FailedAt,
-			"created_at": job.CreatedAt,
+			"id":             job.ID,
+			"job_id":         job.JobID,
+			"connection":     job.Connection,
+			"queue":          job.Queue,
+			"name":           job.Name,
+			"schema_version": job.SchemaVersion,
+			"payload":        job.Payload,
+			"reason":         job.Reason,
+			"exception":      job.Exception,
+			"failed_at":      job.FailedAt,
+			"created_at":     job.CreatedAt,
 		})
 
 	var lastID types.JobID

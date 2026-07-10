@@ -30,7 +30,8 @@ Workspace modules also include runnable examples:
 
 ## Directory Responsibilities
 
-- `outbox/`: public core runtime, options, contracts, job context helpers, logger
+- `outbox/`: public core runtime, legacy and capability-aware repository
+  contracts, fenced worker lifecycle, options, job context helpers, logger
   adapter, models, and small payload helpers.
 - `shared/`: support code reused by core and backend modules. It is internal to
   this repository's modules and is not a stable external consumer API.
@@ -73,6 +74,10 @@ Current driver ownership:
 - SQLite backend: `modernc.org/sqlite`
 - Postgres backend: `github.com/jackc/pgx/v5`
 - Picodata backend: `github.com/picodata/picodata-go`
+
+Capability-aware storage support is additive and backend-owned. PostgreSQL is
+the first implementation; the other backend modules remain legacy-compatible
+without claiming capability support.
 
 ## Shared Wiki Context
 

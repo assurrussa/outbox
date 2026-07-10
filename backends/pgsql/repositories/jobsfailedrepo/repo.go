@@ -5,11 +5,14 @@ import (
 	"fmt"
 
 	pgsql "github.com/assurrussa/outbox/backends/pgsql"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 )
 
 type Options struct {
 	pgsql pgsql.Client
 }
+
+var _ coreoutbox.CapabilityJobsFailedRepository = (*Repo)(nil)
 
 func NewOptions(pgsql pgsql.Client) Options {
 	return Options{pgsql: pgsql}

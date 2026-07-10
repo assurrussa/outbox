@@ -52,9 +52,12 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(jobs),
+		// Opt-in version-aware claims and fenced leases.
+		outbox.WithCapabilityJobsRepo(jobs),
 		// Optional: only if you call svc.GetQueueStats(...)
 		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
+		outbox.WithCapabilityJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
 		outbox.WithLogger(lg),
 	)
@@ -64,6 +67,11 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 `JobsStatRepository` is optional.  
 Keep `WithJobsStatRepo(...)` only when queue stats are needed.
 
+The capability options are also optional, but must be configured together.
+When enabled, this backend filters claims by `(name, schema_version)`, refreshes
+leases with the reservation token, conditionally acknowledges only the current
+lease owner, and preserves schema version in DLQ.
+
 ## Migrations
 
 Recommended:
@@ -71,6 +79,11 @@ Recommended:
 ```go
 _ = pgmigrator.RunEmbedded(ctx, db, log, pgmigrator.WithCommand("up"))
 ```
+
+Migration `00003_add_capability_leases.sql` upgrades existing jobs and failed
+jobs to schema v1, adds fenced lease tokens, and creates the capability claim
+index. Apply it before enabling the capability options. Keep producers on v1
+until no legacy worker remains.
 
 Filesystem mode:
 

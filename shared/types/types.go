@@ -9,11 +9,17 @@ import (
 )
 
 var (
-	ErrJobIDUuidZero     = errors.New("JobID uuid is zero")
-	ErrMessageIDUuidZero = errors.New("MessageID uuid is zero")
-	JobIDNil             = JobID(uuid.Nil)
-	MessageIDNil         = MessageID(uuid.Nil)
+	ErrJobIDUuidZero      = errors.New("JobID uuid is zero")
+	ErrLeaseTokenUUIDZero = errors.New("LeaseToken uuid is zero")
+	ErrMessageIDUuidZero  = errors.New("MessageID uuid is zero")
+	JobIDNil              = JobID(uuid.Nil)
+	LeaseTokenNil         = LeaseToken(uuid.Nil)
+	MessageIDNil          = MessageID(uuid.Nil)
 )
+
+type SchemaVersion int32
+
+const DefaultSchemaVersion SchemaVersion = 1
 
 type JobID uuid.UUID                             //
 func NewJobID() JobID                            { return JobID(uuid.New()) }
@@ -44,6 +50,24 @@ func (t JobID) AsPointer() *JobID {
 		return nil
 	}
 	return &t
+}
+
+type LeaseToken uuid.UUID
+
+func NewLeaseToken() LeaseToken                   { return LeaseToken(uuid.New()) }
+func (t LeaseToken) String() string               { return uuid.UUID(t).String() }
+func (t LeaseToken) Value() (driver.Value, error) { return t.String(), nil }
+func (t *LeaseToken) Scan(src any) error          { return (*uuid.UUID)(t).Scan(src) }
+func (t LeaseToken) MarshalText() ([]byte, error) { return uuid.UUID(t).MarshalText() }
+func (t *LeaseToken) UnmarshalText(data []byte) error {
+	return (*uuid.UUID)(t).UnmarshalText(data)
+}
+func (t LeaseToken) IsZero() bool { return t == LeaseTokenNil }
+func (t LeaseToken) Validate() error {
+	if t.IsZero() {
+		return fmt.Errorf("validate: %w", ErrLeaseTokenUUIDZero)
+	}
+	return nil
 }
 
 type MessageID uuid.UUID           //
@@ -80,7 +104,7 @@ func (t MessageID) AsPointer() *MessageID {
 }
 
 type TypeSet = interface {
-	JobID | MessageID
+	JobID | LeaseToken | MessageID
 }
 
 func Parse[T TypeSet](s string) (T, error) {
