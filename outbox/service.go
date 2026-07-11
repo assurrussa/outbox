@@ -61,18 +61,32 @@ func New(options ...OptOptionsSetter) (*Service, error) {
 }
 
 func (s *Service) RegisterJob(job Job) error {
-	if job == nil {
-		return errors.New("nil job")
-	}
+	return s.RegisterJobs(job)
+}
 
-	capability, err := capabilityForJob(job)
-	if err != nil {
-		return fmt.Errorf("job capability: %w", err)
+// RegisterJobs validates and installs one capability batch atomically.
+func (s *Service) RegisterJobs(jobs ...Job) error {
+	capabilities := make(map[JobCapability]Job, len(jobs))
+	for index, job := range jobs {
+		if job == nil {
+			return fmt.Errorf("job %d is nil", index)
+		}
+		capability, err := capabilityForJob(job)
+		if err != nil {
+			return fmt.Errorf("job %d capability: %w", index, err)
+		}
+		if capability.SchemaVersion != DefaultSchemaVersion && s.capabilityJobsRepo == nil {
+			return ErrCapabilityRepositoryNotConfigured
+		}
+		if _, duplicate := capabilities[capability]; duplicate {
+			return fmt.Errorf(
+				"job %q schema version %d is duplicated in registration batch",
+				capability.Name,
+				capability.SchemaVersion,
+			)
+		}
+		capabilities[capability] = job
 	}
-	if capability.SchemaVersion != DefaultSchemaVersion && s.capabilityJobsRepo == nil {
-		return ErrCapabilityRepositoryNotConfigured
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -80,15 +94,18 @@ func (s *Service) RegisterJob(job Job) error {
 		return ErrServiceRunning
 	}
 
-	if _, ok := s.jobs[capability]; ok {
-		return fmt.Errorf(
-			"job %q schema version %d already registered",
-			capability.Name,
-			capability.SchemaVersion,
-		)
+	for capability := range capabilities {
+		if _, ok := s.jobs[capability]; ok {
+			return fmt.Errorf(
+				"job %q schema version %d already registered",
+				capability.Name,
+				capability.SchemaVersion,
+			)
+		}
 	}
-
-	s.jobs[capability] = job
+	for capability, job := range capabilities {
+		s.jobs[capability] = job
+	}
 
 	return nil
 }
@@ -96,6 +113,13 @@ func (s *Service) RegisterJob(job Job) error {
 func (s *Service) MustRegisterJob(job Job) {
 	if err := s.RegisterJob(job); err != nil {
 		panic(fmt.Errorf("register job: %w", err))
+	}
+}
+
+// MustRegisterJobs installs one batch or panics without partially registering it.
+func (s *Service) MustRegisterJobs(jobs ...Job) {
+	if err := s.RegisterJobs(jobs...); err != nil {
+		panic(fmt.Errorf("register jobs: %w", err))
 	}
 }
 

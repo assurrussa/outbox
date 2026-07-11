@@ -301,6 +301,22 @@ func TestVersionedCapabilityRequiresCapabilityRepositories(t *testing.T) {
 	)
 }
 
+func TestRegisterJobsIsAtomicOnExistingOrBatchDuplicate(t *testing.T) {
+	t.Parallel()
+
+	svc := newCapabilityService(t, newCapabilityRepo())
+	existing := capabilityJob{name: "existing", version: 1}
+	newJob := capabilityJob{name: "new", version: 1}
+	svc.MustRegisterJob(existing)
+
+	require.Error(t, svc.RegisterJobs(newJob, existing))
+	require.NoError(t, svc.RegisterJob(newJob), "failed batch must not partially install new job")
+	require.Error(t, svc.RegisterJobs(
+		capabilityJob{name: "duplicate", version: 1},
+		capabilityJob{name: "duplicate", version: 1},
+	))
+}
+
 type capabilityJob struct {
 	name        string
 	version     outbox.SchemaVersion

@@ -143,3 +143,12 @@ Decisions made:
   exact retry history.
 - Metadata is attached only after a repository claim; missing IDs, zero
   attempts, and contexts outside a running outbox handler are rejected.
+
+## 2026-07-11: Atomic Capability Registration
+
+- Added `RegisterJobs`/`MustRegisterJobs` to validate a complete handler batch
+  before mutating the service capability map.
+- Existing-capability conflicts, duplicates inside the batch, invalid schema
+  versions, nil jobs and missing capability repositories leave every new job
+  unregistered. Single-job registration remains source-compatible through the
+  same atomic path.
