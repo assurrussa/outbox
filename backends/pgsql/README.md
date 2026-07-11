@@ -10,6 +10,20 @@ go get github.com/assurrussa/outbox/backends/pgsql@latest
 
 ## Usage
 
+For the standard capability/fan-out worker runtime, use the supported
+`backends/pgsql/runtime` facade. It opens and verifies the database client,
+constructs legacy/capability/fan-out repositories, failed storage, transactor
+and `outbox.Service`, and exposes `Run`, `Readiness`, `BeginDrain`, and `Close`.
+It deliberately does not apply migrations:
+
+```go
+runtime, err := pgsqlruntime.Open(ctx, pgsqlruntime.Config{DSN: dsn})
+if err != nil {
+	return err
+}
+defer runtime.Close()
+```
+
 ```go
 import (
 	"context"

@@ -19,6 +19,7 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
+	pgsqlruntime "github.com/assurrussa/outbox/backends/pgsql/runtime"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
 	"github.com/assurrussa/outbox/outbox"
@@ -123,6 +124,35 @@ func TestPutJob(t *testing.T) {
 	ts.Equal(availableAt.Unix(), j.AvailableAt.Unix())
 	ts.NotEmpty(j.ReservedAt)
 	ts.NotEmpty(j.CreatedAt)
+}
+
+func TestStandardRuntimePlansFanoutAndDrains(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+	runtime, err := pgsqlruntime.Open(ctx, pgsqlruntime.Config{
+		DSN: ts.db.DB().Pool().Config().ConnString(), Workers: 2,
+		IdleTime: 100 * time.Millisecond, ReserveFor: time.Second, Logger: logger.Discard(),
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, runtime.Close()) }()
+	require.NoError(t, runtime.DatabaseReadiness(ctx))
+	event := integrationFanoutEvent()
+	targets := integrationFanoutTargets()
+	_, err = runtime.Service().PutFanout(ctx, event, targets, time.Now().UTC())
+	require.NoError(t, err)
+	runErr := make(chan error, 1)
+	go func() { runErr <- runtime.Run(ctx) }()
+	require.Eventually(t, func() bool { return runtime.Readiness(ctx) == nil }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		jobs, queryErr := ts.jobsRepo.All(ctx)
+		return queryErr == nil && len(jobs) == len(targets)
+	}, 2*time.Second, 20*time.Millisecond)
+	runtime.BeginDrain()
+	require.NoError(t, <-runErr)
+	jobs, err := ts.jobsRepo.All(ctx)
+	require.NoError(t, err)
+	require.Len(t, jobs, len(targets))
+	assertUniqueIntegrationDeliveries(t, jobs)
 }
 
 func TestAllJobsProcessed(t *testing.T) {

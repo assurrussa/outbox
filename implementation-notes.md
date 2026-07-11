@@ -125,3 +125,11 @@ Decisions made:
 - Added a non-mutating structural readiness probe on `Service`. It becomes
   available only after worker loops launch, closes before claim drain, and does
   not reserve a synthetic job; hosts compose it with their database probe.
+# 2026-07-11: PostgreSQL Runtime Facade
+
+- Added `backends/pgsql/runtime` as the supported standard composition for the
+  PostgreSQL client, legacy/capability/fan-out repositories, failed jobs,
+  transactor and core service.
+- The runtime implements the worker lifecycle directly and combines database
+  plus service readiness. It does not apply migrations; the host keeps a
+  separate one-shot migrate role before starting web or worker replicas.
