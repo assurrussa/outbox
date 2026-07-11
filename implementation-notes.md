@@ -161,3 +161,20 @@ Decisions made:
   `application_name`, and similar runtime settings.
 - Added a defensive copy option and a pool-config regression test for both
   `search_path` and `application_name`.
+
+## 2026-07-11: Core Prerelease Publication
+
+- Ran the complete core pre-tag gate on clean commit `b8e0f43`: generation,
+  formatting, vet, zero lint issues, all core/backend unit modules, core race
+  tests repeated five times, and coverage passed.
+- Published root-module tag `v0.10.0-alpha.0` only after that gate. A separate
+  `GOWORK=off` consumer resolution with an isolated module cache resolved the
+  tag to the exact commit, so the evidence does not rely on the local
+  workspace.
+- Updated only `backends/pgsql` to the exact published core prerelease. The
+  PostgreSQL backend remains a separately tagged module and must pass its own
+  standalone pre-tag gate before its module-path-prefixed tag is created.
+- The standalone PostgreSQL gate resolved the published core version with
+  `GOWORK=off`, reported no `go mod tidy -diff`, and passed all backend unit
+  packages. The full PostgreSQL integration suite also passed under the race
+  detector against an isolated test database.
