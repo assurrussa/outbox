@@ -95,3 +95,17 @@ Decisions made:
 - Left existing dirty generated/source files outside the follow-up commit
   because they were already modified before this fix and are unrelated to the
   reported `goconst` failures.
+
+## 2026-07-11: Two-Phase Prerelease Gate
+
+- Confirmed the complete workspace check after capability/fan-out changes:
+  generation, formatting, vet, zero lint issues, all backend unit modules,
+  core race tests repeated five times, and coverage.
+- Kept core and PostgreSQL backend publication as two explicit phases because
+  their Go modules have separate tags. The backend gate runs with `GOWORK=off`
+  and refuses a core version different from the requested exact tag.
+- Documented that MySQL, SQLite, and Picodata still expose only the legacy API;
+  workspace compilation does not claim capability or fan-out support for them.
+- Added the repository-local cache path to `.gitignore` and committed the
+  deterministic mock import grouping produced by the canonical generate/format
+  pipeline.

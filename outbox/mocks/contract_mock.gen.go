@@ -14,10 +14,11 @@ import (
 	reflect "reflect"
 	time "time"
 
+	gomock "go.uber.org/mock/gomock"
+
 	outbox "github.com/assurrussa/outbox/outbox"
 	models "github.com/assurrussa/outbox/outbox/models"
 	types "github.com/assurrussa/outbox/shared/types"
-	gomock "go.uber.org/mock/gomock"
 )
 
 // MockPutter is a mock of Putter interface.

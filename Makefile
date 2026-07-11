@@ -1,9 +1,25 @@
 .DEFAULT_GOAL := check
+.PHONY: release-readiness-core release-readiness-pgsql release-version-check
 BACKEND_DIRS := backends/mysql backends/sqlite backends/pgsql backends/picodata
 CORE_PKGS := ./outbox/... ./shared/... ./tools/...
 CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
 BACKEND_GO_FILES := $(shell find backends -type f -name '*.go')
 CORE_VERSION ?= v0.9.0
+
+release-version-check:
+	@test -n "$(CORE_VERSION)" || (echo "CORE_VERSION is required" && exit 2)
+	@printf '%s\n' "$(CORE_VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
+		(echo "CORE_VERSION must be an exact semver tag" && exit 2)
+
+release-readiness-core: release-version-check check
+	@git diff --exit-code -- . ':!.cache'
+
+release-readiness-pgsql: release-version-check
+	@actual=$$(cd backends/pgsql && GOWORK=off go list -m -f '{{.Version}}' github.com/assurrussa/outbox); \
+		test "$$actual" = "$(CORE_VERSION)" || \
+		(echo "pgsql backend resolves core $$actual, expected $(CORE_VERSION)" && exit 2)
+	@cd backends/pgsql && GOWORK=off go mod tidy -diff
+	@cd backends/pgsql && GOWORK=off go test ./...
 
 check: generate fmt vet lint test-core test-backends test-race-core cover-html
 check-all: devup check test-integration-all devdown
