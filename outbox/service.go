@@ -21,11 +21,16 @@ const serviceName = "outbox"
 
 var ErrServiceRunning = errors.New("outbox service is already running")
 
+var errServiceDraining = errors.New("outbox service is draining")
+
 type Service struct {
 	Options
 	jobs    map[JobCapability]Job
 	mu      sync.RWMutex
 	running atomic.Bool
+	claimMu sync.RWMutex
+	drain   chan struct{}
+	drainDo sync.Once
 }
 
 func New(options ...OptOptionsSetter) (*Service, error) {
@@ -37,6 +42,7 @@ func New(options ...OptOptionsSetter) (*Service, error) {
 	service := &Service{
 		Options: opts,
 		jobs:    make(map[JobCapability]Job),
+		drain:   make(chan struct{}),
 	}
 
 	if opts.fanoutJobsRepo != nil {
@@ -108,6 +114,9 @@ func (s *Service) Run(ctx context.Context) error {
 			log.InfoContext(ctx, "start worker")
 
 			for {
+				if s.IsDraining() {
+					return nil
+				}
 				// Process all available jobsrepo in one go.
 				if err := s.processAvailableJobs(ctx, log, capabilities); err != nil {
 					if ctx.Err() != nil {
@@ -120,6 +129,8 @@ func (s *Service) Run(ctx context.Context) error {
 				select {
 				case <-ctx.Done():
 					return nil
+				case <-s.drain:
+					return nil
 				case <-time.After(s.idleTime):
 				}
 			}
@@ -127,6 +138,31 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	return eg.Wait()
+}
+
+// BeginDrain atomically closes the claim boundary. After it returns no worker
+// can start another repository claim, while handlers for already reserved jobs
+// keep their original context and lease heartbeat until they finish or the
+// caller cancels the Run context at its bounded drain deadline.
+func (s *Service) BeginDrain() {
+	if s == nil {
+		return
+	}
+	s.claimMu.Lock()
+	s.drainDo.Do(func() { close(s.drain) })
+	s.claimMu.Unlock()
+}
+
+func (s *Service) IsDraining() bool {
+	if s == nil {
+		return false
+	}
+	select {
+	case <-s.drain:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) processAvailableJobs(
@@ -138,11 +174,13 @@ func (s *Service) processAvailableJobs(
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-s.drain:
+			return nil
 		default:
 		}
 
 		if err := s.findAndProcessJob(ctx, log, capabilities); err != nil {
-			if errors.Is(err, sharederrors.ErrNoJobs) {
+			if errors.Is(err, sharederrors.ErrNoJobs) || errors.Is(err, errServiceDraining) {
 				log.DebugContext(ctx, "no jobsrepo found to process")
 				return nil
 			}
@@ -152,7 +190,14 @@ func (s *Service) processAvailableJobs(
 }
 
 func (s *Service) findAndProcessLegacyJob(ctx context.Context, log logger.Logger) error {
-	job, err := s.jobsRepo.FindAndReserveJob(ctx, time.Now().Local(), time.Now().Local().Add(s.reserveFor))
+	job, err := func() (models.Job, error) {
+		s.claimMu.RLock()
+		defer s.claimMu.RUnlock()
+		if s.IsDraining() {
+			return models.Job{}, errServiceDraining
+		}
+		return s.jobsRepo.FindAndReserveJob(ctx, time.Now().Local(), time.Now().Local().Add(s.reserveFor))
+	}()
 	if err != nil {
 		return fmt.Errorf("find and reserve job: %w", err)
 	}

@@ -67,6 +67,14 @@ func main() {
 }
 ```
 
+For a graceful worker shutdown, first remove the process from readiness, then
+call `svc.BeginDrain()` without cancelling the `Run` context. After
+`BeginDrain` returns, no new repository claim can start; already reserved
+capability jobs keep their fenced lease heartbeat and may ack normally. Cancel
+the `Run` context only when the host's bounded drain deadline expires, so an
+unfinished handler cannot ack and its lease can be recovered by another
+worker.
+
 `JobsStatRepository` is optional.  
 Set `WithJobsStatRepo(...)` only if you need `svc.GetQueueStats(...)`.
 

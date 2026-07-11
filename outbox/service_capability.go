@@ -38,13 +38,20 @@ func (s *Service) findAndProcessCapabilityJob(
 
 	now := time.Now().UTC()
 	leaseToken := types.NewLeaseToken()
-	job, err := s.capabilityJobsRepo.FindAndReserveJobForCapabilities(
-		ctx,
-		now,
-		now.Add(s.reserveFor),
-		leaseToken,
-		capabilities,
-	)
+	job, err := func() (models.Job, error) {
+		s.claimMu.RLock()
+		defer s.claimMu.RUnlock()
+		if s.IsDraining() {
+			return models.Job{}, errServiceDraining
+		}
+		return s.capabilityJobsRepo.FindAndReserveJobForCapabilities(
+			ctx,
+			now,
+			now.Add(s.reserveFor),
+			leaseToken,
+			capabilities,
+		)
+	}()
 	if err != nil {
 		return fmt.Errorf("find and reserve capability job: %w", err)
 	}

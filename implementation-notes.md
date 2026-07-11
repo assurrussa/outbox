@@ -109,3 +109,16 @@ Decisions made:
 - Added the repository-local cache path to `.gitignore` and committed the
   deterministic mock import grouping produced by the canonical generate/format
   pipeline.
+
+## 2026-07-11: Graceful Worker Drain
+
+- Added an explicit, idempotent `BeginDrain` boundary separate from Run context
+  cancellation. It closes claim admission while active handlers keep their
+  existing contexts and fenced lease heartbeats.
+- Serialized the drain transition against repository claim start. Once
+  `BeginDrain` returns, no new legacy or capability claim can begin; a claim
+  already reserved before the boundary is treated as active work.
+- Added capability-mode tests proving the active job can finish and ack, the
+  next queued job remains unclaimed, heartbeat continues during drain, and
+  draining before Run leaves the queue untouched. A bounded-context expiry
+  cancels the handler without ack so the fenced job remains for lease recovery.

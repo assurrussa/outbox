@@ -72,6 +72,90 @@ func TestCapabilityModeExtendsLeaseWhileHandlerRuns(t *testing.T) {
 	require.GreaterOrEqual(t, repo.ExtendCount(), 1)
 }
 
+func TestCapabilityModeDrainFinishesReservedJobAndStopsNewClaims(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	svc.MustRegisterJob(capabilityJob{
+		name:    "drain",
+		version: 1,
+		handle: func(ctx context.Context, _ string) error {
+			close(started)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-release:
+				return nil
+			}
+		},
+		timeout: 2 * time.Second,
+	})
+
+	_, err := svc.PutVersioned(context.Background(), "drain", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+	_, err = svc.PutVersioned(context.Background(), "drain", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- svc.Run(context.Background()) }()
+	<-started
+	svc.BeginDrain()
+	require.True(t, svc.IsDraining())
+	require.Eventually(t, func() bool { return repo.ExtendCount() >= 1 }, time.Second, 20*time.Millisecond)
+	close(release)
+	require.NoError(t, <-runErr)
+
+	jobs := repo.Jobs()
+	require.Len(t, jobs, 1, "drain must not claim the second job")
+	require.Zero(t, jobs[0].Attempts)
+}
+
+func TestCapabilityModeDrainDeadlineCancelsHandlerWithoutAck(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	started := make(chan struct{})
+	svc.MustRegisterJob(capabilityJob{
+		name:    "deadline",
+		version: 1,
+		handle: func(ctx context.Context, _ string) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		timeout: 2 * time.Second,
+	})
+	_, err := svc.PutVersioned(context.Background(), "deadline", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- svc.Run(runCtx) }()
+	<-started
+	svc.BeginDrain()
+	cancelRun()
+	require.NoError(t, <-runErr)
+
+	jobs := repo.Jobs()
+	require.Len(t, jobs, 1, "cancelled drain must leave the fenced job for lease recovery")
+	require.Equal(t, 1, jobs[0].Attempts)
+}
+
+func TestCapabilityModeDrainBeforeRunLeavesQueueUntouched(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	svc.MustRegisterJob(capabilityJob{name: "pending", version: 1})
+	_, err := svc.PutVersioned(context.Background(), "pending", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	svc.BeginDrain()
+	svc.BeginDrain()
+	require.NoError(t, svc.Run(context.Background()))
+	jobs := repo.Jobs()
+	require.Len(t, jobs, 1)
+	require.Zero(t, jobs[0].Attempts)
+}
+
 func TestCapabilityModeLostLeaseCancelsHandlerAndKeepsJob(t *testing.T) {
 	repo := newCapabilityRepo()
 	repo.loseLeaseOnExtend = true
