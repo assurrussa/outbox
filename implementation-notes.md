@@ -122,3 +122,6 @@ Decisions made:
   next queued job remains unclaimed, heartbeat continues during drain, and
   draining before Run leaves the queue untouched. A bounded-context expiry
   cancels the handler without ack so the fenced job remains for lease recovery.
+- Added a non-mutating structural readiness probe on `Service`. It becomes
+  available only after worker loops launch, closes before claim drain, and does
+  not reserve a synthetic job; hosts compose it with their database probe.

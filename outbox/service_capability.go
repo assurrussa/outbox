@@ -42,7 +42,7 @@ func (s *Service) findAndProcessCapabilityJob(
 		s.claimMu.RLock()
 		defer s.claimMu.RUnlock()
 		if s.IsDraining() {
-			return models.Job{}, errServiceDraining
+			return models.Job{}, ErrServiceDraining
 		}
 		return s.capabilityJobsRepo.FindAndReserveJobForCapabilities(
 			ctx,

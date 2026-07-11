@@ -156,6 +156,39 @@ func TestCapabilityModeDrainBeforeRunLeavesQueueUntouched(t *testing.T) {
 	require.Zero(t, jobs[0].Attempts)
 }
 
+func TestServiceReadinessTracksRunAndDrainWithoutClaiming(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	svc.MustRegisterJob(capabilityJob{
+		name:    "readiness",
+		version: 1,
+		handle: func(context.Context, string) error {
+			close(started)
+			<-release
+			return nil
+		},
+	})
+	require.ErrorIs(t, svc.Readiness(context.Background()), outbox.ErrServiceNotRunning)
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- svc.Run(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return svc.Readiness(context.Background()) == nil
+	}, time.Second, 10*time.Millisecond)
+	require.Empty(t, repo.Jobs(), "readiness must not reserve a synthetic job")
+	_, err := svc.PutVersioned(context.Background(), "readiness", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+	<-started
+
+	svc.BeginDrain()
+	require.ErrorIs(t, svc.Readiness(context.Background()), outbox.ErrServiceDraining)
+	close(release)
+	require.NoError(t, <-runErr)
+	require.ErrorIs(t, svc.Readiness(context.Background()), outbox.ErrServiceNotRunning)
+}
+
 func TestCapabilityModeLostLeaseCancelsHandlerAndKeepsJob(t *testing.T) {
 	repo := newCapabilityRepo()
 	repo.loseLeaseOnExtend = true

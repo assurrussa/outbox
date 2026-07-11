@@ -74,6 +74,10 @@ capability jobs keep their fenced lease heartbeat and may ack normally. Cancel
 the `Run` context only when the host's bounded drain deadline expires, so an
 unfinished handler cannot ack and its lease can be recovered by another
 worker.
+`svc.Readiness(ctx)` is a non-mutating worker-lifecycle probe: it is successful
+only after worker loops start and becomes unavailable before `BeginDrain`
+closes claim admission. Pair it with a separate database probe; readiness never
+reserves a synthetic outbox job.
 
 `JobsStatRepository` is optional.  
 Set `WithJobsStatRepo(...)` only if you need `svc.GetQueueStats(...)`.
