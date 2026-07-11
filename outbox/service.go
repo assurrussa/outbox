@@ -291,7 +291,7 @@ func (s *Service) executeJob(ctx context.Context, j Job, job models.Job) (err er
 }
 
 func (s *Service) handleJob(ctx context.Context, j Job, job models.Job) (err error) {
-	ctx = withJobID(ctx, job.ID)
+	ctx = withJobMetadata(ctx, job)
 
 	defer func() {
 		if r := recover(); r != nil {

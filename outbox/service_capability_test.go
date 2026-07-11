@@ -38,6 +38,39 @@ func TestCapabilityModeLeavesUnsupportedSchemaPending(t *testing.T) {
 	require.Empty(t, repo.Failed())
 }
 
+func TestCapabilityHandlerReceivesPersistedAttemptMetadata(t *testing.T) {
+	t.Parallel()
+
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	metadataCh := make(chan outbox.JobMetadata, 1)
+	svc.MustRegisterJob(capabilityJob{
+		name:    "metadata",
+		version: 1,
+		handle: func(ctx context.Context, _ string) error {
+			metadata, ok := outbox.JobMetadataFromContext(ctx)
+			if !ok {
+				return errors.New("job metadata is missing")
+			}
+			if outbox.JobIDFromContext(ctx) != metadata.ID {
+				return errors.New("legacy job ID accessor disagrees with metadata")
+			}
+			metadataCh <- metadata
+			return nil
+		},
+	})
+
+	jobID, err := svc.PutVersioned(context.Background(), "metadata", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	require.NoError(t, svc.Run(ctx))
+
+	metadata := <-metadataCh
+	require.Equal(t, jobID, metadata.ID)
+	require.Equal(t, 1, metadata.Attempt)
+}
+
 func TestCapabilityModeExtendsLeaseWhileHandlerRuns(t *testing.T) {
 	repo := newCapabilityRepo()
 	svc := newCapabilityService(t, repo)

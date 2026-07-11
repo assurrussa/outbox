@@ -133,3 +133,13 @@ Decisions made:
 - The runtime implements the worker lifecycle directly and combines database
   plus service readiness. It does not apply migrations; the host keeps a
   separate one-shot migrate role before starting web or worker replicas.
+
+## 2026-07-11: Attempt Metadata Context
+
+- Replaced the job-ID-only handler context value with immutable public
+  `JobMetadata` containing the persisted job ID and current claimed attempt.
+- Kept `JobIDFromContext` source-compatible and added a fail-closed
+  `JobMetadataFromContext` accessor for delivery handlers that must persist
+  exact retry history.
+- Metadata is attached only after a repository claim; missing IDs, zero
+  attempts, and contexts outside a running outbox handler are rejected.
