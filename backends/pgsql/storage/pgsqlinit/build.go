@@ -30,7 +30,10 @@ func Create(
 	}
 
 	opts := make([]pgsqlclient.OptPoolOptionsSetter, 0, 1+len(options))
-	opts = append(opts, pgsqlclient.WithSSLMode(parseSSLMode(dsn)))
+	opts = append(opts,
+		pgsqlclient.WithSSLMode(parseSSLMode(dsn)),
+		pgsqlclient.WithRuntimeParams(connConfig.ConnConfig.RuntimeParams),
+	)
 	opts = append(opts, options...)
 
 	pool, err := pgsqlclient.NewPool(ctx, pgsqlclient.NewOptions(

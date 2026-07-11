@@ -152,3 +152,12 @@ Decisions made:
   versions, nil jobs and missing capability repositories leave every new job
   unregistered. Single-job registration remains source-compatible through the
   same atomic path.
+
+## 2026-07-11: PostgreSQL DSN Runtime Parameters
+
+- Preserved parsed PostgreSQL startup parameters when `pgsqlinit.Create`
+  adapts a DSN into the shared client options. Previously only `sslmode`
+  survived reconstruction, silently dropping `search_path`,
+  `application_name`, and similar runtime settings.
+- Added a defensive copy option and a pool-config regression test for both
+  `search_path` and `application_name`.
