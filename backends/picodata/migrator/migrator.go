@@ -24,6 +24,8 @@ const (
 	upMarker                   = "-- pico.UP"
 	downMarker                 = "-- pico.DOWN"
 	defaultMigrationsTableName = "picodata_db_version"
+	ddlRetryAttempts           = 5
+	ddlRetryInitialDelay       = 100 * time.Millisecond
 )
 
 type Option func(o *Options)
@@ -242,7 +244,11 @@ CREATE TABLE IF NOT EXISTS %s (
 ) USING memtx DISTRIBUTED BY (version_id)
 OPTION (TIMEOUT = 3.0);`, tableName)
 
-	if _, err := picoPool.Pool().Exec(ctx, query); err != nil {
+	if err := execMigrationStatement(ctx, query, func() error {
+		_, err := picoPool.Pool().Exec(ctx, query)
+
+		return err
+	}); err != nil {
 		return fmt.Errorf("create migrations table: %w", err)
 	}
 
@@ -579,7 +585,11 @@ func applyMigrations(
 		)
 
 		for _, stmt := range statements {
-			if _, errExec := picoPool.Pool().Exec(ctx, stmt); errExec != nil {
+			if errExec := execMigrationStatement(ctx, stmt, func() error {
+				_, err := picoPool.Pool().Exec(ctx, stmt)
+
+				return err
+			}); errExec != nil {
 				return fmt.Errorf("exec statement in %s: %w", migration.name, errExec)
 			}
 		}
@@ -646,7 +656,11 @@ func rollbackMigrations(
 		)
 
 		for _, stmt := range statements {
-			if _, errExec := picoPool.Pool().Exec(ctx, stmt); errExec != nil {
+			if errExec := execMigrationStatement(ctx, stmt, func() error {
+				_, err := picoPool.Pool().Exec(ctx, stmt)
+
+				return err
+			}); errExec != nil {
 				return fmt.Errorf("exec rollback statement in %s: %w", migration.name, errExec)
 			}
 		}
@@ -665,6 +679,41 @@ func rollbackMigrations(
 	}
 
 	return nil
+}
+
+func execMigrationStatement(ctx context.Context, statement string, exec func() error) error {
+	delay := ddlRetryInitialDelay
+	for attempt := 1; ; attempt++ {
+		err := exec()
+		if err == nil {
+			return nil
+		}
+
+		if attempt >= ddlRetryAttempts || !isRetryableIdempotentDDL(statement, err) {
+			return err
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		delay *= 2
+	}
+}
+
+func isRetryableIdempotentDDL(statement string, err error) bool {
+	if err == nil || !strings.Contains(err.Error(), "RaftLogCompacted") {
+		return false
+	}
+
+	normalized := strings.ToUpper(strings.TrimSpace(statement))
+
+	return strings.HasPrefix(normalized, "CREATE TABLE IF NOT EXISTS") ||
+		strings.HasPrefix(normalized, "DROP TABLE IF EXISTS")
 }
 
 func splitStatements(sql string) ([]string, error) {

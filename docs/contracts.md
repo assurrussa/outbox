@@ -133,7 +133,7 @@ jobs. Each materialized job has:
 - the original event and target snapshot in its payload;
 - its own attempts, lease/fence, retry, ack, and DLQ lifecycle.
 
-Idempotency keys live in a separate PostgreSQL registry, so deleting a completed
+Idempotency keys live in a separate backend registry, so deleting a completed
 job does not reopen its delivery key. `PruneJobIdempotencyKeys` removes only
 tombstones without an active job and works in bounded batches. The caller owns
 the retention cutoff and must keep tombstones at least as long as any event can
@@ -169,8 +169,9 @@ on exact queue-count support.
 Capability storage is deliberately separate from `JobsRepository` so adding
 it does not break existing custom repository implementations. The opt-in
 interfaces cover versioned create/claim, lease heartbeat, conditional delete,
-and version-preserving DLQ writes. PostgreSQL is the first backend implementing
-the new contracts.
+and version-preserving DLQ writes. PostgreSQL, MySQL, and SQLite implement the
+complete capability and fan-out contracts. Picodata implements only the safe
+single-statement/CAS capability primitives described below.
 
 ## Backend Pattern
 
@@ -197,10 +198,19 @@ explicit migration-directory control.
 MySQL:
 - Client contract exposes `DB() *sql.DB` and `Close() error`.
 - Compose maps local MySQL to `127.0.0.1:33306` by default.
+- Capability claims target MySQL 8.0 and use
+  `SELECT ... FOR UPDATE SKIP LOCKED`.
+- Embedded migrations add schema versions, fenced leases, and an immutable
+  idempotency registry.
+- `runtime.Open` is the standard capability/fan-out worker composition.
 
 SQLite:
 - Client contract exposes `DB() *sql.DB` and `Close() error`.
-- SQLite example uses one worker and a single pooled connection for stability.
+- The standard runtime enforces one pooled connection because SQLite is a
+  single-writer database.
+- Embedded migrations add schema versions, fenced leases, and an immutable
+  idempotency registry.
+- `runtime.Open` is the standard capability/fan-out worker composition.
 
 Postgres:
 - Client contract exposes `DB() storage.DBEngine` and `Close() error`.
@@ -227,6 +237,17 @@ Picodata:
 - Do not set both `PICODATA_PG_ADVERTISE` and `PICODATA_IPROTO_ADVERTISE`.
 - The current transaction manager is best-effort because the Picodata client API
   does not provide connection-pinned SQL transactions.
+- Versioned create, capability-filtered claim, heartbeat, conditional leased
+  delete, and versioned failed-job persistence are available as storage
+  primitives.
+- The backend deliberately does not implement `FanoutJobsRepository` or expose
+  the standard runtime facade. Best-effort callbacks are not an atomic fan-out
+  or DLQ boundary.
+- Picodata 25.2 only supports additive `ALTER TABLE ... ADD COLUMN`; migration
+  00003 therefore retains its columns on a one-step down. Full reset still
+  drops the owning tables.
+- Null capability columns written by a legacy process during an expand-first
+  rollout are interpreted as schema v1 and a nil lease.
 
 ## Release Boundary
 

@@ -36,7 +36,8 @@ race tests for core, and HTML coverage generation.
 
 ## Integration Services
 
-Create local env from the template when needed:
+The Makefile exports safe local integration defaults. Copy the template only
+when you need to override them:
 
 ```sh
 cp .env.example .env
@@ -55,7 +56,8 @@ make devdown
 ```
 
 `make devup` uses Docker Compose profiles for MySQL, Postgres, and Picodata.
-SQLite tests do not need Docker.
+It waits for all three services before returning. SQLite tests do not need
+Docker.
 
 ## Integration Tests
 
@@ -78,13 +80,12 @@ The integration config is defined in `shared/tests/config.go` and uses
 `TEST_OUTBOXLIB_*` env variables. Defaults are mirrored by `.env.example` and
 `compose.yml`.
 
-Picodata local compose requires:
+Use the Make target for Picodata rather than a raw parallel `go test ./...`:
+the target sets `-p 1` so separate package test binaries cannot race on
+distributed DDL.
 
-```sh
-TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD=passWord!123
-```
-
-The template `.env.example` already contains the local test value.
+The default Picodata test password and DSN are local-only values mirrored in
+`.env.example`; do not reuse them outside the integration stack.
 
 ## Examples
 
@@ -110,7 +111,7 @@ the backend-specific example README files for exact env and DSN behavior.
 Pin backend modules to a published core version:
 
 ```sh
-make release-ready-backends CORE_VERSION=v0.9.0
+make release-ready-backends CORE_VERSION=v0.10.0-alpha.0
 ```
 
 Verify backend modules as standalone modules:
@@ -122,6 +123,13 @@ make release-verify-backends
 `release-verify-backends` intentionally uses `GOWORK=off` inside backend
 modules. Use this before claiming backend modules are consumable outside the
 local workspace.
+
+For a non-mutating pre-tag gate that also proves every backend resolves the
+exact core tag:
+
+```sh
+make release-readiness-backends CORE_VERSION=v0.10.0-alpha.0
+```
 
 ## Sandbox Note
 
@@ -135,7 +143,8 @@ GOCACHE=$PWD/tmp/gocache go test ./...
 ```
 
 If `go list` or `go test` also needs a writable module cache, keep
-`GOMODCACHE` outside the repository tree, for example under `/private/tmp`.
+`GOMODCACHE` outside the repository tree, for example under
+`${TMPDIR:-/tmp}/outbox-gomodcache`.
 Do not set `GOMODCACHE=$PWD/tmp/gomodcache`: `go test ./...` will traverse that
 downloaded module tree and may start testing third-party packages.
 

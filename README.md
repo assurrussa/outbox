@@ -130,9 +130,10 @@ Rollout rule: do not enqueue schemas newer than v1 while legacy workers are
 still running. Deploy capability-aware workers that understand both versions,
 remove legacy workers, and only then enable the new producer schema.
 
-The PostgreSQL backend currently implements the capability repository
-contracts. Other backends remain available through the legacy API until they
-gain their own additive implementations.
+PostgreSQL, MySQL, and SQLite implement the complete capability and durable
+fan-out contracts. Picodata implements versioned/CAS capability storage only;
+it deliberately omits fan-out and standard runtime composition until its client
+can provide a real atomic transaction boundary.
 
 ## Durable fan-out (opt-in)
 
@@ -172,9 +173,10 @@ a deterministic ID suitable for webhook idempotency. Unsupported delivery
 capabilities stay pending with zero attempts.
 
 Fan-out retries are idempotent even after a delivery job was acknowledged and
-deleted: PostgreSQL retains a compact key/fingerprint tombstone separately
-from active jobs. Prune tombstones in bounded batches only after the host's
-event replay, audit, and webhook retry retention windows have elapsed.
+deleted: PostgreSQL, MySQL, and SQLite retain a compact key/fingerprint
+tombstone separately from active jobs. Prune tombstones in bounded batches
+only after the host's event replay, audit, and webhook retry retention windows
+have elapsed.
 
 ## Backend modules
 
@@ -225,10 +227,13 @@ Release prep for backend modules:
 
 ```sh
 # pin backend modules to a published core tag
-make release-ready-backends CORE_VERSION=v0.9.0
+make release-ready-backends CORE_VERSION=v0.10.0-alpha.0
 
 # verify each backend as standalone module (without go.work)
 make release-verify-backends
+
+# non-mutating exact-version pre-tag gate
+make release-readiness-backends CORE_VERSION=v0.10.0-alpha.0
 ```
 
 ## License

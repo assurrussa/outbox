@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/strings"
@@ -16,10 +17,28 @@ import (
 )
 
 func (r *Repo) CreateFailedJob(ctx context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error) {
+	return r.CreateFailedJobVersioned(
+		ctx, jobID, name, coreoutbox.DefaultSchemaVersion, payload, reason,
+	)
+}
+
+func (r *Repo) CreateFailedJobVersioned(
+	ctx context.Context,
+	jobID types.JobID,
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	reason string,
+) (types.JobID, error) {
+	capability := coreoutbox.JobCapability{Name: name, SchemaVersion: schemaVersion}
+	if err := capability.Validate(); err != nil {
+		return types.JobIDNil, fmt.Errorf("validate capability: %w", err)
+	}
+
 	query := strings.Concate(`
 INSERT INTO %s (
-    id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9);
+    id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10);
 `, r.tableName)
 
 	id := types.NewJobID()
@@ -29,7 +48,9 @@ INSERT INTO %s (
 	now := time.Now()
 
 	exec := r.executor(ctx)
-	if _, err := exec.Exec(ctx, query, id, jobID, queueName, name, payload, reason, now, connection, exception); err != nil {
+	if _, err := exec.Exec(
+		ctx, query, id, jobID, queueName, name, schemaVersion, payload, reason, now, connection, exception,
+	); err != nil {
 		return types.JobIDNil, err
 	}
 
@@ -37,16 +58,19 @@ INSERT INTO %s (
 }
 
 func (r *Repo) Create(ctx context.Context, model models.JobFailed) (types.JobID, error) {
+	if model.SchemaVersion <= 0 {
+		model.SchemaVersion = coreoutbox.DefaultSchemaVersion
+	}
 	query := strings.Concate(`
 INSERT INTO %s (
-    id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+    id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 `, r.tableName)
 
 	id := types.NewJobID()
 	exec := r.executor(ctx)
 	if _, err := exec.Exec(ctx, query,
-		id, model.JobID, model.Queue, model.Name, model.Payload, model.Reason,
+		id, model.JobID, model.Queue, model.Name, model.SchemaVersion, model.Payload, model.Reason,
 		model.FailedAt, model.CreatedAt, model.Connection, model.Exception,
 	); err != nil {
 		return types.JobIDNil, err
@@ -63,7 +87,8 @@ func (r *Repo) GetByID(ctx context.Context, jobID types.JobID) (models.JobFailed
 	}
 
 	query := strings.Concate(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %s WHERE id = $1;
+SELECT id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason, failed_at, created_at, connection, exception
+FROM %s WHERE id = $1;
 `, r.tableName)
 
 	row := r.executor(ctx).QueryRow(ctx, query, jobID)
@@ -86,7 +111,7 @@ func (r *Repo) FindByJobID(ctx context.Context, jobID types.JobID) (models.JobFa
 	}
 
 	query := strings.Concate(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %s
+SELECT id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason, failed_at, created_at, connection, exception FROM %s
 WHERE job_id = $1
 ORDER BY failed_at DESC
 LIMIT 1;
@@ -106,7 +131,7 @@ LIMIT 1;
 
 func (r *Repo) All(ctx context.Context) ([]models.JobFailed, error) {
 	query := strings.Concate(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %s
+SELECT id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason, failed_at, created_at, connection, exception FROM %s
 ORDER BY created_at DESC LIMIT 100;
 `, r.tableName)
 
@@ -124,6 +149,7 @@ ORDER BY created_at DESC LIMIT 100;
 			&job.JobID,
 			&job.Queue,
 			&job.Name,
+			&job.SchemaVersion,
 			&job.Payload,
 			&job.Reason,
 			&job.FailedAt,
@@ -149,7 +175,7 @@ func (r *Repo) ListPaged(ctx context.Context, limit int, before time.Time) ([]mo
 	}
 
 	query := strings.Concate(fmt.Sprintf(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %%s
+SELECT id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason, failed_at, created_at, connection, exception FROM %%s
 WHERE created_at < $1
 ORDER BY created_at DESC
 LIMIT %d;
@@ -225,6 +251,7 @@ func scanJobFailed(row pgx.Row) (models.JobFailed, error) {
 		&job.JobID,
 		&job.Queue,
 		&job.Name,
+		&job.SchemaVersion,
 		&job.Payload,
 		&job.Reason,
 		&job.FailedAt,

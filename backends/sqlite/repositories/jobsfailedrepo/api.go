@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/assurrussa/outbox/backends/sqlite/storage/transaction"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/strings"
@@ -21,17 +22,36 @@ type sqlExecutor interface {
 }
 
 func (r *Repo) CreateFailedJob(ctx context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error) {
+	return r.CreateFailedJobVersioned(
+		ctx, jobID, name, coreoutbox.DefaultSchemaVersion, payload, reason,
+	)
+}
+
+func (r *Repo) CreateFailedJobVersioned(
+	ctx context.Context,
+	jobID types.JobID,
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	reason string,
+) (types.JobID, error) {
+	capability := coreoutbox.JobCapability{Name: name, SchemaVersion: schemaVersion}
+	if err := capability.Validate(); err != nil {
+		return types.JobIDNil, fmt.Errorf("validate capability: %w", err)
+	}
 	query := strings.Concate(`
 INSERT INTO %s (
-	id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `, r.tableName)
 
 	id := types.NewJobID()
 	nowMS := time.Now().UTC().UnixMilli()
 
 	exec := r.executor(ctx)
-	if _, err := exec.ExecContext(ctx, query, id, jobID, "queue", name, payload, reason, nowMS, nowMS, "", ""); err != nil {
+	if _, err := exec.ExecContext(
+		ctx, query, id, jobID, "queue", name, schemaVersion, payload, reason, nowMS, nowMS, "", "",
+	); err != nil {
 		return types.JobIDNil, err
 	}
 
@@ -41,8 +61,8 @@ INSERT INTO %s (
 func (r *Repo) Create(ctx context.Context, model models.JobFailed) (types.JobID, error) {
 	query := strings.Concate(`
 INSERT INTO %s (
-	id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `, r.tableName)
 
 	id := types.NewJobID()
@@ -54,6 +74,7 @@ INSERT INTO %s (
 		model.JobID,
 		model.Queue,
 		model.Name,
+		normalizeSchemaVersion(model.SchemaVersion),
 		model.Payload,
 		model.Reason,
 		model.FailedAt.UTC().UnixMilli(),
@@ -75,7 +96,7 @@ func (r *Repo) GetByID(ctx context.Context, jobID types.JobID) (models.JobFailed
 	}
 
 	query := strings.Concate(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %s WHERE id = ?;
+SELECT id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception FROM %s WHERE id = ?;
 `, r.tableName)
 
 	row := r.executor(ctx).QueryRowContext(ctx, query, jobID)
@@ -98,7 +119,7 @@ func (r *Repo) FindByJobID(ctx context.Context, jobID types.JobID) (models.JobFa
 	}
 
 	query := strings.Concate(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %s
+SELECT id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception FROM %s
 WHERE job_id = ?
 ORDER BY failed_at DESC
 LIMIT 1;
@@ -118,7 +139,7 @@ LIMIT 1;
 
 func (r *Repo) All(ctx context.Context) ([]models.JobFailed, error) {
 	query := strings.Concate(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %s
+SELECT id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception FROM %s
 ORDER BY created_at DESC LIMIT 100;
 `, r.tableName)
 
@@ -150,7 +171,7 @@ func (r *Repo) ListPaged(ctx context.Context, limit int, before time.Time) ([]mo
 	}
 
 	query := strings.Concate(fmt.Sprintf(`
-SELECT id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception FROM %%s
+SELECT id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception FROM %%s
 WHERE created_at < ?
 ORDER BY created_at DESC
 LIMIT %d;
@@ -236,6 +257,7 @@ func scanJobFailed(row scanner) (models.JobFailed, error) {
 		&job.JobID,
 		&job.Queue,
 		&job.Name,
+		&job.SchemaVersion,
 		&job.Payload,
 		&job.Reason,
 		&failedMS,
@@ -250,4 +272,11 @@ func scanJobFailed(row scanner) (models.JobFailed, error) {
 	job.CreatedAt = time.UnixMilli(createdMS).UTC()
 
 	return job, nil
+}
+
+func normalizeSchemaVersion(version coreoutbox.SchemaVersion) coreoutbox.SchemaVersion {
+	if version <= 0 {
+		return coreoutbox.DefaultSchemaVersion
+	}
+	return version
 }

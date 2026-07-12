@@ -72,6 +72,22 @@ Keep `WithJobsStatRepo(...)` only when queue stats are needed.
 
 `Transactor` in Picodata backend is currently best-effort (no connection-pinned SQL transaction in current client API).
 
+The repository exposes versioned create, capability-filtered claim, fenced
+heartbeat/ack, and version-preserving failed-job storage primitives. Do not wire
+them into the standard capability/fan-out service composition yet: Picodata Go
+client v1.0.0 has no connection-pinned transaction, so failed-row plus leased
+delete and complete fan-out planning cannot be committed atomically. The
+backend intentionally does not implement `FanoutJobsRepository` or expose a
+standard runtime facade.
+
+Migration `00003_add_capability_leases.sql` is additive. Picodata 25.2 supports
+only `ADD COLUMN` in `ALTER TABLE`, so a one-step down records the migration as
+rolled back but retains the added columns. A full reset drops the owning tables.
+Rows inserted by a legacy process after the migration are read as schema v1
+with a nil lease until a capability-aware worker claims them.
+Table drops and additive alters wait for cluster-wide application so a
+subsequent migration cannot race DDL that is still being applied.
+
 ## Migrations
 
 Recommended:

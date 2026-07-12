@@ -91,8 +91,8 @@ Important behavior:
   schemas remain pending, active handlers heartbeat their fenced lease, and
   ack/DLQ deletion require the current token.
 - Fan-out event IDs and delivery IDs are idempotency boundaries. Do not prune
-  PostgreSQL idempotency tombstones until the host replay/audit retention has
-  elapsed.
+  PostgreSQL, MySQL, or SQLite idempotency tombstones until the host
+  replay/audit retention has elapsed.
 - Successful jobs are deleted from the jobs repository after `Handle(...)`
   succeeds.
 - `JobIDFromContext(ctx)` exposes the current job ID while a handler executes.
@@ -104,9 +104,13 @@ Important behavior:
 Each backend owns storage initialization, repositories, transaction manager, and
 embedded migrations. Prefer backend README examples when wiring a real consumer.
 
-The Postgres backend is currently the first backend implementing the additive
-capability and fan-out repository contracts. MySQL, SQLite, and Picodata
-continue to use the legacy API until their own implementations land.
+Postgres, MySQL, and SQLite implement the complete additive capability and
+fan-out repository contracts and expose standard runtime facades. The MySQL
+capability runtime targets MySQL 8.0, matching the integration image. Picodata
+implements only the safe versioned create/claim, fenced heartbeat/ack, and
+version-preserving failed-row primitives; it deliberately has no fan-out
+repository or standard runtime because its current client cannot provide the
+required atomic transaction boundary.
 
 Migration convention:
 - Use `RunEmbedded(..., WithCommand("up"))` for normal consumers.
@@ -135,11 +139,13 @@ make check
 Integration services:
 
 ```sh
-cp .env.example .env
 make devup
 make test-integration-all
 make devdown
 ```
+
+The Makefile provides safe local defaults. Copy `.env.example` only when local
+overrides are needed.
 
 Focused integration checks:
 
@@ -153,8 +159,7 @@ make test-integration-picodata
 Release-oriented backend checks:
 
 ```sh
-make release-ready-backends CORE_VERSION=v0.9.0
-make release-verify-backends
+make release-readiness-backends CORE_VERSION=v0.10.0-alpha.0
 ```
 
 Formatting and generated mocks:

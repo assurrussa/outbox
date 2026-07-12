@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/assurrussa/outbox/backends/mysql"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/shared/strings"
 )
 
@@ -14,6 +15,12 @@ type Repo struct {
 	client    mysql.Client
 	tableName string
 }
+
+var (
+	_ coreoutbox.CapabilityJobsRepository    = (*Repo)(nil)
+	_ coreoutbox.FanoutJobsRepository        = (*Repo)(nil)
+	_ coreoutbox.FanoutMaintenanceRepository = (*Repo)(nil)
+)
 
 func New(client mysql.Client, tableNames ...string) (*Repo, error) {
 	if client == nil {

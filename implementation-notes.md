@@ -1,5 +1,65 @@
 # Implementation Notes
 
+## 2026-07-12 Full Branch Code Review
+
+- Reviewed the entire branch diff from `origin/master`, including the already
+  published core and PostgreSQL prerelease commits. Those commits remain
+  ancestors of the branch; rewriting or squashing them would break the release
+  ancestry contract.
+- Found no unresolved correctness or concurrency defect in capability claims,
+  lease fencing/heartbeat, conditional ack, atomic fan-out planning, drain, or
+  the PostgreSQL/MySQL/SQLite transaction implementations. Picodata remains
+  explicitly fail-closed at the unsupported atomic fan-out boundary.
+- Corrected stale release/docs claims that still described PostgreSQL as the
+  only capable backend and made MySQL 8.0 an explicit runtime contract.
+- Added missing Picodata coverage to pull-request CI. CI now uses the canonical
+  backend integration targets, retaining Picodata's required `-p 1` package
+  serialization, and waits for the selected database before testing.
+- Reworked `check-all` to run `devdown` after success, partial startup failure,
+  or test failure. Cleanup failure becomes the result only when all prior steps
+  succeeded.
+- A fresh full integration run exposed a Picodata `RaftLogCompacted` teardown
+  failure even with package serialization and global DDL wait. Added bounded
+  exponential retry only for syntactically idempotent create/drop statements;
+  non-idempotent or ambiguous DDL remains fail-closed. The failed `check-all`
+  run also proved the new cleanup path removed all service containers.
+- After the fix, the Picodata integration target passed three consecutive
+  fresh race-enabled runs, followed by a green full `check-all`. The final
+  standalone backend release gate also resolved core `v0.10.0-alpha.0` with
+  `GOWORK=off` for every module and passed tidy/unit checks.
+- The review fixup will be folded only into the final unpushed backend-parity
+  commit before branch publication.
+
+## 2026-07-12 Backend Capability And Fan-Out Parity
+
+Request: create a separate task and bring the v0.10 capability/fencing/fan-out
+solution to MySQL, SQLite, and Picodata.
+
+Decisions made:
+
+- Started from the published v0.10 core/PostgreSQL line rather than `master`,
+  because `master` still represents the v0.9.8 legacy backend surface.
+- Created a dedicated task contract in
+  `docs/tasks/outbox-backend-parity.md` and a separate implementation branch.
+- Require the same observable lease, DLQ, idempotency, fan-out, and drain
+  semantics for MySQL and SQLite; dialect-specific SQL is not allowed to
+  weaken the public contract.
+- Keep Picodata fail-closed for standard fan-out runtime. Context7 Picodata
+  connector docs and the installed `picodata-go v1.0.0` source expose
+  pool-level queries but no connection-pinned transaction API. The existing
+  best-effort transactor cannot honestly prove atomic DLQ or complete fan-out
+  planning.
+- Picodata may still gain versioned/capability/fenced storage primitives in
+  this task. Full runtime parity remains blocked on an atomic backend primitive
+  or client transaction support and will be reported explicitly.
+
+Verification baseline:
+
+- Source worktree started clean at the exact published PostgreSQL backend tag.
+- Local repo code/docs remain authoritative; the shared wiki only describes
+  the older high-level multi-backend shape and will be refreshed after verified
+  implementation.
+
 ## 2026-07-10 CMS Outbox Foundation
 
 Request: implement the accepted CMS platform plan, starting with the clean
@@ -73,7 +133,7 @@ Decisions made:
   write the default user cache outside the writable workspace.
 - Confirmed `GOMODCACHE` should not be placed under repository `tmp/`; `go test
   ./...` traverses that downloaded module tree. The temporary cache created
-  during verification was moved to `/private/tmp/outbox-gomodcache-doc-init`.
+  during verification was moved under `${TMPDIR:-/tmp}` outside the repository.
 
 Tradeoffs:
 - `AGENTS.md` now includes command and contract details that overlap lightly
@@ -178,3 +238,39 @@ Decisions made:
   `GOWORK=off`, reported no `go mod tidy -diff`, and passed all backend unit
   packages. The full PostgreSQL integration suite also passed under the race
   detector against an isolated test database.
+
+## 2026-07-12: MySQL, SQLite, And Picodata Capability Follow-Up
+
+- Implemented complete capability, fenced lease, schema-preserving DLQ,
+  immutable idempotency, and durable fan-out storage contracts for MySQL and
+  SQLite. Both backends now provide the same standard runtime composition as
+  PostgreSQL.
+- Kept SQLite on one pooled connection in its runtime facade. This makes the
+  single-writer constraint explicit and prevents application-level worker
+  concurrency from being mistaken for parallel SQLite writers.
+- Implemented only versioned create/failed rows, capability-filtered CAS claim,
+  heartbeat, and conditional leased delete for Picodata. The installed
+  `picodata-go v1.0.0` pool exposes no connection-pinned transaction API, so
+  Picodata deliberately does not implement `FanoutJobsRepository` and has no
+  standard runtime facade.
+- Picodata 25.2 accepts additive `ALTER TABLE ... ADD COLUMN` but does not
+  support dropping columns. Migration 00003 therefore uses nullable additive
+  columns plus explicit backfill. Its one-step down is a harmless data no-op;
+  full reset removes the columns when migrations 00002/00001 drop the tables.
+- Because Picodata cannot attach defaults to added columns, repository reads
+  treat null `schema_version` as v1 and a null lease as the nil token. This
+  preserves expand-first compatibility when an old process inserts a row after
+  migration 00003 while new and old workers overlap.
+- Serialized Picodata integration packages with `go test -p 1`. A process-local
+  migration mutex cannot protect separate package test binaries, and concurrent
+  distributed DDL produced `RaftLogCompacted` failures. Picodata table drops
+  and additive alters also use `WAIT APPLIED GLOBALLY`, which prevents the next
+  test/migration from racing a DDL operation that returned before cluster-wide
+  application.
+- Made `make devup` runnable without a local `.env`: Compose and Make now carry
+  local-only integration defaults and wait for all three database services.
+  Added `-count=1` to integration targets so database evidence cannot be
+  satisfied from the Go test cache.
+- Added a non-mutating `release-readiness-backends` gate that verifies the exact
+  published core version, tidy state, and `GOWORK=off` unit tests for every
+  backend module.

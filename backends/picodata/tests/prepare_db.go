@@ -23,8 +23,10 @@ import (
 )
 
 var (
-	runRateLimitCh = make(chan struct{}, 10) // Максимальное кол-во паралельно запускаемых тестов
-	migrationLock  sync.Mutex                // Для миграций
+	// Picodata serializes distributed DDL; concurrent per-test migrations can fail
+	// with RaftLogCompacted while another table change is still in progress.
+	runRateLimitCh = make(chan struct{}, 1)
+	migrationLock  sync.Mutex // Для миграций
 )
 
 type OptionDatabase func(*OptionsDatabase)

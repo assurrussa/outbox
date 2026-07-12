@@ -77,15 +77,16 @@ Current driver ownership:
 - Picodata backend: `github.com/picodata/picodata-go`
 
 Capability-aware storage and durable fan-out support are additive and
-backend-owned. PostgreSQL is the first implementation; the other backend
-modules remain legacy-compatible without claiming either opt-in surface.
+backend-owned. PostgreSQL, MySQL, and SQLite implement both opt-in surfaces.
+Picodata implements only safe versioned/CAS capability primitives and does not
+claim atomic fan-out support.
 
 ## Shared Wiki Context
 
 Shared platform context is in:
 
 ```text
-/Users/amir/agents/agent-context/streams/wiki/platforms/outbox.md
+${AGENT_CONTEXT_ROOT}/streams/wiki/platforms/outbox.md
 ```
 
 Use it for cross-project role and durable platform context. Local code, README
