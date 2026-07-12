@@ -42,6 +42,9 @@ func NewPool(ctx context.Context, opts PoolOptions) (*Client, error) {
 	connConfig.MinConns = opts.minConnectionsCount
 	connConfig.MaxConns = opts.maxConnectionsCount
 	connConfig.ConnConfig.TLSConfig = tlsConfig
+	for key, value := range opts.runtimeParams {
+		connConfig.ConnConfig.RuntimeParams[key] = value
+	}
 	connConfig.AfterConnect = afterConnect
 
 	p, err := pgxpool.NewWithConfig(ctx, connConfig)

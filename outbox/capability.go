@@ -1,0 +1,88 @@
+package outbox
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+
+	"github.com/assurrussa/outbox/shared/types"
+)
+
+type (
+	SchemaVersion = types.SchemaVersion
+	LeaseToken    = types.LeaseToken
+)
+
+const DefaultSchemaVersion SchemaVersion = types.DefaultSchemaVersion
+
+var (
+	ErrCapabilityRepositoryNotConfigured = errors.New("outbox capability repository is not configured")
+	ErrInvalidSchemaVersion              = errors.New("outbox schema version must be positive")
+	ErrLeaseLost                         = errors.New("outbox job lease lost")
+	ErrUnsupportedClaim                  = errors.New("outbox repository claimed an unsupported capability")
+)
+
+// JobCapability identifies a handler and persisted payload schema understood by a worker.
+type JobCapability struct {
+	Name          string
+	SchemaVersion SchemaVersion
+}
+
+func (c JobCapability) Validate() error {
+	if c.SchemaVersion <= 0 {
+		return fmt.Errorf("%w: %d", ErrInvalidSchemaVersion, c.SchemaVersion)
+	}
+
+	return nil
+}
+
+// VersionedJob opts a handler into an explicit payload schema version.
+// Jobs that do not implement this interface use DefaultSchemaVersion.
+type VersionedJob interface {
+	Job
+	SchemaVersion() SchemaVersion
+}
+
+func capabilityForJob(job Job) (JobCapability, error) {
+	capability := JobCapability{
+		Name:          job.Name(),
+		SchemaVersion: DefaultSchemaVersion,
+	}
+
+	if versioned, ok := job.(VersionedJob); ok {
+		capability.SchemaVersion = versioned.SchemaVersion()
+	}
+
+	if err := capability.Validate(); err != nil {
+		return JobCapability{}, err
+	}
+
+	return capability, nil
+}
+
+func normalizeSchemaVersion(version SchemaVersion) SchemaVersion {
+	if version <= 0 {
+		return DefaultSchemaVersion
+	}
+
+	return version
+}
+
+func (s *Service) registeredCapabilities() []JobCapability {
+	s.mu.RLock()
+	capabilities := make([]JobCapability, 0, len(s.jobs))
+	for capability := range s.jobs {
+		capabilities = append(capabilities, capability)
+	}
+	s.mu.RUnlock()
+
+	sort.Slice(capabilities, func(i, j int) bool {
+		if capabilities[i].Name == capabilities[j].Name {
+			return capabilities[i].SchemaVersion < capabilities[j].SchemaVersion
+		}
+
+		return capabilities[i].Name < capabilities[j].Name
+	})
+
+	return capabilities
+}

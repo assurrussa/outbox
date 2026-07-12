@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	stdstrings "strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/strings"
@@ -17,16 +19,33 @@ import (
 )
 
 func (r *Repo) CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
+	return r.CreateJobVersioned(ctx, name, coreoutbox.DefaultSchemaVersion, payload, availableAt)
+}
+
+func (r *Repo) CreateJobVersioned(
+	ctx context.Context,
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (types.JobID, error) {
+	capability := coreoutbox.JobCapability{Name: name, SchemaVersion: schemaVersion}
+	if err := capability.Validate(); err != nil {
+		return types.JobIDNil, fmt.Errorf("validate capability: %w", err)
+	}
+
 	query := strings.Concate(`INSERT INTO %s (
-	id, queue, name, payload, attempts, reserved_at, available_at, created_at
-) VALUES ($1, $2, $3, $4, 0,  NULL, $5, $6);`, r.tableName)
+	id, queue, name, schema_version, payload, attempts, reserved_at, lease_token, available_at, created_at
+) VALUES ($1, $2, $3, $4, $5, 0, NULL, $6, $7, $8);`, r.tableName)
 
 	id := types.NewJobID()
 	now := time.Now()
 	queueName := "default"
 
 	exec := r.executor(ctx)
-	if _, err := exec.Exec(ctx, query, id, queueName, name, payload, availableAt, now); err != nil {
+	if _, err := exec.Exec(
+		ctx, query, id, queueName, name, schemaVersion, payload, types.LeaseTokenNil, availableAt, now,
+	); err != nil {
 		return types.JobIDNil, err
 	}
 
@@ -34,32 +53,102 @@ func (r *Repo) CreateJob(ctx context.Context, name, payload string, availableAt 
 }
 
 func (r *Repo) FindAndReserveJob(ctx context.Context, now, until time.Time) (models.Job, error) {
-	queryRows := strings.Concate(`
-SELECT id, queue, name, payload, attempts, reserved_at, available_at, created_at FROM %s
-	WHERE available_at <= $1 AND (reserved_at IS NULL OR reserved_at <= $1) limit 10;
-`, r.tableName)
+	return r.findAndReserve(ctx, now, until, types.LeaseTokenNil, nil)
+}
+
+func (r *Repo) FindAndReserveJobForCapabilities(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capabilities []coreoutbox.JobCapability,
+) (models.Job, error) {
+	if err := leaseToken.Validate(); err != nil {
+		return models.Job{}, fmt.Errorf("invalid lease token: %w", err)
+	}
+	if len(capabilities) == 0 {
+		return models.Job{}, sharederrors.ErrNoJobs
+	}
+	for _, capability := range capabilities {
+		if err := capability.Validate(); err != nil {
+			return models.Job{}, fmt.Errorf("invalid capability: %w", err)
+		}
+	}
+
+	return r.findAndReserve(ctx, now, until, leaseToken, capabilities)
+}
+
+func (r *Repo) findAndReserve(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken types.LeaseToken,
+	capabilities []coreoutbox.JobCapability,
+) (models.Job, error) {
+	args := []any{now}
+	capabilityPredicate := ""
+	if capabilities != nil {
+		clauses := make([]string, 0, len(capabilities))
+		for _, capability := range capabilities {
+			namePosition := len(args) + 1
+			versionPosition := namePosition + 1
+			clauses = append(
+				clauses,
+				fmt.Sprintf(
+					"(name = $%d AND COALESCE(schema_version, 1) = $%d)",
+					namePosition,
+					versionPosition,
+				),
+			)
+			args = append(args, capability.Name, capability.SchemaVersion)
+		}
+		capabilityPredicate = " AND (" + stdstrings.Join(clauses, " OR ") + ")"
+	}
+	queryRows := fmt.Sprintf(`
+	SELECT id, queue, name, COALESCE(schema_version, 1), payload, attempts, reserved_at,
+		COALESCE(lease_token, '00000000-0000-0000-0000-000000000000'), available_at, created_at
+	FROM %s
+	WHERE available_at <= $1 AND (reserved_at IS NULL OR reserved_at <= $1)%s
+	ORDER BY available_at, created_at, id
+	LIMIT 10;
+`, r.tableName, capabilityPredicate)
 	queryUpdate := strings.Concate(`
 UPDATE %s
-SET attempts = attempts + 1, reserved_at = $3
-WHERE id = $1 and attempts = $2;
+SET attempts = attempts + 1, reserved_at = $3, lease_token = $4
+WHERE id = $1 AND attempts = $2 AND (reserved_at IS NULL OR reserved_at <= $5);
 `, r.tableName)
 
-	rows, err := r.executor(ctx).Query(ctx, queryRows, now)
+	rows, err := r.executor(ctx).Query(ctx, queryRows, args...)
 	if err != nil {
 		return models.Job{}, err
 	}
-	defer rows.Close()
 
+	candidates := make([]models.Job, 0, 10)
 	for rows.Next() {
 		job, err := scanJob(rows)
 		if err != nil {
+			rows.Close()
+
 			return models.Job{}, err
 		}
+		candidates = append(candidates, job)
+	}
 
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return models.Job{}, rowsErr
+	}
+
+	// Picodata's pool-level API does not expose a connection-pinned
+	// transaction. Release the query connection before attempting any CAS
+	// update; otherwise workers can occupy every pool connection with open rows
+	// and deadlock while each waits for another connection to run Exec.
+	for _, job := range candidates {
 		job.ReservedAt = sql.NullTime{Time: until, Valid: true}
 		job.Attempts++
 
-		cmd, err := r.executor(ctx).Exec(ctx, queryUpdate, job.ID, job.Attempts-1, until)
+		cmd, err := r.executor(ctx).Exec(ctx, queryUpdate, job.ID, job.Attempts-1, until, leaseToken, now)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return models.Job{}, sharederrors.ErrNoJobs
@@ -71,14 +160,57 @@ WHERE id = $1 and attempts = $2;
 			continue
 		}
 
+		job.LeaseToken = leaseToken
+
 		return job, nil
 	}
 
-	if err := rows.Err(); err != nil {
-		return models.Job{}, err
+	return models.Job{}, sharederrors.ErrNoJobs
+}
+
+func (r *Repo) ExtendJobLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	until time.Time,
+) (int64, error) {
+	if jobID.IsZero() {
+		return 0, errors.New("invalid job id")
+	}
+	if err := leaseToken.Validate(); err != nil {
+		return 0, fmt.Errorf("invalid lease token: %w", err)
+	}
+	query := strings.Concate(`UPDATE %s SET reserved_at = $1
+		WHERE id = $2 AND lease_token = $3 AND reserved_at > $4;`, r.tableName)
+	result, err := r.executor(ctx).Exec(ctx, query, until, jobID, leaseToken, now)
+	if err != nil {
+		return 0, err
 	}
 
-	return models.Job{}, sharederrors.ErrNoJobs
+	return result.RowsAffected(), nil
+}
+
+func (r *Repo) DeleteJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	if jobID.IsZero() {
+		return 0, errors.New("invalid job id")
+	}
+	if err := leaseToken.Validate(); err != nil {
+		return 0, fmt.Errorf("invalid lease token: %w", err)
+	}
+	query := strings.Concate(`DELETE FROM %s
+		WHERE id = $1 AND lease_token = $2 AND reserved_at > $3;`, r.tableName)
+	result, err := r.executor(ctx).Exec(ctx, query, jobID, leaseToken, now)
+	if err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected(), nil
 }
 
 func (r *Repo) DeleteJob(ctx context.Context, jobID types.JobID) (int64, error) {
@@ -100,7 +232,9 @@ func (r *Repo) GetByID(ctx context.Context, jobID types.JobID) (models.Job, erro
 	}
 
 	query := strings.Concate(`
-SELECT id, queue, name, payload, attempts, reserved_at, available_at, created_at FROM %s WHERE id = $1;
+SELECT id, queue, name, COALESCE(schema_version, 1), payload, attempts, reserved_at,
+    COALESCE(lease_token, '00000000-0000-0000-0000-000000000000'), available_at, created_at
+FROM %s WHERE id = $1;
 `, r.tableName)
 
 	row := r.executor(ctx).QueryRow(ctx, query, jobID)
@@ -165,7 +299,8 @@ SELECT COUNT(*) FROM %s WHERE reserved_at > $1;
 
 func (r *Repo) All(ctx context.Context) ([]models.Job, error) {
 	query := strings.Concate(`
-SELECT id, queue, name, payload, attempts, reserved_at, available_at, created_at
+SELECT id, queue, name, COALESCE(schema_version, 1), payload, attempts, reserved_at,
+    COALESCE(lease_token, '00000000-0000-0000-0000-000000000000'), available_at, created_at
 FROM %s
 ORDER BY created_at DESC
 LIMIT 100;
@@ -199,7 +334,8 @@ func (r *Repo) ListPaged(ctx context.Context, limit int, before time.Time) ([]mo
 	}
 
 	query := strings.Concate(fmt.Sprintf(`
-SELECT id, queue, name, payload, attempts, reserved_at, available_at, created_at
+SELECT id, queue, name, COALESCE(schema_version, 1), payload, attempts, reserved_at,
+    COALESCE(lease_token, '00000000-0000-0000-0000-000000000000'), available_at, created_at
 FROM %%s
 WHERE created_at < $1
 ORDER BY created_at DESC
@@ -241,9 +377,11 @@ func scanJob(row pgx.Row) (models.Job, error) {
 		&job.ID,
 		&job.Queue,
 		&job.Name,
+		&job.SchemaVersion,
 		&job.Payload,
 		&job.Attempts,
 		&job.ReservedAt,
+		&job.LeaseToken,
 		&job.AvailableAt,
 		&job.CreatedAt,
 	); err != nil {

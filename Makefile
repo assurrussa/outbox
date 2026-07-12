@@ -1,12 +1,58 @@
 .DEFAULT_GOAL := check
+.PHONY: release-readiness-core release-readiness-pgsql release-readiness-backends release-version-check devup devwait devwait-mysql devwait-pgsql devwait-picodata devdown
 BACKEND_DIRS := backends/mysql backends/sqlite backends/pgsql backends/picodata
 CORE_PKGS := ./outbox/... ./shared/... ./tools/...
 CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
 BACKEND_GO_FILES := $(shell find backends -type f -name '*.go')
-CORE_VERSION ?= v0.9.0
+CORE_VERSION ?= v0.10.0-alpha.0
+TEST_OUTBOXLIB_MYSQL_ADDRESS_LOCAL ?= localhost
+TEST_OUTBOXLIB_MYSQL_PORT_LOCAL ?= 33306
+TEST_OUTBOXLIB_MYSQL_PASSWORD ?= tests-service
+TEST_OUTBOXLIB_PSQL_ADDRESS_LOCAL ?= localhost
+TEST_OUTBOXLIB_PSQL_PORT_LOCAL ?= 54335
+TEST_OUTBOXLIB_PSQL_USERNAME ?= tests-service
+TEST_OUTBOXLIB_PSQL_DATABASENAME ?= tests-db-pgsql
+TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD ?= passWord!123
+TEST_OUTBOXLIB_PICODATA_LISTEN_HTTP ?= 8049
+TEST_OUTBOXLIB_PICODATA_DSN ?= postgres://admin:passWord!123@localhost:5049?sslmode=disable
+export TEST_OUTBOXLIB_MYSQL_ADDRESS_LOCAL TEST_OUTBOXLIB_MYSQL_PORT_LOCAL TEST_OUTBOXLIB_MYSQL_PASSWORD
+export TEST_OUTBOXLIB_PSQL_ADDRESS_LOCAL TEST_OUTBOXLIB_PSQL_PORT_LOCAL
+export TEST_OUTBOXLIB_PSQL_USERNAME TEST_OUTBOXLIB_PSQL_DATABASENAME
+export TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD TEST_OUTBOXLIB_PICODATA_LISTEN_HTTP TEST_OUTBOXLIB_PICODATA_DSN
+
+release-version-check:
+	@test -n "$(CORE_VERSION)" || (echo "CORE_VERSION is required" && exit 2)
+	@printf '%s\n' "$(CORE_VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
+		(echo "CORE_VERSION must be an exact semver tag" && exit 2)
+
+release-readiness-core: release-version-check check
+	@git diff --exit-code -- . ':!.cache'
+
+release-readiness-pgsql: release-version-check
+	@actual=$$(cd backends/pgsql && GOWORK=off go list -m -f '{{.Version}}' github.com/assurrussa/outbox); \
+		test "$$actual" = "$(CORE_VERSION)" || \
+		(echo "pgsql backend resolves core $$actual, expected $(CORE_VERSION)" && exit 2)
+	@cd backends/pgsql && GOWORK=off go mod tidy -diff
+	@cd backends/pgsql && GOWORK=off go test ./...
+
+release-readiness-backends: release-version-check
+	@for d in $(BACKEND_DIRS); do \
+		echo "==> verify $$d uses core $(CORE_VERSION)"; \
+		actual=$$(cd $$d && GOWORK=off go list -m -f '{{.Version}}' github.com/assurrussa/outbox); \
+		if test "$$actual" != "$(CORE_VERSION)"; then \
+			echo "$$d resolves core $$actual, expected $(CORE_VERSION)"; \
+			exit 2; \
+		fi; \
+		(cd $$d && GOWORK=off go mod tidy -diff && GOWORK=off go test ./...) || exit 1; \
+	done
 
 check: generate fmt vet lint test-core test-backends test-race-core cover-html
-check-all: devup check test-integration-all devdown
+check-all:
+	@status=0; \
+	$(MAKE) devup || status=$$?; \
+	if test $$status -eq 0; then $(MAKE) check test-integration-all || status=$$?; fi; \
+	$(MAKE) devdown || { cleanup_status=$$?; test $$status -ne 0 || status=$$cleanup_status; }; \
+	exit $$status
 
 generate:
 	go generate $(CORE_PKGS)
@@ -51,16 +97,16 @@ test-integration: test-integration-all
 test-integration-all: test-integration-mysql test-integration-sqlite test-integration-pgsql test-integration-picodata
 
 test-integration-mysql:
-	cd backends/mysql && go test -tags integration -race ./...
+	cd backends/mysql && go test -count=1 -tags integration -race ./...
 
 test-integration-sqlite:
-	cd backends/sqlite && go test -tags integration -race ./...
+	cd backends/sqlite && go test -count=1 -tags integration -race ./...
 
 test-integration-pgsql:
-	cd backends/pgsql && go test -tags integration -race ./...
+	cd backends/pgsql && go test -count=1 -tags integration -race ./...
 
 test-integration-picodata:
-	cd backends/picodata && go test -tags integration -race ./...
+	cd backends/picodata && go test -count=1 -p 1 -tags integration -race ./...
 
 release-ready-backends:
 	@for d in $(BACKEND_DIRS); do \
@@ -73,8 +119,8 @@ release-verify-backends:
 	@for d in $(BACKEND_DIRS); do \
 		echo "==> verify $$d (GOWORK=off)"; \
 		(cd $$d && \
-			GOWORK=off go mod tidy && \
-			GOWORK=off go test ./...); \
+			GOWORK=off go mod tidy -diff && \
+			GOWORK=off go test ./...) || exit 1; \
 	done
 
 refresh-backends:
@@ -110,6 +156,37 @@ bench-all:
 
 devup:
 	docker compose --profile mysql --profile pgsql --profile picodata up -d
+	@$(MAKE) devwait
+
+devwait: devwait-mysql devwait-pgsql devwait-picodata
+
+devwait-mysql:
+	@echo "==> wait for MySQL"
+	@for i in $$(seq 1 60); do \
+		docker compose exec -T integration-mysql-tests \
+			mysqladmin ping -h 127.0.0.1 -uroot -p"$(TEST_OUTBOXLIB_MYSQL_PASSWORD)" --silent \
+			>/dev/null 2>&1 && break; \
+		test $$i -lt 60 || (echo "MySQL did not become ready" && exit 1); \
+		sleep 1; \
+	done
+
+devwait-pgsql:
+	@echo "==> wait for PostgreSQL"
+	@for i in $$(seq 1 60); do \
+		docker compose exec -T integration-postgres-tests \
+			pg_isready -U "$(TEST_OUTBOXLIB_PSQL_USERNAME)" -d "$(TEST_OUTBOXLIB_PSQL_DATABASENAME)" \
+			>/dev/null 2>&1 && break; \
+		test $$i -lt 60 || (echo "PostgreSQL did not become ready" && exit 1); \
+		sleep 1; \
+	done
+
+devwait-picodata:
+	@echo "==> wait for Picodata"
+	@for i in $$(seq 1 60); do \
+		curl -fsS http://127.0.0.1:$(TEST_OUTBOXLIB_PICODATA_LISTEN_HTTP)/ >/dev/null 2>&1 && break; \
+		test $$i -lt 60 || (echo "Picodata did not become ready" && exit 1); \
+		sleep 1; \
+	done
 
 devdown:
 	docker compose --profile mysql --profile pgsql --profile picodata down --remove-orphans

@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,8 +24,10 @@ import (
 )
 
 var (
-	runRateLimitCh = make(chan struct{}, 10) // Максимальное кол-во паралельно запускаемых тестов
-	migrationLock  sync.Mutex                // Для миграций
+	// Picodata serializes distributed DDL; concurrent per-test migrations can fail
+	// with RaftLogCompacted while another table change is still in progress.
+	runRateLimitCh = make(chan struct{}, 1)
+	migrationLock  sync.Mutex // Для миграций
 )
 
 type OptionDatabase func(*OptionsDatabase)
@@ -124,6 +127,13 @@ func PrepareDB(
 	options.migrationTableName = migrationTableName(dbName)
 
 	dsn := os.Getenv("TEST_OUTBOXLIB_PICODATA_DSN")
+	dsnURL, err := url.Parse(dsn)
+	require.NoError(t, err)
+	dsnQuery := dsnURL.Query()
+	dsnQuery.Set("pool_max_conns", "2")
+	dsnURL.RawQuery = dsnQuery.Encode()
+	dsn = dsnURL.String()
+
 	poolMain, err := picodatastorage.Create(
 		ctx,
 		dsn,

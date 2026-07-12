@@ -13,14 +13,17 @@ var ErrOption = errors.New("outbox invalid option")
 type OptOptionsSetter func(o *Options)
 
 type Options struct {
-	workers        int
-	idleTime       time.Duration
-	reserveFor     time.Duration
-	jobsRepo       JobsRepository
-	jobsStatRepo   JobsStatRepository
-	jobsFailedRepo JobsFailedRepository
-	transactor     Transactor
-	logger         logger.Logger
+	workers                  int
+	idleTime                 time.Duration
+	reserveFor               time.Duration
+	jobsRepo                 JobsRepository
+	capabilityJobsRepo       CapabilityJobsRepository
+	fanoutJobsRepo           FanoutJobsRepository
+	jobsStatRepo             JobsStatRepository
+	jobsFailedRepo           JobsFailedRepository
+	capabilityJobsFailedRepo CapabilityJobsFailedRepository
+	transactor               Transactor
+	logger                   logger.Logger
 }
 
 func NewOptions(options ...OptOptionsSetter) (Options, error) {
@@ -54,6 +57,15 @@ func (o *Options) Validate() error {
 	}
 	if o.jobsFailedRepo == nil {
 		return errors.New("nil jobsFailedRepo")
+	}
+	if o.capabilityJobsRepo != nil && o.capabilityJobsFailedRepo == nil {
+		return errors.New("nil capabilityJobsFailedRepo")
+	}
+	if o.capabilityJobsRepo == nil && o.capabilityJobsFailedRepo != nil {
+		return errors.New("nil capabilityJobsRepo")
+	}
+	if o.fanoutJobsRepo != nil && o.capabilityJobsRepo == nil {
+		return errors.New("fanoutJobsRepo requires capabilityJobsRepo")
 	}
 	if o.transactor == nil {
 		return errors.New("nil transactor")
@@ -106,6 +118,29 @@ func WithTransactor(transactor Transactor) OptOptionsSetter {
 func WithJobsRepo(jobsRepo JobsRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.jobsRepo = jobsRepo
+	}
+}
+
+// WithCapabilityJobsRepo enables version-aware claims and fenced leases.
+// The legacy JobsRepository remains required for backward-compatible operations.
+func WithCapabilityJobsRepo(jobsRepo CapabilityJobsRepository) OptOptionsSetter {
+	return func(o *Options) {
+		o.capabilityJobsRepo = jobsRepo
+	}
+}
+
+// WithFanoutJobsRepo enables immutable fan-out source and delivery jobs.
+// Capability mode must be enabled so unsupported delivery schemas remain pending.
+func WithFanoutJobsRepo(jobsRepo FanoutJobsRepository) OptOptionsSetter {
+	return func(o *Options) {
+		o.fanoutJobsRepo = jobsRepo
+	}
+}
+
+// WithCapabilityJobsFailedRepo preserves schema versions for capability-mode DLQ records.
+func WithCapabilityJobsFailedRepo(jobsFailedRepo CapabilityJobsFailedRepository) OptOptionsSetter {
+	return func(o *Options) {
+		o.capabilityJobsFailedRepo = jobsFailedRepo
 	}
 }
 

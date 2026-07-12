@@ -45,9 +45,12 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(jobs),
+		outbox.WithCapabilityJobsRepo(jobs),
+		outbox.WithFanoutJobsRepo(jobs),
 		// Optional: only if you call svc.GetQueueStats(...)
 		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
+		outbox.WithCapabilityJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
 		outbox.WithLogger(lg),
 	)
@@ -56,6 +59,12 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 
 `JobsStatRepository` is optional.  
 Keep `WithJobsStatRepo(...)` only when queue stats are needed.
+
+The backend implements the complete capability, fenced-lease, schema-preserving
+DLQ, and durable fan-out contracts. For standard worker composition, prefer
+`runtime.Open(ctx, runtime.Config{DSN: dsn})` after the migrate role has applied
+the embedded migrations. The runtime does not migrate automatically and pins
+the pool to one connection because SQLite is a single-writer database.
 
 ## Migrations
 

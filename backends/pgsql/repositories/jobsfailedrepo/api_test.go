@@ -15,6 +15,7 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/tests"
@@ -75,6 +76,25 @@ func Test_CreateFailedJob(t *testing.T) {
 	ts.Equal(name, fJob.Name)
 	ts.Equal(payload, fJob.Payload)
 	ts.Equal(reason, fJob.Reason)
+}
+
+func Test_CreateFailedJobVersioned(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	failedJobID, err := ts.repo.CreateFailedJobVersioned(
+		ctx,
+		types.NewJobID(),
+		name,
+		2,
+		payload,
+		reason,
+	)
+	ts.Require().NoError(err)
+
+	failedJob, err := ts.repo.GetByID(ctx, failedJobID)
+	ts.Require().NoError(err)
+	ts.Equal(coreoutbox.SchemaVersion(2), failedJob.SchemaVersion)
 }
 
 func Test_CreateFailedJob_Multiple(t *testing.T) {

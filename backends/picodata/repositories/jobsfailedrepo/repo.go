@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/assurrussa/outbox/backends/picodata"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/shared/strings"
 )
 
@@ -14,6 +15,11 @@ type Repo struct {
 	client    picodata.Client
 	tableName string
 }
+
+var (
+	_ coreoutbox.JobsFailedRepository           = (*Repo)(nil)
+	_ coreoutbox.CapabilityJobsFailedRepository = (*Repo)(nil)
+)
 
 func New(client picodata.Client, tableNames ...string) (*Repo, error) {
 	if client == nil {

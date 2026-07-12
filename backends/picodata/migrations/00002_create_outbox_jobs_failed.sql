@@ -15,4 +15,4 @@ CREATE TABLE IF NOT EXISTS outbox_jobs_failed (
 OPTION (TIMEOUT = 3.0);
 
 -- pico.DOWN
-DROP TABLE IF EXISTS "outbox_jobs_failed";
+DROP TABLE IF EXISTS "outbox_jobs_failed" WAIT APPLIED GLOBALLY;

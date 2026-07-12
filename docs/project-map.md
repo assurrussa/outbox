@@ -30,8 +30,10 @@ Workspace modules also include runnable examples:
 
 ## Directory Responsibilities
 
-- `outbox/`: public core runtime, options, contracts, job context helpers, logger
-  adapter, models, and small payload helpers.
+- `outbox/`: public core runtime, legacy and capability-aware repository
+  contracts, fenced worker lifecycle, durable fan-out snapshots/deliveries,
+  options, job context helpers, logger adapter, models, and small payload
+  helpers.
 - `shared/`: support code reused by core and backend modules. It is internal to
   this repository's modules and is not a stable external consumer API.
 - `backends/mysql/`: MySQL storage, repositories, transaction manager, and
@@ -74,12 +76,17 @@ Current driver ownership:
 - Postgres backend: `github.com/jackc/pgx/v5`
 - Picodata backend: `github.com/picodata/picodata-go`
 
+Capability-aware storage and durable fan-out support are additive and
+backend-owned. PostgreSQL, MySQL, and SQLite implement both opt-in surfaces.
+Picodata implements only safe versioned/CAS capability primitives and does not
+claim atomic fan-out support.
+
 ## Shared Wiki Context
 
 Shared platform context is in:
 
 ```text
-/Users/amir/agents/agent-context/streams/wiki/platforms/outbox.md
+${AGENT_CONTEXT_ROOT}/streams/wiki/platforms/outbox.md
 ```
 
 Use it for cross-project role and durable platform context. Local code, README

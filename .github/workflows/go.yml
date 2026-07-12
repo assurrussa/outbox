@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [mysql, sqlite, pgsql]
+        backend: [mysql, sqlite, pgsql, picodata]
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +53,8 @@ jobs:
             profile: ""
           - backend: pgsql
             profile: pgsql
+          - backend: picodata
+            profile: picodata
     steps:
       - uses: actions/checkout@v4
 
@@ -68,9 +70,12 @@ jobs:
         if: matrix.profile != ''
         run: docker compose --profile ${{ matrix.profile }} up -d
 
+      - name: Wait for integration service
+        if: matrix.profile != ''
+        run: make devwait-${{ matrix.backend }}
+
       - name: Test backend integration
-        working-directory: backends/${{ matrix.backend }}
-        run: go test -tags integration -race -v ./...
+        run: make test-integration-${{ matrix.backend }}
 
       - name: Stop integration services
         if: always() && matrix.profile != ''

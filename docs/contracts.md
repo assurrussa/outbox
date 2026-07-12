@@ -58,6 +58,87 @@ Execution behavior:
 DLQ behavior uses `Transactor.RunInTx(...)` to create the failed-job row and
 delete the original job.
 
+## Capability-Aware Execution
+
+Capability mode is enabled only when callers provide both:
+
+- `WithCapabilityJobsRepo(...)`;
+- `WithCapabilityJobsFailedRepo(...)`.
+
+The legacy repositories remain required, which keeps `Put(...)`, queue stats,
+and existing consumers source-compatible. A handler may implement
+`VersionedJob`; otherwise it is registered as schema v1. Registration identity
+is `(name, schemaVersion)`, so one worker can intentionally support more than
+one schema for the same job name.
+
+In capability mode:
+
+- `Put(...)` persists schema v1;
+- `PutVersioned(...)` validates and persists an explicit positive version;
+- the repository receives the complete registered capability set and must not
+  reserve anything else;
+- an unsupported job remains pending without consuming attempts or entering
+  DLQ;
+- every reservation receives a new non-zero lease token;
+- the service extends the lease every `reserveFor / 3` while the handler runs;
+- heartbeat failure or a lost fence cancels the handler and returns
+  `ErrLeaseLost`;
+- ack and DLQ deletion affect exactly one row only when token and lease are
+  still current;
+- versioned DLQ rows retain the source schema version.
+
+Delivery remains at-least-once. A handler may finish its external side effect
+and lose the fence before ack, so payloads need a stable delivery/idempotency
+identifier. Fencing prevents a stale worker from deleting a job owned by a
+newer worker; it cannot provide exactly-once semantics in a remote system.
+
+Capability rollout is expand-first. Legacy workers do not understand schema
+filters, so producers must stay on v1 until all legacy workers have drained.
+Capability-aware workers can register v1 and v2 together during the transition.
+
+## Durable Fan-Out
+
+Fan-out is a second opt-in layer enabled by `WithFanoutJobsRepo(...)`. It also
+requires capability mode. `PutFanout(...)` writes one source job containing:
+
+- a stable event ID, topic, schema version, payload, and occurrence time;
+- the complete eligible target set fixed at event commit;
+- an opaque immutable snapshot per target, such as config and secret revisions;
+- the requested delivery availability time.
+
+Call `PutFanout` inside the same host transaction that commits the source
+domain event when atomic domain-state/event publication is required. Target
+ordering is canonicalized. Reusing an event ID with different event data,
+target eligibility, snapshots, or availability returns
+`ErrIdempotencyConflict`.
+
+Snapshots and event payloads are byte-immutable idempotency inputs. Store only
+secret identifiers/revisions in a target snapshot, never plaintext signing
+secrets. The consumer resolves the referenced encrypted secret version and the
+host retains that version until every related delivery reaches terminal state.
+
+Target kinds use `[A-Za-z0-9_-]`; topics use `[A-Za-z0-9._-]`. The derived
+delivery capability name must fit the PostgreSQL `varchar(255)` job-name
+contract.
+
+The internal `outbox.fanout.dispatch` v1 handler materializes all target jobs
+inside one transaction. Its source job is acknowledged only after that commit.
+A crash before commit leaves no partial set; a crash after commit but before
+source ack may replay the dispatcher, but stable delivery keys prevent duplicate
+jobs. Each materialized job has:
+
+- capability name `FanoutDeliveryJobName(target.Kind, event.Topic)`;
+- the event schema version;
+- a deterministic delivery ID;
+- the original event and target snapshot in its payload;
+- its own attempts, lease/fence, retry, ack, and DLQ lifecycle.
+
+Idempotency keys live in a separate backend registry, so deleting a completed
+job does not reopen its delivery key. `PruneJobIdempotencyKeys` removes only
+tombstones without an active job and works in bounded batches. The caller owns
+the retention cutoff and must keep tombstones at least as long as any event can
+be replayed or audited.
+
 ## Repository Interfaces
 
 Core storage dependencies are interfaces:
@@ -85,6 +166,13 @@ type Transactor interface {
 `JobsStatRepository` is separate so normal producer/worker flows do not depend
 on exact queue-count support.
 
+Capability storage is deliberately separate from `JobsRepository` so adding
+it does not break existing custom repository implementations. The opt-in
+interfaces cover versioned create/claim, lease heartbeat, conditional delete,
+and version-preserving DLQ writes. PostgreSQL, MySQL, and SQLite implement the
+complete capability and fan-out contracts. Picodata implements only the safe
+single-statement/CAS capability primitives described below.
+
 ## Backend Pattern
 
 Every backend module follows the same consumer shape:
@@ -110,15 +198,33 @@ explicit migration-directory control.
 MySQL:
 - Client contract exposes `DB() *sql.DB` and `Close() error`.
 - Compose maps local MySQL to `127.0.0.1:33306` by default.
+- Capability claims target MySQL 8.0 and use
+  `SELECT ... FOR UPDATE SKIP LOCKED`.
+- Embedded migrations add schema versions, fenced leases, and an immutable
+  idempotency registry.
+- `runtime.Open` is the standard capability/fan-out worker composition.
 
 SQLite:
 - Client contract exposes `DB() *sql.DB` and `Close() error`.
-- SQLite example uses one worker and a single pooled connection for stability.
+- The standard runtime enforces one pooled connection because SQLite is a
+  single-writer database.
+- Embedded migrations add schema versions, fenced leases, and an immutable
+  idempotency registry.
+- `runtime.Open` is the standard capability/fan-out worker composition.
 
 Postgres:
 - Client contract exposes `DB() storage.DBEngine` and `Close() error`.
 - Compose maps local Postgres to `127.0.0.1:54335` by default.
 - The backend uses pgx under the storage/client layer.
+- Embedded migration `00003_add_capability_leases.sql` adds positive
+  `schema_version`, lease tokens, a capability claim index, and DLQ schema
+  versions without rewriting existing v1 rows.
+- `jobsrepo.Repo` and `jobsfailedrepo.Repo` implement the opt-in capability
+contracts.
+
+`FanoutJobsRepository` is another additive interface for immutable unique job
+creation. `FanoutMaintenanceRepository` is optional operational maintenance;
+normal producer and worker execution does not depend on pruning.
 
 Picodata:
 - Client contract exposes `Pool() *picodata-go.Pool` and `Close() error`.
@@ -131,6 +237,17 @@ Picodata:
 - Do not set both `PICODATA_PG_ADVERTISE` and `PICODATA_IPROTO_ADVERTISE`.
 - The current transaction manager is best-effort because the Picodata client API
   does not provide connection-pinned SQL transactions.
+- Versioned create, capability-filtered claim, heartbeat, conditional leased
+  delete, and versioned failed-job persistence are available as storage
+  primitives.
+- The backend deliberately does not implement `FanoutJobsRepository` or expose
+  the standard runtime facade. Best-effort callbacks are not an atomic fan-out
+  or DLQ boundary.
+- Picodata 25.2 only supports additive `ALTER TABLE ... ADD COLUMN`; migration
+  00003 therefore retains its columns on a one-step down. Full reset still
+  drops the owning tables.
+- Null capability columns written by a legacy process during an expand-first
+  rollout are interpreted as schema v1 and a nil lease.
 
 ## Release Boundary
 

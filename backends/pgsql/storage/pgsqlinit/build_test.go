@@ -16,15 +16,34 @@ import (
 func TestCreate_Success(t *testing.T) {
 	ctx := context.Background()
 
+	//nolint:gosec // test-only credential
 	dsn := "postgres://jack:secret@pg.example.com:5432/mydb?sslmode=verify-ca&pool_max_conns=10"
 	pool, err := pgsqlinit.Create(ctx, dsn, pgsqlclient.WithCheck(false))
 	require.NoError(t, err)
 	assert.NotNil(t, pool)
 }
 
+func TestCreate_PreservesRuntimeParameters(t *testing.T) {
+	t.Parallel()
+
+	//nolint:gosec // test-only credential
+	dsn := "postgres://jack:secret@pg.example.com:5432/mydb?sslmode=disable&search_path=cms_runtime&application_name=outbox"
+	pool, err := pgsqlinit.Create(
+		context.Background(),
+		dsn,
+		pgsqlclient.WithCheck(false),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	params := pool.Pool().Config().ConnConfig.RuntimeParams
+	require.Equal(t, "cms_runtime", params["search_path"])
+	require.Equal(t, "outbox", params["application_name"])
+}
+
 func TestCreate_Error(t *testing.T) {
 	ctx := context.Background()
 
+	//nolint:gosec // test-only credential
 	dsn := "postgres://jack:secret@pg.example.com:5432/mydb?sslmode=verify-ca&pool_max_conns=10"
 	pool, err := pgsqlinit.Create(ctx, dsn)
 	require.Error(t, err)

@@ -4,9 +4,7 @@ package jobsrepo_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"strconv"
 	"testing"
 	"time"
 
@@ -17,6 +15,7 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/tests"
@@ -42,7 +41,11 @@ type TestRepoSuite struct {
 }
 
 func NewTestRepoSuite(t *testing.T, opts ...pgsqltests.OptionDatabase) (context.Context, context.CancelFunc, *TestRepoSuite) {
+	t.Helper()
+
 	return tests.NewSuite[*TestRepoSuite](t, func(t *testing.T, ctx context.Context) *TestRepoSuite {
+		t.Helper()
+
 		db, dbHelper, cleanUp := pgsqltests.PrepareDB(ctx, t, "TestJobsRepoSuite", opts...)
 		repo := jobsrepo.Must(jobsrepo.NewOptions(db))
 
@@ -176,6 +179,96 @@ func Test_FindAndReserveJob_JobNotFound(t *testing.T) {
 	ts.Empty(job.ID)
 }
 
+func Test_CapabilityClaimFiltersAndFences(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC()
+	unsupportedID, err := ts.repo.CreateJobVersioned(ctx, "publish", 2, `{"version":2}`, now)
+	ts.Require().NoError(err)
+	supportedID, err := ts.repo.CreateJobVersioned(ctx, "publish", 1, `{"version":1}`, now)
+	ts.Require().NoError(err)
+
+	leaseToken := types.NewLeaseToken()
+	reservedUntil := now.Add(time.Minute)
+	job, err := ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		now.Add(time.Second),
+		reservedUntil,
+		leaseToken,
+		[]coreoutbox.JobCapability{{Name: "publish", SchemaVersion: 1}},
+	)
+	ts.Require().NoError(err)
+	ts.Equal(supportedID, job.ID)
+	ts.Equal(coreoutbox.SchemaVersion(1), job.SchemaVersion)
+	ts.Equal(leaseToken, job.LeaseToken)
+
+	unsupported, err := ts.repo.GetByID(ctx, unsupportedID)
+	ts.Require().NoError(err)
+	ts.Zero(unsupported.Attempts)
+	ts.True(unsupported.LeaseToken.IsZero())
+
+	affected, err := ts.repo.ExtendJobLease(
+		ctx,
+		job.ID,
+		types.NewLeaseToken(),
+		now.Add(2*time.Second),
+		reservedUntil.Add(time.Minute),
+	)
+	ts.Require().NoError(err)
+	ts.Zero(affected)
+
+	affected, err = ts.repo.ExtendJobLease(
+		ctx,
+		job.ID,
+		leaseToken,
+		now.Add(2*time.Second),
+		reservedUntil.Add(time.Minute),
+	)
+	ts.Require().NoError(err)
+	ts.Equal(int64(1), affected)
+
+	affected, err = ts.repo.DeleteJobWithLease(
+		ctx,
+		job.ID,
+		types.NewLeaseToken(),
+		now.Add(3*time.Second),
+	)
+	ts.Require().NoError(err)
+	ts.Zero(affected)
+
+	affected, err = ts.repo.DeleteJobWithLease(
+		ctx,
+		job.ID,
+		leaseToken,
+		now.Add(3*time.Second),
+	)
+	ts.Require().NoError(err)
+	ts.Equal(int64(1), affected)
+}
+
+func Test_CapabilityClaimWithEmptyCapabilitiesLeavesJobsPending(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC()
+	jobID, err := ts.repo.CreateJobVersioned(ctx, "publish", 2, `{}`, now)
+	ts.Require().NoError(err)
+
+	_, err = ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		now.Add(time.Second),
+		now.Add(time.Minute),
+		types.NewLeaseToken(),
+		nil,
+	)
+	ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
+
+	job, err := ts.repo.GetByID(ctx, jobID)
+	ts.Require().NoError(err)
+	ts.Zero(job.Attempts)
+}
+
 func Test_CreateJob(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
@@ -199,6 +292,97 @@ func Test_CreateJob(t *testing.T) {
 		availableAt.Format("2006-01-02 15-01-05"),
 		job.AvailableAt.Format("2006-01-02 15-01-05"),
 	)
+}
+
+func Test_CreateJobVersionedUniqueRetainsIdempotencyAfterAck(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	availableAt := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
+	firstID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"delivery-1"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	secondID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"delivery-1"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.Equal(firstID, secondID)
+	pruned, err := ts.repo.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	ts.Require().NoError(err)
+	ts.Zero(pruned)
+
+	job, err := ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		time.Now().UTC(),
+		time.Now().UTC().Add(time.Minute),
+		types.NewLeaseToken(),
+		[]coreoutbox.JobCapability{{
+			Name:          "fanout.webhook.cms.entry.published",
+			SchemaVersion: 2,
+		}},
+	)
+	ts.Require().NoError(err)
+	_, err = ts.repo.DeleteJob(ctx, job.ID)
+	ts.Require().NoError(err)
+
+	replayedID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"delivery-1"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.Equal(firstID, replayedID)
+
+	_, err = ts.repo.FindAndReserveJobForCapabilities(
+		ctx,
+		time.Now().UTC(),
+		time.Now().UTC().Add(time.Minute),
+		types.NewLeaseToken(),
+		[]coreoutbox.JobCapability{{
+			Name:          "fanout.webhook.cms.entry.published",
+			SchemaVersion: 2,
+		}},
+	)
+	ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
+
+	_, err = ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"different"}`,
+		availableAt,
+	)
+	ts.Require().ErrorIs(err, coreoutbox.ErrIdempotencyConflict)
+
+	pruned, err = ts.repo.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	ts.Require().NoError(err)
+	ts.Equal(int64(1), pruned)
+
+	newID, err := ts.repo.CreateJobVersionedUnique(
+		ctx,
+		"delivery:event-1:webhook-1",
+		"fanout.webhook.cms.entry.published",
+		2,
+		`{"deliveryId":"different"}`,
+		availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.NotEqual(firstID, newID)
 }
 
 func Test_CreateJob_Multiple(t *testing.T) {
@@ -271,36 +455,4 @@ func createModel() models.Job {
 		AvailableAt: availableAt,
 		CreatedAt:   availableAt,
 	}
-}
-
-func createModels(t *testing.T, ts *TestRepoSuite, ctx context.Context, size int) []models.Job {
-	t.Helper()
-
-	tmCreate := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	list := make([]models.Job, 0, 100)
-	for i := 1; i <= size; i++ {
-		strIndex := "__" + strconv.Itoa(i)
-		rowModel := models.Job{
-			Queue:       "queue",
-			Name:        "TestName_" + strIndex,
-			Payload:     payload,
-			Attempts:    i % 3,
-			ReservedAt:  sql.NullTime{Valid: true, Time: tmCreate.Add(time.Duration(i) * time.Minute)}, // разные времена создания
-			AvailableAt: tmCreate.Add(time.Duration(i) * time.Minute),                                  // разные времена создания
-			CreatedAt:   tmCreate.Add(time.Duration(i) * time.Minute),                                  // разные времена создания
-		}
-
-		if i%3 == 0 {
-			rowModel.ReservedAt = sql.NullTime{}
-		}
-
-		id, err := ts.repo.Create(ctx, rowModel)
-		ts.Require().NoError(err)
-		rowModel.ID = id
-
-		list = append(list, rowModel)
-	}
-
-	return list
 }

@@ -67,8 +67,116 @@ func main() {
 }
 ```
 
+For a graceful worker shutdown, first remove the process from readiness, then
+call `svc.BeginDrain()` without cancelling the `Run` context. After
+`BeginDrain` returns, no new repository claim can start; already reserved
+capability jobs keep their fenced lease heartbeat and may ack normally. Cancel
+the `Run` context only when the host's bounded drain deadline expires, so an
+unfinished handler cannot ack and its lease can be recovered by another
+worker.
+`svc.Readiness(ctx)` is a non-mutating worker-lifecycle probe: it is successful
+only after worker loops start and becomes unavailable before `BeginDrain`
+closes claim admission. Pair it with a separate database probe; readiness never
+reserves a synthetic outbox job.
+
 `JobsStatRepository` is optional.  
 Set `WithJobsStatRepo(...)` only if you need `svc.GetQueueStats(...)`.
+
+## Capability-aware workers (opt-in)
+
+Use capability mode when workers must claim only payload schemas they can
+decode. It is additive: legacy `Put`, repositories, and unknown-job/DLQ
+behavior stay unchanged until both capability repositories are configured.
+
+```go
+type PublishV2Job struct {
+	sharedjob.DefaultJob
+}
+
+func (*PublishV2Job) Name() string { return "cms.entry.publish" }
+
+func (*PublishV2Job) SchemaVersion() outbox.SchemaVersion { return 2 }
+
+func (*PublishV2Job) Handle(_ context.Context, _ string) error { return nil }
+
+svc, err := outbox.New(
+	outbox.WithJobsRepo(jobsRepo),
+	outbox.WithCapabilityJobsRepo(jobsRepo),
+	outbox.WithJobsFailedRepo(jobsFailedRepo),
+	outbox.WithCapabilityJobsFailedRepo(jobsFailedRepo),
+	outbox.WithTransactor(txManager),
+)
+if err != nil {
+	panic(err)
+}
+
+svc.MustRegisterJob(&PublishV2Job{})
+_, _ = svc.PutVersioned(
+	ctx,
+	"cms.entry.publish",
+	2,
+	`{"entryId":"1"}`,
+	time.Now(),
+)
+```
+
+Jobs without `SchemaVersion()` use schema v1. In capability mode, ordinary
+`Put(...)` also persists schema v1. Claims are filtered by the registered
+`(name, schemaVersion)` set, so unsupported jobs remain pending and do not move
+to DLQ. Active handlers refresh their lease every `reserveFor / 3`; successful
+ack and DLQ deletion require the same live lease token.
+
+Rollout rule: do not enqueue schemas newer than v1 while legacy workers are
+still running. Deploy capability-aware workers that understand both versions,
+remove legacy workers, and only then enable the new producer schema.
+
+PostgreSQL, MySQL, and SQLite implement the complete capability and durable
+fan-out contracts. Picodata implements versioned/CAS capability storage only;
+it deliberately omits fan-out and standard runtime composition until its client
+can provide a real atomic transaction boundary.
+
+## Durable fan-out (opt-in)
+
+Configure `WithFanoutJobsRepo(jobsRepo)` together with capability mode when one
+integration event must produce independently retried deliveries. `PutFanout`
+stores the event plus the exact eligible target snapshots under the event ID.
+The built-in dispatcher is registered during construction and creates one job
+per target in a transaction.
+
+```go
+event := outbox.FanoutEvent{
+	ID:            types.NewMessageID(),
+	Topic:         "cms.entry.published",
+	SchemaVersion: 1,
+	Payload:       json.RawMessage(`{"entryId":"1"}`),
+	OccurredAt:    time.Now(),
+}
+
+_, err = svc.PutFanout(ctx, event, []outbox.FanoutTarget{
+	{
+		Kind:     "nitro",
+		ID:       "site-1",
+		Snapshot: json.RawMessage(`{"namespace":"public"}`),
+	},
+	{
+		Kind:     "webhook",
+		ID:       "subscription-7",
+		Snapshot: json.RawMessage(`{"configRevision":4,"secretRevision":2}`),
+	},
+}, time.Now())
+```
+
+Delivery handlers register
+`FanoutDeliveryJobName(targetKind, eventTopic)` for the event schema they
+understand and decode payloads with `DecodeFanoutDelivery`. Every delivery has
+a deterministic ID suitable for webhook idempotency. Unsupported delivery
+capabilities stay pending with zero attempts.
+
+Fan-out retries are idempotent even after a delivery job was acknowledged and
+deleted: PostgreSQL, MySQL, and SQLite retain a compact key/fingerprint
+tombstone separately from active jobs. Prune tombstones in bounded batches
+only after the host's event replay, audit, and webhook retry retention windows
+have elapsed.
 
 ## Backend modules
 
@@ -119,10 +227,13 @@ Release prep for backend modules:
 
 ```sh
 # pin backend modules to a published core tag
-make release-ready-backends CORE_VERSION=v0.9.0
+make release-ready-backends CORE_VERSION=v0.10.0-alpha.0
 
 # verify each backend as standalone module (without go.work)
 make release-verify-backends
+
+# non-mutating exact-version pre-tag gate
+make release-readiness-backends CORE_VERSION=v0.10.0-alpha.0
 ```
 
 ## License

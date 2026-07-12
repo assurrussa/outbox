@@ -73,6 +73,12 @@ Optional:
 - `WithLogger(...)` overrides the default logger.
 - `WithJobsStatRepo(...)` is needed only for `Service.GetQueueStats(...)`.
   `Put` and `Run` do not require it.
+- Capability-aware execution is opt-in and requires both
+  `WithCapabilityJobsRepo(...)` and `WithCapabilityJobsFailedRepo(...)` in
+  addition to the legacy repositories.
+- Durable independent fan-out is opt-in through `WithFanoutJobsRepo(...)` and
+  requires capability mode. Eligible targets are immutable event-time
+  snapshots; the built-in dispatcher creates one fenced job per target.
 
 Important behavior:
 - Register jobs before `Service.Run(...)`; registering while running returns
@@ -81,6 +87,12 @@ Important behavior:
   called twice concurrently.
 - Unknown job names and jobs that exceed `MaxAttempts()` are moved to the failed
   jobs repository through `dlq(...)`.
+- In capability mode, claim identity is `(name, schemaVersion)`; unsupported
+  schemas remain pending, active handlers heartbeat their fenced lease, and
+  ack/DLQ deletion require the current token.
+- Fan-out event IDs and delivery IDs are idempotency boundaries. Do not prune
+  PostgreSQL, MySQL, or SQLite idempotency tombstones until the host
+  replay/audit retention has elapsed.
 - Successful jobs are deleted from the jobs repository after `Handle(...)`
   succeeds.
 - `JobIDFromContext(ctx)` exposes the current job ID while a handler executes.
@@ -91,6 +103,14 @@ Important behavior:
 
 Each backend owns storage initialization, repositories, transaction manager, and
 embedded migrations. Prefer backend README examples when wiring a real consumer.
+
+Postgres, MySQL, and SQLite implement the complete additive capability and
+fan-out repository contracts and expose standard runtime facades. The MySQL
+capability runtime targets MySQL 8.0, matching the integration image. Picodata
+implements only the safe versioned create/claim, fenced heartbeat/ack, and
+version-preserving failed-row primitives; it deliberately has no fan-out
+repository or standard runtime because its current client cannot provide the
+required atomic transaction boundary.
 
 Migration convention:
 - Use `RunEmbedded(..., WithCommand("up"))` for normal consumers.
@@ -119,11 +139,13 @@ make check
 Integration services:
 
 ```sh
-cp .env.example .env
 make devup
 make test-integration-all
 make devdown
 ```
+
+The Makefile provides safe local defaults. Copy `.env.example` only when local
+overrides are needed.
 
 Focused integration checks:
 
@@ -137,8 +159,7 @@ make test-integration-picodata
 Release-oriented backend checks:
 
 ```sh
-make release-ready-backends CORE_VERSION=v0.9.0
-make release-verify-backends
+make release-readiness-backends CORE_VERSION=v0.10.0-alpha.0
 ```
 
 Formatting and generated mocks:

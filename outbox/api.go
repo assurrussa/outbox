@@ -10,9 +10,43 @@ import (
 )
 
 func (s *Service) Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
+	if s.capabilityJobsRepo != nil {
+		return s.PutVersioned(ctx, name, DefaultSchemaVersion, payload, availableAt)
+	}
+
 	jobID, err := s.jobsRepo.CreateJob(ctx, name, payload, availableAt)
 	if err != nil {
 		return types.JobIDNil, fmt.Errorf("create job: %w", err)
+	}
+
+	return jobID, nil
+}
+
+func (s *Service) PutVersioned(
+	ctx context.Context,
+	name string,
+	schemaVersion SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (types.JobID, error) {
+	if s.capabilityJobsRepo == nil {
+		return types.JobIDNil, ErrCapabilityRepositoryNotConfigured
+	}
+
+	capability := JobCapability{Name: name, SchemaVersion: schemaVersion}
+	if err := capability.Validate(); err != nil {
+		return types.JobIDNil, err
+	}
+
+	jobID, err := s.capabilityJobsRepo.CreateJobVersioned(
+		ctx,
+		name,
+		schemaVersion,
+		payload,
+		availableAt,
+	)
+	if err != nil {
+		return types.JobIDNil, fmt.Errorf("create versioned job: %w", err)
 	}
 
 	return jobID, nil

@@ -29,6 +29,7 @@ type PoolOptions struct {
 	tlsConfig           *tls.Config
 	check               bool
 	logger              logger.Logger
+	runtimeParams       map[string]string
 }
 
 func NewOptions(
@@ -55,6 +56,7 @@ func NewOptions(
 		minConnectionsCount: 5,
 		maxConnIdleTime:     5 * time.Minute,
 		maxConnLifeTime:     1 * time.Hour,
+		runtimeParams:       nil,
 	}
 
 	for _, opt := range options {
@@ -145,5 +147,16 @@ func WithMinConnectionsCount(minConnections int32) OptPoolOptionsSetter {
 func WithSSLMode(sslMode string) OptPoolOptionsSetter {
 	return func(o *PoolOptions) {
 		o.sslMode = sslMode
+	}
+}
+
+// WithRuntimeParams preserves PostgreSQL startup parameters such as
+// search_path and application_name when a caller supplies a DSN.
+func WithRuntimeParams(params map[string]string) OptPoolOptionsSetter {
+	return func(o *PoolOptions) {
+		o.runtimeParams = make(map[string]string, len(params))
+		for key, value := range params {
+			o.runtimeParams[key] = value
+		}
 	}
 }

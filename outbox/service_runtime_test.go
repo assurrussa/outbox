@@ -16,6 +16,8 @@ import (
 	"github.com/assurrussa/outbox/shared/types"
 )
 
+const testQueue = "queue"
+
 func TestRun_PanicInJobHandler_DoesNotCrashAndMovesToDLQ(t *testing.T) {
 	t.Parallel()
 
@@ -99,7 +101,7 @@ func (r *runtimeRepo) CreateJob(ctx context.Context, name, payload string, avail
 	id := types.NewJobID()
 	r.jobs = append(r.jobs, models.Job{
 		ID:          id,
-		Queue:       "queue",
+		Queue:       testQueue,
 		Name:        name,
 		Payload:     payload,
 		Attempts:    0,
@@ -171,7 +173,7 @@ func (r *runtimeRepo) CreateFailedJob(
 	r.failed = append(r.failed, models.JobFailed{
 		ID:        id,
 		JobID:     jobID,
-		Queue:     "queue",
+		Queue:     testQueue,
 		Name:      name,
 		Payload:   payload,
 		Reason:    reason,

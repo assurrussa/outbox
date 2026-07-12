@@ -37,7 +37,7 @@ func TestComplex(t *testing.T) {
 	job1 := newJobMock(jobSuccessfulFromFirstTime, nop, time.Second, 10)
 	ts.outboxSvc.MustRegisterJob(job1)
 
-	job2 := newJobMock(jobSuccessfulFromThirdTime, func(ctx context.Context, payloadAsIndex string) error {
+	job2 := newJobMock(jobSuccessfulFromThirdTime, func(_ context.Context, payloadAsIndex string) error {
 		k := jobSuccessfulFromThirdTime + payloadAsIndex
 		if executedTimes.Inc(k) == 3 {
 			return nil
@@ -46,12 +46,12 @@ func TestComplex(t *testing.T) {
 	}, time.Second, 4)
 	ts.outboxSvc.MustRegisterJob(job2)
 
-	job3 := newJobMock(jobFailedAfterSecondTime, func(ctx context.Context, _ string) error {
+	job3 := newJobMock(jobFailedAfterSecondTime, func(_ context.Context, _ string) error {
 		return errors.New("sorry I'm failed")
 	}, time.Second, 2)
 	ts.outboxSvc.MustRegisterJob(job3)
 
-	job4 := newJobMock(jobFailedAfterFiveTime, func(ctx context.Context, _ string) error {
+	job4 := newJobMock(jobFailedAfterFiveTime, func(_ context.Context, _ string) error {
 		return errors.New("sorry I'm failed")
 	}, time.Second, 5)
 	ts.outboxSvc.MustRegisterJob(job4)
@@ -107,7 +107,7 @@ func TestComplex(t *testing.T) {
 			for i := 1; i <= jobCount; i++ {
 				var randAvailableAt time.Time
 				// Random choice between immediate and delayed job.
-				if rand.Float64() >= 0.5 { //nolint:gosec
+				if rand.Float64() >= 0.5 { //nolint:gosec // Test jitter does not require cryptographic randomness.
 					randAvailableAt = time.Now()
 				} else {
 					randAvailableAt = time.Now().Add(4 * idleTime)

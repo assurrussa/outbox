@@ -2,8 +2,6 @@ services:
   integration-postgres-tests:
     profiles: ["pgsql"]
     image: postgres:17-alpine
-    env_file:
-      - .env
     environment:
       POSTGRES_DB: ${TEST_OUTBOXLIB_PSQL_DATABASENAME:-tests-db-pgsql}
       POSTGRES_USER: ${TEST_OUTBOXLIB_PSQL_USERNAME:-tests-service}
@@ -50,7 +48,7 @@ services:
       PICODATA_MEMTX_MAX_TUPLE_SIZE: ${TEST_OUTBOXLIB_PICODATA_MEMTX_MAX_TUPLE_SIZE:-1M}
       PICODATA_LOG_LEVEL: info
       PICODATA_PG_SSL: ${TEST_OUTBOXLIB_PICODATA_PG_SSL:-false}
-      PICODATA_ADMIN_PASSWORD: ${TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD}
+      PICODATA_ADMIN_PASSWORD: ${TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD:-passWord!123}
     ports:
       - ${TEST_OUTBOXLIB_PICODATA_LISTEN_PEER:-3349}:3349
       - ${TEST_OUTBOXLIB_PICODATA_LISTEN_PG:-5049}:5049
