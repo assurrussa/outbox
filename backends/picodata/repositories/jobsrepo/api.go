@@ -122,14 +122,29 @@ WHERE id = $1 AND attempts = $2 AND (reserved_at IS NULL OR reserved_at <= $5);
 	if err != nil {
 		return models.Job{}, err
 	}
-	defer rows.Close()
 
+	candidates := make([]models.Job, 0, 10)
 	for rows.Next() {
 		job, err := scanJob(rows)
 		if err != nil {
+			rows.Close()
+
 			return models.Job{}, err
 		}
+		candidates = append(candidates, job)
+	}
 
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return models.Job{}, rowsErr
+	}
+
+	// Picodata's pool-level API does not expose a connection-pinned
+	// transaction. Release the query connection before attempting any CAS
+	// update; otherwise workers can occupy every pool connection with open rows
+	// and deadlock while each waits for another connection to run Exec.
+	for _, job := range candidates {
 		job.ReservedAt = sql.NullTime{Time: until, Valid: true}
 		job.Attempts++
 
@@ -148,10 +163,6 @@ WHERE id = $1 AND attempts = $2 AND (reserved_at IS NULL OR reserved_at <= $5);
 		job.LeaseToken = leaseToken
 
 		return job, nil
-	}
-
-	if err := rows.Err(); err != nil {
-		return models.Job{}, err
 	}
 
 	return models.Job{}, sharederrors.ErrNoJobs

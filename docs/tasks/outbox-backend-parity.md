@@ -175,6 +175,12 @@ Review fixes:
   `DROP TABLE IF EXISTS` migration statements. Ambiguous DDL such as
   `ALTER TABLE ... ADD COLUMN` still fails closed instead of risking a
   duplicate or partially applied schema change.
+- fixed a Linux CI pool-starvation deadlock in Picodata claims. The repository
+  previously kept candidate `Rows` open while acquiring another connection for
+  CAS update; ten workers could occupy every small pool and wait forever. It
+  now buffers at most ten candidates, closes the query rows, and only then
+  attempts CAS updates. Picodata integration tests force a two-connection pool
+  so this invariant is independent of runner CPU count.
 
 No unresolved correctness or concurrency findings remain after these changes.
 Published core and PostgreSQL tag commits stay in branch history; only the
@@ -192,3 +198,8 @@ Final review evidence:
   four standalone modules with `GOWORK=off`, exact version resolution, tidy
   checks, and unit tests;
 - `git diff --check` passed and public docs contain no machine-local paths.
+
+The first GitHub Picodata integration job then exposed the small-pool claim
+deadlock described above while all other eight jobs passed. Its stack trace was
+used as review evidence; final GitHub CI must pass after the fix before this
+task is considered merge-ready.

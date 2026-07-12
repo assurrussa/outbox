@@ -27,6 +27,13 @@
   fresh race-enabled runs, followed by a green full `check-all`. The final
   standalone backend release gate also resolved core `v0.10.0-alpha.0` with
   `GOWORK=off` for every module and passed tidy/unit checks.
+- GitHub's two-core Linux runner exposed a separate Picodata claim deadlock:
+  ten workers exhausted the small pgx pool with open SELECT rows, then every
+  worker waited for another connection to perform its CAS update. macOS did
+  not reproduce it because the default pool scaled with a larger CPU count.
+  Claims now buffer at most ten candidates and close rows before updates. The
+  integration harness pins `pool_max_conns=2` so this failure mode remains
+  covered on every machine.
 - The review fixup will be folded only into the final unpushed backend-parity
   commit before branch publication.
 

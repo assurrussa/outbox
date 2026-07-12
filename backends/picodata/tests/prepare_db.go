@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,6 +127,13 @@ func PrepareDB(
 	options.migrationTableName = migrationTableName(dbName)
 
 	dsn := os.Getenv("TEST_OUTBOXLIB_PICODATA_DSN")
+	dsnURL, err := url.Parse(dsn)
+	require.NoError(t, err)
+	dsnQuery := dsnURL.Query()
+	dsnQuery.Set("pool_max_conns", "2")
+	dsnURL.RawQuery = dsnQuery.Encode()
+	dsn = dsnURL.String()
+
 	poolMain, err := picodatastorage.Create(
 		ctx,
 		dsn,
