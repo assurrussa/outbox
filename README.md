@@ -227,13 +227,13 @@ Release prep for backend modules:
 
 ```sh
 # pin backend modules to a published core tag
-make release-ready-backends CORE_VERSION=v0.10.0-alpha.0
+make release-ready-backends CORE_VERSION=v0.10.0
 
 # verify each backend as standalone module (without go.work)
 make release-verify-backends
 
 # non-mutating exact-version pre-tag gate
-make release-readiness-backends CORE_VERSION=v0.10.0-alpha.0
+make release-readiness-backends CORE_VERSION=v0.10.0
 ```
 
 ## License

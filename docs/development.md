@@ -111,7 +111,7 @@ the backend-specific example README files for exact env and DSN behavior.
 Pin backend modules to a published core version:
 
 ```sh
-make release-ready-backends CORE_VERSION=v0.10.0-alpha.0
+make release-ready-backends CORE_VERSION=v0.10.0
 ```
 
 Verify backend modules as standalone modules:
@@ -128,7 +128,7 @@ For a non-mutating pre-tag gate that also proves every backend resolves the
 exact core tag:
 
 ```sh
-make release-readiness-backends CORE_VERSION=v0.10.0-alpha.0
+make release-readiness-backends CORE_VERSION=v0.10.0
 ```
 
 ## Sandbox Note
