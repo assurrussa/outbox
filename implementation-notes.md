@@ -1,5 +1,16 @@
 # Implementation Notes
 
+## 2026-07-14: stable v0.10.0 promotion
+
+- Promoted the already verified capability/fan-out contract from
+  `v0.10.0-alpha.0` to stable `v0.10.0` without moving or rewriting the
+  prerelease tags.
+- The root module is released first. Backend `go.mod` files move to the exact
+  published stable core only after that root tag resolves, then each backend
+  receives its own path-qualified `v0.10.0` tag.
+- Picodata keeps its documented limited capability surface; stable versioning
+  does not claim full fan-out/runtime parity with PostgreSQL, MySQL, or SQLite.
+
 ## 2026-07-12 Full Branch Code Review
 
 - Reviewed the entire branch diff from `origin/master`, including the already
