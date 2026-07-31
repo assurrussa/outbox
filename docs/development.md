@@ -31,8 +31,11 @@ make test
 make check
 ```
 
-This target runs generation, formatting, vet, lint, core/backend tests,
-race tests for core, and HTML coverage generation.
+This source-read-only target verifies formatting, vet, and lint, then runs one
+race+coverage traversal for core and one normal traversal for each backend.
+Run `make prepare` for generation, formatting, and lint fixes. Repeated core
+race stress and HTML coverage are explicit `make test-race-core` and
+`make cover-html` diagnostics.
 
 ## Integration Services
 

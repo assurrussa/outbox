@@ -15,6 +15,11 @@ make release-readiness-core CORE_VERSION=v0.10.0
 Commit generated files before this gate. Tag and publish the root module only
 after the command is clean.
 
+The core gate runs mutating preparation once, then a source-read-only check
+with one race+coverage core traversal and one normal traversal per backend.
+`make test-race-core` and `make cover-html` remain explicit diagnostics and do
+not need to be stacked onto a successful readiness run.
+
 ## 2. Stable backends
 
 After the core tag resolves without local replacements, update

@@ -136,6 +136,12 @@ make test
 make check
 ```
 
+`make prepare` owns generation, formatting, and safe lint fixes. `make check`
+is source-read-only and runs one race+coverage traversal for the core plus one
+normal traversal per backend. Keep `make test-race-core` and `make cover-html`
+for explicit stress/report diagnostics; do not stack them onto a successful
+check on an unchanged tree.
+
 Integration services:
 
 ```sh
@@ -170,8 +176,8 @@ make fmt
 make lint
 ```
 
-In sandboxed Codex runs, `go` may fail when it tries to write the default user
-build cache. Use a repo-local build cache for ad hoc commands:
+The Makefile exports ignored repository-local Go and linter caches. For ad hoc
+commands outside Make, use the same local build-cache principle:
 
 ```sh
 mkdir -p tmp/gocache

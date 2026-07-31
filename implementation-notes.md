@@ -292,3 +292,12 @@ Decisions made:
 - Added a non-mutating `release-readiness-backends` gate that verifies the exact
   published core version, tidy state, and `GOWORK=off` unit tests for every
   backend module.
+
+## Development gate efficiency (2026-07-31)
+
+- Preserved the workspace, backend, integration, and release target names.
+- Split generation/format/lint fixes into `make prepare`; `make check` now
+  verifies source and runs core race+coverage once plus each backend once.
+- Kept five-run core race stress and HTML coverage as explicit diagnostics.
+- Added ignored repository-local Go and linter caches so sandboxed runs do not
+  fail or serialize work around user-level cache permissions.
