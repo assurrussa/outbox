@@ -107,7 +107,16 @@ func TestMySQLAllJobsProcessed(t *testing.T) {
 		ts.Require().NoError(err)
 	}
 
-	runMySQLOutboxFor(ctx, ts, time.Second)
+	cancel, errCh := runMySQLOutbox(ctx, ts)
+	defer cancel()
+
+	ts.Require().Eventually(func() bool {
+		count, err := ts.jobsRepo.CountExact(ctx)
+		return err == nil && count == 0
+	}, 5*time.Second, 20*time.Millisecond)
+
+	cancel()
+	ts.NoError(<-errCh)
 
 	ts.Equal(jobsCount, job.ExecutedTimes())
 
