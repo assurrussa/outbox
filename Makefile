@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := check
-.PHONY: release-readiness-core release-readiness-pgsql release-readiness-backends release-version-check devup devwait devwait-mysql devwait-pgsql devwait-picodata devdown
+.PHONY: full prepare check check-all generate fmt fmt-check fmt-core fmt-check-core fmt-backends fmt-check-backends lint lint-fix lint-core lint-fix-core vet vet-core vet-backends test test-full test-core test-full-core test-backends test-race-core test-integration test-integration-all test-integration-mysql test-integration-sqlite test-integration-pgsql test-integration-picodata cover-html bench-all release-readiness-core release-readiness-pgsql release-readiness-backends release-version-check devup devwait devwait-mysql devwait-pgsql devwait-picodata devdown
 BACKEND_DIRS := backends/mysql backends/sqlite backends/pgsql backends/picodata
 CORE_PKGS := ./outbox/... ./shared/... ./tools/...
 CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
@@ -15,6 +15,11 @@ TEST_OUTBOXLIB_PSQL_DATABASENAME ?= tests-db-pgsql
 TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD ?= passWord!123
 TEST_OUTBOXLIB_PICODATA_LISTEN_HTTP ?= 8049
 TEST_OUTBOXLIB_PICODATA_DSN ?= postgres://admin:passWord!123@localhost:5049?sslmode=disable
+GOCACHE ?= $(CURDIR)/.cache/go-build
+GOMODCACHE ?= $(CURDIR)/.cache/go-mod
+GOPATH ?= $(CURDIR)/.cache/go-path
+GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
+export GOCACHE GOMODCACHE GOPATH GOLANGCI_LINT_CACHE
 export TEST_OUTBOXLIB_MYSQL_ADDRESS_LOCAL TEST_OUTBOXLIB_MYSQL_PORT_LOCAL TEST_OUTBOXLIB_MYSQL_PASSWORD
 export TEST_OUTBOXLIB_PSQL_ADDRESS_LOCAL TEST_OUTBOXLIB_PSQL_PORT_LOCAL
 export TEST_OUTBOXLIB_PSQL_USERNAME TEST_OUTBOXLIB_PSQL_DATABASENAME
@@ -25,7 +30,7 @@ release-version-check:
 	@printf '%s\n' "$(CORE_VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
 		(echo "CORE_VERSION must be an exact semver tag" && exit 2)
 
-release-readiness-core: release-version-check check
+release-readiness-core: release-version-check prepare check
 	@git diff --exit-code -- . ':!.cache'
 
 release-readiness-pgsql: release-version-check
@@ -46,7 +51,11 @@ release-readiness-backends: release-version-check
 		(cd $$d && GOWORK=off go mod tidy -diff && GOWORK=off go test ./...) || exit 1; \
 	done
 
-check: generate fmt vet lint test-core test-backends test-race-core cover-html
+full: prepare check
+
+prepare: generate fmt lint-fix
+
+check: fmt-check vet lint test-full
 check-all:
 	@status=0; \
 	$(MAKE) devup || status=$$?; \
@@ -60,17 +69,34 @@ generate:
 
 fmt: fmt-core fmt-backends
 
+fmt-check: fmt-check-core fmt-check-backends
+
 fmt-core:
 	go fmt ./...
 	gofumpt -l -w $(CORE_GO_FILES)
 	gci write -s standard -s default -s "prefix(github.com/assurrussa/outbox)" outbox shared tools
 
+fmt-check-core:
+	@unformatted="$$(gofumpt -l $(CORE_GO_FILES))"; \
+		test -z "$$unformatted" || { printf 'gofumpt changes are required:\n%s\nRun: make prepare\n' "$$unformatted" >&2; exit 1; }
+	@import_diff="$$(gci diff -s standard -s default -s "prefix(github.com/assurrussa/outbox)" $(CORE_GO_FILES))"; \
+		test -z "$$import_diff" || { printf 'gci changes are required:\n%s\nRun: make prepare\n' "$$import_diff" >&2; exit 1; }
+
 fmt-backends:
 	gofumpt -l -w $(BACKEND_GO_FILES)
 
+fmt-check-backends:
+	@unformatted="$$(gofumpt -l $(BACKEND_GO_FILES))"; \
+		test -z "$$unformatted" || { printf 'gofumpt changes are required:\n%s\nRun: make prepare\n' "$$unformatted" >&2; exit 1; }
+
 lint: lint-core
 
+lint-fix: lint-fix-core
+
 lint-core:
+	golangci-lint run -v --timeout=5m $(CORE_PKGS)
+
+lint-fix-core:
 	golangci-lint run -v --fix --timeout=5m $(CORE_PKGS)
 
 vet: vet-core vet-backends
@@ -83,8 +109,13 @@ vet-backends:
 
 test: test-core test-backends
 
+test-full: test-full-core test-backends
+
 test-core:
 	go test ./...
+
+test-full-core:
+	go test -race -cover -covermode=atomic -count=1 ./...
 
 test-backends:
 	@for d in $(BACKEND_DIRS); do (cd $$d && go test ./...); done
