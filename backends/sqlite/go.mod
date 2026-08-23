@@ -3,7 +3,7 @@ module github.com/assurrussa/outbox/backends/sqlite
 go 1.26
 
 require (
-	github.com/assurrussa/outbox v0.10.1
+	github.com/assurrussa/outbox v0.11.0
 	github.com/google/uuid v1.6.0
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/stretchr/testify v1.11.1

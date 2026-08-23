@@ -111,11 +111,14 @@ the backend-specific example README files for exact env and DSN behavior.
 
 ## Release-Oriented Checks
 
-Pin backend modules to a published core version:
+Pin all backend modules to a published core version and refresh their sums:
 
 ```sh
-make release-ready-backends CORE_VERSION=v0.10.1
+make release-ready-backends CORE_VERSION=v0.11.0
 ```
+
+This is the only mutating backend release-preparation command. It updates all
+four backend `go.mod` and `go.sum` pairs in one release change.
 
 Verify backend modules as standalone modules:
 
@@ -131,7 +134,7 @@ For a non-mutating pre-tag gate that also proves every backend resolves the
 exact core tag:
 
 ```sh
-make release-readiness-backends CORE_VERSION=v0.10.1
+make release-readiness-backends CORE_VERSION=v0.11.0
 ```
 
 ## Sandbox Note

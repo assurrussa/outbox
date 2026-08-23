@@ -3,7 +3,7 @@ module github.com/assurrussa/outbox/backends/picodata
 go 1.26
 
 require (
-	github.com/assurrussa/outbox v0.10.1
+	github.com/assurrussa/outbox v0.11.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/picodata/picodata-go v1.0.0

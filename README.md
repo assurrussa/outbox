@@ -285,19 +285,17 @@ make devdown
 Release prep for backend modules:
 
 ```sh
-# pin backend modules to a published core tag
-make release-ready-backends CORE_VERSION=v0.10.1
-
-# verify each backend as standalone module (without go.work)
-make release-verify-backends
+# pin all backend modules to a published core tag and refresh their sums
+make release-ready-backends CORE_VERSION=v0.11.0
 
 # non-mutating exact-version pre-tag gate
-make release-readiness-backends CORE_VERSION=v0.10.1
+make release-readiness-backends CORE_VERSION=v0.11.0
 ```
 
-The commands above name the currently published stable core. For the v0.11
-candidate, publish the immutable root `v0.11.0` tag first, then pin and verify
-each backend with `CORE_VERSION=v0.11.0`; do not move existing v0.10 tags.
+The commands above name the currently published stable core. Root releases are
+immutable and must exist before backend preparation. One backend release change
+updates all four modules; publish their path-qualified tags only after that
+change passes the standalone gate and merges.
 
 ## License
 

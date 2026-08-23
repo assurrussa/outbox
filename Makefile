@@ -1,10 +1,10 @@
 .DEFAULT_GOAL := check
-.PHONY: full prepare check check-all generate fmt fmt-check fmt-core fmt-check-core fmt-backends fmt-check-backends lint lint-fix lint-core lint-fix-core vet vet-core vet-backends test test-full test-core test-full-core test-backends test-race-core test-integration test-integration-all test-integration-mysql test-integration-sqlite test-integration-pgsql test-integration-picodata cover-html bench-all release-readiness-core release-readiness-pgsql release-readiness-backends release-version-check devup devwait devwait-mysql devwait-pgsql devwait-picodata devdown
+.PHONY: full prepare check check-all generate fmt fmt-check fmt-core fmt-check-core fmt-backends fmt-check-backends lint lint-fix lint-core lint-fix-core vet vet-core vet-backends test test-full test-core test-full-core test-backends test-race-core test-integration test-integration-all test-integration-mysql test-integration-sqlite test-integration-pgsql test-integration-picodata cover-html bench-all release-ready-backends release-verify-backends release-readiness-core release-readiness-pgsql release-readiness-backends release-version-check devup devwait devwait-mysql devwait-pgsql devwait-picodata devdown
 BACKEND_DIRS := backends/mysql backends/sqlite backends/pgsql backends/picodata
 CORE_PKGS := ./outbox/... ./shared/... ./tools/...
 CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
 BACKEND_GO_FILES := $(shell find backends -type f -name '*.go')
-CORE_VERSION ?= v0.10.1
+CORE_VERSION ?= v0.11.0
 TEST_OUTBOXLIB_MYSQL_ADDRESS_LOCAL ?= localhost
 TEST_OUTBOXLIB_MYSQL_PORT_LOCAL ?= 33306
 TEST_OUTBOXLIB_MYSQL_PASSWORD ?= tests-service
@@ -139,11 +139,12 @@ test-integration-pgsql:
 test-integration-picodata:
 	cd backends/picodata && go test -count=1 -p 1 -tags integration -race ./...
 
-release-ready-backends:
+release-ready-backends: release-version-check
 	@for d in $(BACKEND_DIRS); do \
 		echo "==> $$d use core $(CORE_VERSION)"; \
 		(cd $$d && \
-			go mod edit -require=github.com/assurrussa/outbox@$(CORE_VERSION)); \
+			go mod edit -require=github.com/assurrussa/outbox@$(CORE_VERSION) && \
+			GOWORK=off go mod tidy) || exit 1; \
 	done
 
 release-verify-backends:
