@@ -278,6 +278,21 @@ func (s *Service) findAndProcessLegacyJob(ctx context.Context, log logger.Logger
 			slog.Int("attempt_number", job.Attempts),
 		)
 
+		if IsPermanent(err) {
+			log.WarnContext(ctx, "drop to dlq: permanent job failure",
+				slog.String("job_name", job.Name),
+				slog.String("job_id", job.ID.String()),
+				slog.Int("attempt_number", job.Attempts),
+			)
+			return s.dlq(
+				ctx,
+				job.ID,
+				job.Name,
+				job.Payload,
+				fmt.Sprintf("permanent failure: %v", err),
+			)
+		}
+
 		if job.Attempts >= j.MaxAttempts() {
 			log.WarnContext(ctx, "drop to dlq: job max attempts exceeded",
 				slog.String("job_name", job.Name),

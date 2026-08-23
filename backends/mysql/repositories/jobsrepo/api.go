@@ -195,6 +195,38 @@ func (r *Repo) DeleteJobWithLease(
 	return result.RowsAffected()
 }
 
+func (r *Repo) RescheduleJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	if jobID.IsZero() {
+		return 0, errors.New("invalid job id")
+	}
+	if err := leaseToken.Validate(); err != nil {
+		return 0, fmt.Errorf("invalid lease token: %w", err)
+	}
+	query := sharedstrings.Concate(`UPDATE %s
+		SET available_at = ?, reserved_at = NULL, lease_token = ?
+		WHERE id = ? AND lease_token = ? AND reserved_at > ?;`, r.tableName)
+	result, err := r.executor(ctx).ExecContext(
+		ctx,
+		query,
+		availableAt.UTC(),
+		types.LeaseTokenNil,
+		jobID,
+		leaseToken,
+		now.UTC(),
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected()
+}
+
 func (r *Repo) CreateJobVersionedUnique(
 	ctx context.Context,
 	deduplicationKey string,
@@ -203,12 +235,26 @@ func (r *Repo) CreateJobVersionedUnique(
 	payload string,
 	availableAt time.Time,
 ) (types.JobID, error) {
+	result, err := r.CreateJobVersionedUniqueResult(
+		ctx, deduplicationKey, name, schemaVersion, payload, availableAt,
+	)
+	return result.JobID, err
+}
+
+func (r *Repo) CreateJobVersionedUniqueResult(
+	ctx context.Context,
+	deduplicationKey string,
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (coreoutbox.UniquePutResult, error) {
 	if deduplicationKey == "" {
-		return types.JobIDNil, errors.New("empty deduplication key")
+		return coreoutbox.UniquePutResult{}, errors.New("empty deduplication key")
 	}
 	capability := coreoutbox.JobCapability{Name: name, SchemaVersion: schemaVersion}
 	if err := capability.Validate(); err != nil {
-		return types.JobIDNil, fmt.Errorf("validate capability: %w", err)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("validate capability: %w", err)
 	}
 	if tx := transaction.GetTx(ctx); tx != nil {
 		return r.createJobVersionedUnique(ctx, tx, deduplicationKey, name, schemaVersion, payload, availableAt)
@@ -216,21 +262,21 @@ func (r *Repo) CreateJobVersionedUnique(
 
 	tx, err := r.client.DB().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return types.JobIDNil, fmt.Errorf("begin idempotency tx: %w", err)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("begin idempotency tx: %w", err)
 	}
 	txCtx := transaction.WithTx(ctx, tx)
-	jobID, err := r.createJobVersionedUnique(
+	result, err := r.createJobVersionedUnique(
 		txCtx, tx, deduplicationKey, name, schemaVersion, payload, availableAt,
 	)
 	if err != nil {
 		_ = tx.Rollback()
-		return types.JobIDNil, err
+		return coreoutbox.UniquePutResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return types.JobIDNil, fmt.Errorf("commit idempotency tx: %w", err)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("commit idempotency tx: %w", err)
 	}
 
-	return jobID, nil
+	return result, nil
 }
 
 func (r *Repo) createJobVersionedUnique(
@@ -241,7 +287,7 @@ func (r *Repo) createJobVersionedUnique(
 	schemaVersion coreoutbox.SchemaVersion,
 	payload string,
 	availableAt time.Time,
-) (types.JobID, error) {
+) (coreoutbox.UniquePutResult, error) {
 	jobID := types.NewJobID()
 	createdAt := time.Now().UTC()
 	fingerprint := jobFingerprint(name, schemaVersion, payload, availableAt)
@@ -250,7 +296,7 @@ func (r *Repo) createJobVersionedUnique(
 		VALUES (?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE deduplication_key = deduplication_key;`
 	if _, err := exec.ExecContext(ctx, insertKey, deduplicationKey, jobID, fingerprint, createdAt); err != nil {
-		return types.JobIDNil, fmt.Errorf("register idempotency key: %w", err)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("register idempotency key: %w", err)
 	}
 
 	var storedJobID types.JobID
@@ -260,13 +306,13 @@ func (r *Repo) createJobVersionedUnique(
 		`SELECT job_id, fingerprint FROM outbox_job_idempotency_keys WHERE deduplication_key = ?;`,
 		deduplicationKey,
 	).Scan(&storedJobID, &storedFingerprint); err != nil {
-		return types.JobIDNil, fmt.Errorf("read idempotency key: %w", err)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("read idempotency key: %w", err)
 	}
 	if storedFingerprint != fingerprint {
-		return types.JobIDNil, coreoutbox.ErrIdempotencyConflict
+		return coreoutbox.UniquePutResult{}, coreoutbox.ErrIdempotencyConflict
 	}
 	if storedJobID != jobID {
-		return storedJobID, nil
+		return coreoutbox.UniquePutResult{JobID: storedJobID, Created: false}, nil
 	}
 
 	insertJob := sharedstrings.Concate(`INSERT INTO %s (
@@ -277,10 +323,10 @@ func (r *Repo) createJobVersionedUnique(
 		ctx, insertJob, storedJobID, defaultQueue, name, schemaVersion, payload,
 		types.LeaseTokenNil, deduplicationKey, availableAt.UTC(), createdAt,
 	); err != nil {
-		return types.JobIDNil, fmt.Errorf("create idempotent job: %w", err)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("create idempotent job: %w", err)
 	}
 
-	return storedJobID, nil
+	return coreoutbox.UniquePutResult{JobID: storedJobID, Created: true}, nil
 }
 
 func (r *Repo) PruneJobIdempotencyKeys(ctx context.Context, before time.Time, limit int) (int64, error) {

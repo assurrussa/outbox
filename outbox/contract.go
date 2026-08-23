@@ -24,6 +24,26 @@ type VersionedPutter interface {
 	) (types.JobID, error)
 }
 
+// UniquePutResult describes whether a unique put created a new job or
+// resolved an existing idempotency tombstone with identical content.
+type UniquePutResult struct {
+	JobID   types.JobID
+	Created bool
+}
+
+// UniqueVersionedPutter stores a versioned job under an immutable
+// deduplication key.
+type UniqueVersionedPutter interface {
+	PutVersionedUnique(
+		ctx context.Context,
+		deduplicationKey string,
+		name string,
+		schemaVersion SchemaVersion,
+		payload string,
+		availableAt time.Time,
+	) (UniquePutResult, error)
+}
+
 type FanoutPutter interface {
 	PutFanout(
 		ctx context.Context,
@@ -82,6 +102,19 @@ type CapabilityJobsRepository interface {
 	) (int64, error)
 }
 
+// ReschedulableJobsRepository atomically releases an owned lease and moves the
+// job's next availability. Implementations must fence the update by job ID,
+// lease token, and an unexpired lease.
+type ReschedulableJobsRepository interface {
+	RescheduleJobWithLease(
+		ctx context.Context,
+		jobID types.JobID,
+		leaseToken LeaseToken,
+		now time.Time,
+		availableAt time.Time,
+	) (int64, error)
+}
+
 // FanoutJobsRepository creates jobs under an immutable idempotency key.
 // Reusing a key with different job content must return ErrIdempotencyConflict.
 type FanoutJobsRepository interface {
@@ -93,6 +126,19 @@ type FanoutJobsRepository interface {
 		payload string,
 		availableAt time.Time,
 	) (types.JobID, error)
+}
+
+// UniqueJobsRepository extends unique job creation with a created/replayed
+// result while keeping FanoutJobsRepository source-compatible.
+type UniqueJobsRepository interface {
+	CreateJobVersionedUniqueResult(
+		ctx context.Context,
+		deduplicationKey string,
+		name string,
+		schemaVersion SchemaVersion,
+		payload string,
+		availableAt time.Time,
+	) (UniquePutResult, error)
 }
 
 // FanoutMaintenanceRepository prunes completed idempotency tombstones only

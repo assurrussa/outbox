@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -50,6 +51,44 @@ func (s *Service) PutVersioned(
 	}
 
 	return jobID, nil
+}
+
+// PutVersionedUnique stores one versioned job under an immutable
+// deduplication key and reports whether this call created it. A replay with
+// different content returns ErrIdempotencyConflict from the repository.
+func (s *Service) PutVersionedUnique(
+	ctx context.Context,
+	deduplicationKey string,
+	name string,
+	schemaVersion SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (UniquePutResult, error) {
+	if s.uniqueJobsRepo == nil {
+		return UniquePutResult{}, ErrUniqueRepositoryNotConfigured
+	}
+	if deduplicationKey == "" {
+		return UniquePutResult{}, errors.New("outbox deduplication key is empty")
+	}
+
+	capability := JobCapability{Name: name, SchemaVersion: schemaVersion}
+	if err := capability.Validate(); err != nil {
+		return UniquePutResult{}, err
+	}
+
+	result, err := s.uniqueJobsRepo.CreateJobVersionedUniqueResult(
+		ctx,
+		deduplicationKey,
+		name,
+		schemaVersion,
+		payload,
+		availableAt,
+	)
+	if err != nil {
+		return UniquePutResult{}, fmt.Errorf("create unique versioned job: %w", err)
+	}
+
+	return result, nil
 }
 
 // GetQueueStats returns queue totals when JobsStatRepository is configured.

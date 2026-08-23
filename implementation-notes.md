@@ -1,5 +1,20 @@
 # Implementation Notes
 
+## 2026-08-23: generic messenger integration foundation
+
+- Started an additive `v0.11` candidate for the new `gomessenger` durable
+  transport adapter. Existing `PutVersioned`, fan-out, claim, lease, and DLQ
+  contracts remain source-compatible.
+- A new unique-put capability reports whether a deduplication key created a
+  job or replayed an existing tombstone. Existing unique repository methods
+  remain as compatibility wrappers.
+- Handler disposition errors distinguish permanent failures from scheduled
+  retries. Capability workers keep lease fencing for immediate DLQ and
+  reschedule operations; retry timing is persisted instead of sleeping in a
+  worker.
+- Publication, tags, and downstream module version pins remain separate
+  release steps after the full repository and clean-consumer gates pass.
+
 ## 2026-07-14: stable v0.10.0 promotion
 
 - Promoted the already verified capability/fan-out contract from

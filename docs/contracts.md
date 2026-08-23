@@ -87,6 +87,20 @@ In capability mode:
   still current;
 - versioned DLQ rows retain the source schema version.
 
+When the configured capability repository also implements
+`ReschedulableJobsRepository`, a handler may return `RetryAt(err, at)`. The
+service increments the current attempt and atomically moves `available_at`
+while clearing the lease token and reservation. The update is conditional on
+job ID, the current token, and a lease that is still live at `now`. Zero
+affected rows returns `ErrLeaseLost`; it must not be treated as a successful
+schedule. Attempt exhaustion still moves the job to DLQ.
+
+`Permanent(err)` classifies an input or policy failure that cannot succeed by
+retrying unchanged content. Capability mode moves it directly to the
+schema-preserving DLQ with the same fenced transaction. A nil error remains
+nil and wrapped disposition errors retain their original cause for
+`errors.Is`/`errors.As`.
+
 Delivery remains at-least-once. A handler may finish its external side effect
 and lose the fence before ack, so payloads need a stable delivery/idempotency
 identifier. Fencing prevents a stale worker from deleting a job owned by a
@@ -173,6 +187,20 @@ and version-preserving DLQ writes. PostgreSQL, MySQL, and SQLite implement the
 complete capability and fan-out contracts. Picodata implements only the safe
 single-statement/CAS capability primitives described below.
 
+`UniqueJobsRepository` is an additive extension of
+`FanoutJobsRepository`. Its `CreateJobVersionedUniqueResult` returns both the
+stable job ID and whether the immutable key created a new record. An identical
+active-job or tombstone replay returns `Created == false`; a mismatch in name,
+schema version, payload, or availability returns `ErrIdempotencyConflict`.
+`Service.PutVersionedUnique` exposes that result through the public
+`UniqueVersionedPutter` contract.
+
+`ReschedulableJobsRepository` is separate from
+`CapabilityJobsRepository` so custom stores are not forced to implement a new
+method. `WithCapabilityJobsRepo` detects both extensions when available;
+explicit options support repositories split across different values. Direct
+unique and reschedulable options still require capability mode at construction.
+
 ## Backend Pattern
 
 Every backend module follows the same consumer shape:
@@ -202,6 +230,8 @@ MySQL:
   `SELECT ... FOR UPDATE SKIP LOCKED`.
 - Embedded migrations add schema versions, fenced leases, and an immutable
   idempotency registry.
+- The jobs repository implements unique put results and fenced persisted
+  rescheduling.
 - `runtime.Open` is the standard capability/fan-out worker composition.
 
 SQLite:
@@ -210,6 +240,8 @@ SQLite:
   single-writer database.
 - Embedded migrations add schema versions, fenced leases, and an immutable
   idempotency registry.
+- The jobs repository implements unique put results and fenced persisted
+  rescheduling.
 - `runtime.Open` is the standard capability/fan-out worker composition.
 
 Postgres:
@@ -221,6 +253,8 @@ Postgres:
   versions without rewriting existing v1 rows.
 - `jobsrepo.Repo` and `jobsfailedrepo.Repo` implement the opt-in capability
 contracts.
+- `jobsrepo.Repo` implements unique put results and fenced persisted
+  rescheduling.
 
 `FanoutJobsRepository` is another additive interface for immutable unique job
 creation. `FanoutMaintenanceRepository` is optional operational maintenance;
@@ -238,8 +272,9 @@ Picodata:
 - The current transaction manager is best-effort because the Picodata client API
   does not provide connection-pinned SQL transactions.
 - Versioned create, capability-filtered claim, heartbeat, conditional leased
-  delete, and versioned failed-job persistence are available as storage
-  primitives.
+  delete, fenced persisted rescheduling, and versioned failed-job persistence
+  are available as storage primitives.
+- Unique put results and the immutable idempotency registry are not available.
 - The backend deliberately does not implement `FanoutJobsRepository` or expose
   the standard runtime facade. Best-effort callbacks are not an atomic fan-out
   or DLQ boundary.

@@ -71,6 +71,58 @@ func TestSQLiteCapabilityLeaseRejectsStaleOwner(t *testing.T) {
 	require.Equal(t, int64(1), affected)
 }
 
+func TestSQLiteCapabilityRescheduleIsFencedAndReleasesLease(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	jobID, err := ts.jobsRepo.CreateJobVersioned(ctx, "versioned", 2, `{}`, now)
+	require.NoError(t, err)
+	token := types.NewLeaseToken()
+	job, err := ts.jobsRepo.FindAndReserveJobForCapabilities(
+		ctx, now, now.Add(time.Minute), token,
+		[]outbox.JobCapability{{Name: "versioned", SchemaVersion: 2}},
+	)
+	require.NoError(t, err)
+	retryAt := now.Add(time.Hour)
+
+	affected, err := ts.jobsRepo.RescheduleJobWithLease(ctx, job.ID, types.NewLeaseToken(), now, retryAt)
+	require.NoError(t, err)
+	require.Zero(t, affected)
+	affected, err = ts.jobsRepo.RescheduleJobWithLease(ctx, job.ID, token, now, retryAt)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected)
+
+	stored, err := ts.jobsRepo.GetByID(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, retryAt, stored.AvailableAt)
+	require.False(t, stored.ReservedAt.Valid)
+	require.True(t, stored.LeaseToken.IsZero())
+	_, err = ts.jobsRepo.FindAndReserveJobForCapabilities(
+		ctx, retryAt.Add(-time.Millisecond), retryAt.Add(time.Minute), types.NewLeaseToken(),
+		[]outbox.JobCapability{{Name: "versioned", SchemaVersion: 2}},
+	)
+	require.ErrorIs(t, err, sharederrors.ErrNoJobs)
+}
+
+func TestSQLiteUniqueResultDistinguishesCreateFromReplay(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+
+	availableAt := time.Now().UTC().Truncate(time.Millisecond)
+	first, err := ts.jobsRepo.CreateJobVersionedUniqueResult(
+		ctx, "message-1", "publish", 1, `{}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.True(t, first.Created)
+	replayed, err := ts.jobsRepo.CreateJobVersionedUniqueResult(
+		ctx, "message-1", "publish", 1, `{}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.False(t, replayed.Created)
+	require.Equal(t, first.JobID, replayed.JobID)
+}
+
 func TestSQLiteFailedJobPreservesSchemaVersion(t *testing.T) {
 	ctx, _, ts := NewTestSQLiteSuite(t)
 	defer ts.cleanUp(ctx)
