@@ -17,6 +17,8 @@ const DefaultSchemaVersion SchemaVersion = types.DefaultSchemaVersion
 
 var (
 	ErrCapabilityRepositoryNotConfigured = errors.New("outbox capability repository is not configured")
+	ErrUniqueRepositoryNotConfigured     = errors.New("outbox unique repository is not configured")
+	ErrRescheduleRepositoryNotConfigured = errors.New("outbox reschedule repository is not configured")
 	ErrInvalidSchemaVersion              = errors.New("outbox schema version must be positive")
 	ErrLeaseLost                         = errors.New("outbox job lease lost")
 	ErrUnsupportedClaim                  = errors.New("outbox repository claimed an unsupported capability")

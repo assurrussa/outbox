@@ -30,7 +30,7 @@ linters:
     - godox
     - goheader
     - gomoddirectives
-    - gomodguard
+    - gomodguard_v2
     - goprintffuncname
     - gosec
     - govet
@@ -226,7 +226,7 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(github.com/assurrussa/outbox)
+        - localmodule
   exclusions:
     generated: lax
     paths:

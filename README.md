@@ -135,6 +135,65 @@ fan-out contracts. Picodata implements versioned/CAS capability storage only;
 it deliberately omits fan-out and standard runtime composition until its client
 can provide a real atomic transaction boundary.
 
+## Unique puts and persisted retry dispositions (v0.11 candidate)
+
+`PutVersionedUnique` is an additive producer contract for one immutable
+deduplication key. PostgreSQL, MySQL, and SQLite repositories implement it and
+are detected automatically by `WithCapabilityJobsRepo(...)` or
+`WithFanoutJobsRepo(...)`:
+
+```go
+result, err := svc.PutVersionedUnique(
+	ctx,
+	messageID,
+	"integration.message.publish",
+	1,
+	canonicalEnvelope,
+	messageTime,
+)
+if err != nil {
+	return err
+}
+if !result.Created {
+	// Identical content was already staged or completed.
+}
+```
+
+The deduplication key covers name, schema version, payload, and availability.
+An identical replay returns the original job ID with `Created == false` even
+after the active job was acknowledged; different content returns
+`ErrIdempotencyConflict`. The host owns bounded tombstone retention and must not
+prune a key while the message can still be replayed.
+
+Capability handlers can classify a failure without changing the `Job`
+interface:
+
+```go
+func (j *PublishJob) Handle(ctx context.Context, payload string) error {
+	if err := j.publisher.Publish(ctx, payload); err != nil {
+		if errors.Is(err, ErrInvalidEnvelope) {
+			return outbox.Permanent(err)
+		}
+		return outbox.RetryAt(err, time.Now().Add(30*time.Second))
+	}
+	return nil
+}
+```
+
+`Permanent` moves the owned job directly to DLQ. `RetryAt` atomically persists
+the next availability and releases the current lease; it never sleeps in a
+worker. Both terminal operations remain fenced by job ID, lease token, and an
+unexpired lease. Attempt limits still take precedence over a requested retry.
+Standard repositories are auto-detected; split compositions can use
+`WithUniqueJobsRepo(...)` and `WithReschedulableJobsRepo(...)` explicitly.
+Both explicit options require `WithCapabilityJobsRepo(...)`; construction fails
+closed rather than allowing versioned work onto the legacy claim path.
+
+Picodata implements fenced rescheduling but not unique puts, because its
+current transaction boundary cannot honestly provide the complete immutable
+idempotency contract. `PutVersionedUnique` therefore fails closed there unless
+the host supplies a separate `UniqueJobsRepository`.
+
 ## Durable fan-out (opt-in)
 
 Configure `WithFanoutJobsRepo(jobsRepo)` together with capability mode when one
@@ -235,6 +294,10 @@ make release-verify-backends
 # non-mutating exact-version pre-tag gate
 make release-readiness-backends CORE_VERSION=v0.10.1
 ```
+
+The commands above name the currently published stable core. For the v0.11
+candidate, publish the immutable root `v0.11.0` tag first, then pin and verify
+each backend with `CORE_VERSION=v0.11.0`; do not move existing v0.10 tags.
 
 ## License
 

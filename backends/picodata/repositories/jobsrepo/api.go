@@ -213,6 +213,38 @@ func (r *Repo) DeleteJobWithLease(
 	return result.RowsAffected(), nil
 }
 
+func (r *Repo) RescheduleJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	if jobID.IsZero() {
+		return 0, errors.New("invalid job id")
+	}
+	if err := leaseToken.Validate(); err != nil {
+		return 0, fmt.Errorf("invalid lease token: %w", err)
+	}
+	query := strings.Concate(`UPDATE %s
+		SET available_at = $1, reserved_at = NULL, lease_token = $2
+		WHERE id = $3 AND lease_token = $4 AND reserved_at > $5;`, r.tableName)
+	result, err := r.executor(ctx).Exec(
+		ctx,
+		query,
+		availableAt.UTC(),
+		types.LeaseTokenNil,
+		jobID,
+		leaseToken,
+		now.UTC(),
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected(), nil
+}
+
 func (r *Repo) DeleteJob(ctx context.Context, jobID types.JobID) (int64, error) {
 	query := strings.Concate(`DELETE FROM %s WHERE id = $1;`, r.tableName)
 

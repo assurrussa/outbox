@@ -97,6 +97,9 @@ func (s *Service) findAndProcessCapabilityJob(
 		if errors.Is(err, ErrLeaseLost) {
 			return err
 		}
+		if IsPermanent(err) {
+			return s.dlqLeased(ctx, job, fmt.Sprintf("permanent failure: %v", err))
+		}
 
 		if job.Attempts >= handler.MaxAttempts() {
 			return s.dlqLeased(
@@ -105,11 +108,43 @@ func (s *Service) findAndProcessCapabilityJob(
 				fmt.Sprintf("max attempts exceeded: %v", err),
 			)
 		}
+		if availableAt, ok := RetryTime(err); ok {
+			return s.rescheduleLeased(ctx, job, availableAt)
+		}
 
 		return nil
 	}
 
 	return s.ackLeased(ctx, job)
+}
+
+func (s *Service) rescheduleLeased(ctx context.Context, job models.Job, availableAt time.Time) error {
+	if s.reschedulableJobsRepo == nil {
+		return ErrRescheduleRepositoryNotConfigured
+	}
+
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseFinalizationTimeout)
+	defer cancel()
+
+	now := time.Now().UTC()
+	if availableAt.Before(now) {
+		availableAt = now
+	}
+	affected, err := s.reschedulableJobsRepo.RescheduleJobWithLease(
+		finalizeCtx,
+		job.ID,
+		job.LeaseToken,
+		now,
+		availableAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("reschedule capability job: %w", err)
+	}
+	if affected != 1 {
+		return ErrLeaseLost
+	}
+
+	return nil
 }
 
 func (s *Service) executeLeasedJob(ctx context.Context, handler Job, job models.Job) error {

@@ -112,14 +112,28 @@ func (r *Repo) CreateJobVersionedUnique(
 	payload string,
 	availableAt time.Time,
 ) (types.JobID, error) {
+	result, err := r.CreateJobVersionedUniqueResult(
+		ctx, deduplicationKey, name, schemaVersion, payload, availableAt,
+	)
+	return result.JobID, err
+}
+
+func (r *Repo) CreateJobVersionedUniqueResult(
+	ctx context.Context,
+	deduplicationKey string,
+	name string,
+	schemaVersion coreoutbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (coreoutbox.UniquePutResult, error) {
 	const op = "jobs.repo.CreateJobVersionedUnique"
 
 	if deduplicationKey == "" {
-		return types.JobIDNil, fmt.Errorf("%s: empty deduplication key", op)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("%s: empty deduplication key", op)
 	}
 	capability := coreoutbox.JobCapability{Name: name, SchemaVersion: schemaVersion}
 	if err := capability.Validate(); err != nil {
-		return types.JobIDNil, fmt.Errorf("%s: validate capability: %w", op, err)
+		return coreoutbox.UniquePutResult{}, fmt.Errorf("%s: validate capability: %w", op, err)
 	}
 
 	jobID := types.NewJobID()
@@ -167,13 +181,18 @@ func (r *Repo) CreateJobVersionedUnique(
 	)
 	if err != nil {
 		if pgxscan.NotFound(err) {
-			return types.JobIDNil, coreoutbox.ErrIdempotencyConflict
+			return coreoutbox.UniquePutResult{}, coreoutbox.ErrIdempotencyConflict
 		}
 
-		return types.JobIDNil, fmt.Errorf("%s: create unique job: %w", op, pgsql.ErrorTransform(err))
+		return coreoutbox.UniquePutResult{}, fmt.Errorf(
+			"%s: create unique job: %w", op, pgsql.ErrorTransform(err),
+		)
 	}
 
-	return storedJobID, nil
+	return coreoutbox.UniquePutResult{
+		JobID:   storedJobID,
+		Created: storedJobID == jobID,
+	}, nil
 }
 
 func jobFingerprint(
@@ -390,6 +409,38 @@ func (r *Repo) DeleteJobWithLease(
 	result, err := r.pgsql.DB().Execx(ctx, op, sqlBuilder)
 	if err != nil {
 		return 0, fmt.Errorf("%s: delete leased job: %w", op, pgsql.ErrorTransform(err))
+	}
+
+	return result.RowsAffected(), nil
+}
+
+func (r *Repo) RescheduleJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	const op = "jobs.repo.RescheduleJobWithLease"
+
+	if jobID.IsZero() {
+		return 0, fmt.Errorf("%s: invalid id", op)
+	}
+	if err := leaseToken.Validate(); err != nil {
+		return 0, fmt.Errorf("%s: invalid lease token: %w", op, err)
+	}
+
+	sqlBuilder := querybuilder.BuilderDollar().
+		Update(tableName).
+		Set(columnAvailableAt, availableAt.UTC()).
+		Set(columnReservedAt, nil).
+		Set(columnLeaseToken, types.LeaseTokenNil).
+		Where(squirrel.Eq{"id": jobID, columnLeaseToken: leaseToken}).
+		Where(squirrel.Gt{columnReservedAt: now.UTC()})
+
+	result, err := r.pgsql.DB().Execx(ctx, op, sqlBuilder)
+	if err != nil {
+		return 0, fmt.Errorf("%s: reschedule leased job: %w", op, pgsql.ErrorTransform(err))
 	}
 
 	return result.RowsAffected(), nil

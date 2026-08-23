@@ -68,6 +68,35 @@ func TestPicodataCapabilityLeaseRejectsStaleOwner(t *testing.T) {
 	require.Equal(t, int64(1), affected)
 }
 
+func TestPicodataCapabilityRescheduleIsFencedAndReleasesLease(t *testing.T) {
+	ctx, _, ts := NewTestPicodataSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC()
+	jobID, err := ts.jobsRepo.CreateJobVersioned(ctx, "versioned", 2, `{}`, now)
+	require.NoError(t, err)
+	token := types.NewLeaseToken()
+	job, err := ts.jobsRepo.FindAndReserveJobForCapabilities(
+		ctx, now, now.Add(time.Minute), token,
+		[]outbox.JobCapability{{Name: "versioned", SchemaVersion: 2}},
+	)
+	require.NoError(t, err)
+	retryAt := now.Add(time.Hour)
+
+	affected, err := ts.jobsRepo.RescheduleJobWithLease(ctx, job.ID, types.NewLeaseToken(), now, retryAt)
+	require.NoError(t, err)
+	require.Zero(t, affected)
+	affected, err = ts.jobsRepo.RescheduleJobWithLease(ctx, job.ID, token, now, retryAt)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected)
+
+	stored, err := ts.jobsRepo.GetByID(ctx, jobID)
+	require.NoError(t, err)
+	require.WithinDuration(t, retryAt, stored.AvailableAt, time.Microsecond)
+	require.False(t, stored.ReservedAt.Valid)
+	require.True(t, stored.LeaseToken.IsZero())
+}
+
 func TestPicodataFailedJobPreservesSchemaVersion(t *testing.T) {
 	ctx, _, ts := NewTestPicodataSuite(t)
 	defer ts.cleanUp(ctx)

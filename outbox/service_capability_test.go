@@ -288,6 +288,144 @@ func TestCapabilityModeDLQPreservesSchemaVersion(t *testing.T) {
 	require.Equal(t, outbox.SchemaVersion(2), failed[0].SchemaVersion)
 }
 
+func TestPutVersionedUniqueReportsCreatedAndReplay(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	availableAt := time.Now().UTC().Truncate(time.Microsecond)
+
+	first, err := svc.PutVersionedUnique(
+		context.Background(), "message-1", "publish", 2, `{"revision":2}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.True(t, first.Created)
+	require.False(t, first.JobID.IsZero())
+
+	replayed, err := svc.PutVersionedUnique(
+		context.Background(), "message-1", "publish", 2, `{"revision":2}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.False(t, replayed.Created)
+	require.Equal(t, first.JobID, replayed.JobID)
+	require.Len(t, repo.Jobs(), 1)
+
+	_, err = svc.PutVersionedUnique(
+		context.Background(), "message-1", "publish", 2, `{"revision":3}`, availableAt,
+	)
+	require.ErrorIs(t, err, outbox.ErrIdempotencyConflict)
+}
+
+func TestUniqueAndReschedulableRepositoriesRequireCapabilityMode(t *testing.T) {
+	t.Parallel()
+
+	for name, option := range map[string]outbox.OptOptionsSetter{
+		"unique":        outbox.WithUniqueJobsRepo(newCapabilityRepo()),
+		"reschedulable": outbox.WithReschedulableJobsRepo(newCapabilityRepo()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repo := newCapabilityRepo()
+			_, err := outbox.New(
+				outbox.WithJobsRepo(repo),
+				outbox.WithJobsFailedRepo(repo),
+				outbox.WithTransactor(repo),
+				option,
+			)
+			require.ErrorContains(t, err, "requires capabilityJobsRepo")
+		})
+	}
+}
+
+func TestCapabilityModePermanentFailureMovesDirectlyToDLQ(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	svc.MustRegisterJob(capabilityJob{
+		name:        "permanent",
+		version:     1,
+		maxAttempts: 10,
+		handle: func(context.Context, string) error {
+			return outbox.Permanent(errors.New("invalid payload"))
+		},
+	})
+	_, err := svc.PutVersioned(context.Background(), "permanent", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	require.NoError(t, svc.Run(ctx))
+	require.Empty(t, repo.Jobs())
+	require.Len(t, repo.Failed(), 1)
+	require.Contains(t, repo.Failed()[0].Reason, "permanent failure")
+}
+
+func TestCapabilityModeRetryAtPersistsScheduleAndReleasesLease(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	retryAt := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	svc.MustRegisterJob(capabilityJob{
+		name:    "scheduled-retry",
+		version: 1,
+		handle: func(context.Context, string) error {
+			return outbox.RetryAt(errors.New("broker unavailable"), retryAt)
+		},
+	})
+	_, err := svc.PutVersioned(context.Background(), "scheduled-retry", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	require.NoError(t, svc.Run(ctx))
+
+	jobs := repo.Jobs()
+	require.Len(t, jobs, 1)
+	require.Equal(t, retryAt, jobs[0].AvailableAt)
+	require.False(t, jobs[0].ReservedAt.Valid)
+	require.Equal(t, types.LeaseTokenNil, jobs[0].LeaseToken)
+	require.Equal(t, 1, jobs[0].Attempts)
+	require.Empty(t, repo.Failed())
+}
+
+func TestCapabilityModeRetryAtStillHonorsMaxAttempts(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
+	svc.MustRegisterJob(capabilityJob{
+		name:        "bounded-retry",
+		version:     1,
+		maxAttempts: 1,
+		handle: func(context.Context, string) error {
+			return outbox.RetryAt(errors.New("still unavailable"), time.Now().UTC().Add(time.Hour))
+		},
+	})
+	_, err := svc.PutVersioned(context.Background(), "bounded-retry", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	require.NoError(t, svc.Run(ctx))
+	require.Empty(t, repo.Jobs())
+	require.Len(t, repo.Failed(), 1)
+}
+
+func TestCapabilityModeRetryAtFailsClosedAfterFenceLoss(t *testing.T) {
+	repo := newCapabilityRepo()
+	repo.loseLeaseOnReschedule = true
+	svc := newCapabilityService(t, repo)
+	svc.MustRegisterJob(capabilityJob{
+		name:    "lost-reschedule",
+		version: 1,
+		handle: func(context.Context, string) error {
+			return outbox.RetryAt(errors.New("retry"), time.Now().UTC().Add(time.Hour))
+		},
+	})
+	_, err := svc.PutVersioned(context.Background(), "lost-reschedule", 1, `{}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = svc.Run(ctx)
+	require.ErrorIs(t, err, outbox.ErrLeaseLost)
+	require.Len(t, repo.Jobs(), 1)
+}
+
 func TestVersionedCapabilityRequiresCapabilityRepositories(t *testing.T) {
 	repo := newRuntimeRepo()
 	svc := newRuntimeService(t, repo)
@@ -360,9 +498,10 @@ type capabilityRepo struct {
 	failed          []models.JobFailed
 	idempotencyJobs map[string]idempotencyJob
 
-	extendCount       int
-	loseLeaseOnExtend bool
-	loseLeaseOnDelete bool
+	extendCount           int
+	loseLeaseOnExtend     bool
+	loseLeaseOnDelete     bool
+	loseLeaseOnReschedule bool
 }
 
 func newCapabilityRepo() *capabilityRepo {
@@ -412,23 +551,37 @@ func (r *capabilityRepo) CreateJobVersioned(
 }
 
 func (r *capabilityRepo) CreateJobVersionedUnique(
-	_ context.Context,
+	ctx context.Context,
 	deduplicationKey string,
 	name string,
 	schemaVersion outbox.SchemaVersion,
 	payload string,
 	availableAt time.Time,
 ) (types.JobID, error) {
+	result, err := r.CreateJobVersionedUniqueResult(
+		ctx, deduplicationKey, name, schemaVersion, payload, availableAt,
+	)
+	return result.JobID, err
+}
+
+func (r *capabilityRepo) CreateJobVersionedUniqueResult(
+	_ context.Context,
+	deduplicationKey string,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (outbox.UniquePutResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if existing, ok := r.idempotencyJobs[deduplicationKey]; ok {
 		if existing.name != name || existing.schemaVersion != schemaVersion ||
 			existing.payload != payload || !existing.availableAt.Equal(availableAt) {
-			return types.JobIDNil, outbox.ErrIdempotencyConflict
+			return outbox.UniquePutResult{}, outbox.ErrIdempotencyConflict
 		}
 
-		return existing.id, nil
+		return outbox.UniquePutResult{JobID: existing.id, Created: false}, nil
 	}
 
 	id := types.NewJobID()
@@ -450,7 +603,7 @@ func (r *capabilityRepo) CreateJobVersionedUnique(
 		CreatedAt:     time.Now().UTC(),
 	})
 
-	return id, nil
+	return outbox.UniquePutResult{JobID: id, Created: true}, nil
 }
 
 func (r *capabilityRepo) FindAndReserveJob(
@@ -553,6 +706,33 @@ func (r *capabilityRepo) DeleteJobWithLease(
 	}
 
 	return r.deleteJob(jobID, leaseToken, now, true), nil
+}
+
+func (r *capabilityRepo) RescheduleJobWithLease(
+	_ context.Context,
+	jobID types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.loseLeaseOnReschedule {
+		return 0, nil
+	}
+	for i := range r.jobs {
+		job := r.jobs[i]
+		if job.ID != jobID || job.LeaseToken != leaseToken || !job.ReservedAt.Time.After(now) {
+			continue
+		}
+		job.AvailableAt = availableAt.UTC()
+		job.ReservedAt = sql.NullTime{}
+		job.LeaseToken = types.LeaseTokenNil
+		r.jobs[i] = job
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (r *capabilityRepo) deleteJob(
@@ -671,6 +851,8 @@ var (
 	_ outbox.JobsRepository                 = (*capabilityRepo)(nil)
 	_ outbox.CapabilityJobsRepository       = (*capabilityRepo)(nil)
 	_ outbox.FanoutJobsRepository           = (*capabilityRepo)(nil)
+	_ outbox.UniqueJobsRepository           = (*capabilityRepo)(nil)
+	_ outbox.ReschedulableJobsRepository    = (*capabilityRepo)(nil)
 	_ outbox.JobsFailedRepository           = (*capabilityRepo)(nil)
 	_ outbox.CapabilityJobsFailedRepository = (*capabilityRepo)(nil)
 	_ outbox.Transactor                     = (*capabilityRepo)(nil)

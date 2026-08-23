@@ -269,6 +269,53 @@ func Test_CapabilityClaimWithEmptyCapabilitiesLeavesJobsPending(t *testing.T) {
 	ts.Zero(job.Attempts)
 }
 
+func Test_RescheduleJobWithLeaseIsFencedAndReleasesLease(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobID, err := ts.repo.CreateJobVersioned(ctx, "publish", 2, `{}`, now)
+	ts.Require().NoError(err)
+	token := types.NewLeaseToken()
+	job, err := ts.repo.FindAndReserveJobForCapabilities(
+		ctx, now, now.Add(time.Minute), token,
+		[]coreoutbox.JobCapability{{Name: "publish", SchemaVersion: 2}},
+	)
+	ts.Require().NoError(err)
+	retryAt := now.Add(time.Hour)
+
+	affected, err := ts.repo.RescheduleJobWithLease(ctx, job.ID, types.NewLeaseToken(), now, retryAt)
+	ts.Require().NoError(err)
+	ts.Zero(affected)
+	affected, err = ts.repo.RescheduleJobWithLease(ctx, job.ID, token, now, retryAt)
+	ts.Require().NoError(err)
+	ts.Equal(int64(1), affected)
+
+	stored, err := ts.repo.GetByID(ctx, jobID)
+	ts.Require().NoError(err)
+	ts.True(retryAt.Equal(stored.AvailableAt), "stored retry instant: %s", stored.AvailableAt)
+	ts.False(stored.ReservedAt.Valid)
+	ts.True(stored.LeaseToken.IsZero())
+}
+
+func Test_CreateJobVersionedUniqueResultDistinguishesCreateFromReplay(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	availableAt := time.Now().UTC().Truncate(time.Microsecond)
+	first, err := ts.repo.CreateJobVersionedUniqueResult(
+		ctx, "message-1", "publish", 1, `{}`, availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.True(first.Created)
+	replayed, err := ts.repo.CreateJobVersionedUniqueResult(
+		ctx, "message-1", "publish", 1, `{}`, availableAt,
+	)
+	ts.Require().NoError(err)
+	ts.False(replayed.Created)
+	ts.Equal(first.JobID, replayed.JobID)
+}
+
 func Test_CreateJob(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)

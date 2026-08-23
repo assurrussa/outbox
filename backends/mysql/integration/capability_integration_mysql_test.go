@@ -71,6 +71,53 @@ func TestMySQLCapabilityLeaseRejectsStaleOwner(t *testing.T) {
 	require.Equal(t, int64(1), affected)
 }
 
+func TestMySQLCapabilityRescheduleIsFencedAndReleasesLease(t *testing.T) {
+	ctx, _, ts := NewTestMySQLSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobID, err := ts.jobsRepo.CreateJobVersioned(ctx, "versioned", 2, `{}`, now)
+	require.NoError(t, err)
+	token := types.NewLeaseToken()
+	job, err := ts.jobsRepo.FindAndReserveJobForCapabilities(
+		ctx, now, now.Add(time.Minute), token,
+		[]outbox.JobCapability{{Name: "versioned", SchemaVersion: 2}},
+	)
+	require.NoError(t, err)
+	retryAt := now.Add(time.Hour)
+
+	affected, err := ts.jobsRepo.RescheduleJobWithLease(ctx, job.ID, types.NewLeaseToken(), now, retryAt)
+	require.NoError(t, err)
+	require.Zero(t, affected)
+	affected, err = ts.jobsRepo.RescheduleJobWithLease(ctx, job.ID, token, now, retryAt)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected)
+
+	stored, err := ts.jobsRepo.GetByID(ctx, jobID)
+	require.NoError(t, err)
+	require.WithinDuration(t, retryAt, stored.AvailableAt, time.Microsecond)
+	require.False(t, stored.ReservedAt.Valid)
+	require.True(t, stored.LeaseToken.IsZero())
+}
+
+func TestMySQLUniqueResultDistinguishesCreateFromReplay(t *testing.T) {
+	ctx, _, ts := NewTestMySQLSuite(t)
+	defer ts.cleanUp(ctx)
+
+	availableAt := time.Now().UTC().Truncate(time.Microsecond)
+	first, err := ts.jobsRepo.CreateJobVersionedUniqueResult(
+		ctx, "message-1", "publish", 1, `{}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.True(t, first.Created)
+	replayed, err := ts.jobsRepo.CreateJobVersionedUniqueResult(
+		ctx, "message-1", "publish", 1, `{}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.False(t, replayed.Created)
+	require.Equal(t, first.JobID, replayed.JobID)
+}
+
 func TestMySQLFailedJobPreservesSchemaVersion(t *testing.T) {
 	ctx, _, ts := NewTestMySQLSuite(t)
 	defer ts.cleanUp(ctx)

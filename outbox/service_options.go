@@ -18,7 +18,9 @@ type Options struct {
 	reserveFor               time.Duration
 	jobsRepo                 JobsRepository
 	capabilityJobsRepo       CapabilityJobsRepository
+	reschedulableJobsRepo    ReschedulableJobsRepository
 	fanoutJobsRepo           FanoutJobsRepository
+	uniqueJobsRepo           UniqueJobsRepository
 	jobsStatRepo             JobsStatRepository
 	jobsFailedRepo           JobsFailedRepository
 	capabilityJobsFailedRepo CapabilityJobsFailedRepository
@@ -66,6 +68,12 @@ func (o *Options) Validate() error {
 	}
 	if o.fanoutJobsRepo != nil && o.capabilityJobsRepo == nil {
 		return errors.New("fanoutJobsRepo requires capabilityJobsRepo")
+	}
+	if o.uniqueJobsRepo != nil && o.capabilityJobsRepo == nil {
+		return errors.New("uniqueJobsRepo requires capabilityJobsRepo")
+	}
+	if o.reschedulableJobsRepo != nil && o.capabilityJobsRepo == nil {
+		return errors.New("reschedulableJobsRepo requires capabilityJobsRepo")
 	}
 	if o.transactor == nil {
 		return errors.New("nil transactor")
@@ -126,6 +134,21 @@ func WithJobsRepo(jobsRepo JobsRepository) OptOptionsSetter {
 func WithCapabilityJobsRepo(jobsRepo CapabilityJobsRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.capabilityJobsRepo = jobsRepo
+		if repo, ok := jobsRepo.(ReschedulableJobsRepository); ok {
+			o.reschedulableJobsRepo = repo
+		}
+		if repo, ok := jobsRepo.(UniqueJobsRepository); ok {
+			o.uniqueJobsRepo = repo
+		}
+	}
+}
+
+// WithReschedulableJobsRepo enables persisted retry scheduling for capability
+// jobs. Standard backend repositories are detected automatically by
+// WithCapabilityJobsRepo; this option supports split repository compositions.
+func WithReschedulableJobsRepo(jobsRepo ReschedulableJobsRepository) OptOptionsSetter {
+	return func(o *Options) {
+		o.reschedulableJobsRepo = jobsRepo
 	}
 }
 
@@ -134,6 +157,18 @@ func WithCapabilityJobsRepo(jobsRepo CapabilityJobsRepository) OptOptionsSetter 
 func WithFanoutJobsRepo(jobsRepo FanoutJobsRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.fanoutJobsRepo = jobsRepo
+		if repo, ok := jobsRepo.(UniqueJobsRepository); ok {
+			o.uniqueJobsRepo = repo
+		}
+	}
+}
+
+// WithUniqueJobsRepo enables immutable idempotency keys for direct versioned
+// puts. Standard fan-out and capability repositories are detected
+// automatically when they implement this contract.
+func WithUniqueJobsRepo(jobsRepo UniqueJobsRepository) OptOptionsSetter {
+	return func(o *Options) {
+		o.uniqueJobsRepo = jobsRepo
 	}
 }
 
