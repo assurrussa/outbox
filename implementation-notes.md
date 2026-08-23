@@ -1,5 +1,16 @@
 # Implementation Notes
 
+## 2026-08-23: stable v0.11.0 backend release preparation
+
+- The additive core contract was merged and published first as immutable root
+  tag `v0.11.0`.
+- One release branch pins MySQL, SQLite, PostgreSQL, and Picodata to that exact
+  core version and refreshes all four checksum files together.
+- `release-ready-backends` now performs the complete mutating pin-and-tidy step;
+  `release-readiness-backends` remains the non-mutating standalone pre-tag gate.
+- Backend tags remain a post-merge step and must resolve to the verified release
+  commit; existing v0.10 tags are not moved.
+
 ## 2026-08-23: generic messenger integration foundation
 
 - Started an additive `v0.11` candidate for the new `gomessenger` durable
