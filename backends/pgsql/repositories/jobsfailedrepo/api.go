@@ -27,23 +27,6 @@ var columns = []string{
 	"failed_at", "created_at",
 }
 
-func (r *Repo) CreateFailedJob(
-	ctx context.Context,
-	jobID types.JobID,
-	name string,
-	payload string,
-	reason string,
-) (types.JobID, error) {
-	return r.CreateFailedJobVersioned(
-		ctx,
-		jobID,
-		name,
-		coreoutbox.DefaultSchemaVersion,
-		payload,
-		reason,
-	)
-}
-
 func (r *Repo) CreateFailedJobVersioned(
 	ctx context.Context,
 	jobID types.JobID,

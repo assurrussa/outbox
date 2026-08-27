@@ -59,11 +59,13 @@ func Test_Init(t *testing.T) {
 	})
 }
 
-func Test_CreateFailedJob(t *testing.T) {
+func Test_CreateFailedJobVersioned_DefaultSchema(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
-	failedJobID, err := ts.repo.CreateFailedJob(ctx, types.NewJobID(), name, payload, reason)
+	failedJobID, err := ts.repo.CreateFailedJobVersioned(
+		ctx, types.NewJobID(), name, coreoutbox.DefaultSchemaVersion, payload, reason,
+	)
 
 	// Assert.
 	ts.Require().NoError(err)
@@ -78,7 +80,7 @@ func Test_CreateFailedJob(t *testing.T) {
 	ts.Equal(reason, fJob.Reason)
 }
 
-func Test_CreateFailedJobVersioned(t *testing.T) {
+func Test_CreateFailedJobVersioned_ExplicitSchema(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
@@ -97,7 +99,7 @@ func Test_CreateFailedJobVersioned(t *testing.T) {
 	ts.Equal(coreoutbox.SchemaVersion(2), failedJob.SchemaVersion)
 }
 
-func Test_CreateFailedJob_Multiple(t *testing.T) {
+func Test_CreateFailedJobVersioned_Multiple(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
@@ -106,7 +108,9 @@ func Test_CreateFailedJob_Multiple(t *testing.T) {
 
 	// Action.
 	for i := 0; i < fJobs; i++ {
-		_, err := ts.repo.CreateFailedJob(ctx, types.NewJobID(), name, payload, reason)
+		_, err := ts.repo.CreateFailedJobVersioned(
+			ctx, types.NewJobID(), name, coreoutbox.DefaultSchemaVersion, payload, reason,
+		)
 		ts.Require().NoError(err)
 	}
 
@@ -122,13 +126,20 @@ func Test_CreateFailedJob_Multiple(t *testing.T) {
 	ts.Equal(int64(fJobs), count)
 }
 
-func Test_DeleteJob(t *testing.T) {
+func Test_DeleteFailedJob(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
 	// Arrange.
 	jobExpected := createModel()
-	jobID, err := ts.repo.CreateFailedJob(ctx, types.NewJobID(), jobExpected.Name, jobExpected.Payload, jobExpected.Reason)
+	jobID, err := ts.repo.CreateFailedJobVersioned(
+		ctx,
+		types.NewJobID(),
+		jobExpected.Name,
+		coreoutbox.DefaultSchemaVersion,
+		jobExpected.Payload,
+		jobExpected.Reason,
+	)
 	ts.Require().NoError(err)
 	ts.Require().NotEmpty(jobID)
 

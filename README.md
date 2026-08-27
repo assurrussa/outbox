@@ -47,11 +47,9 @@ func main() {
 	svc, err := outbox.New(
 		outbox.WithWorkers(1),
 		outbox.WithReserveFor(time.Second),
-		outbox.WithIdleTime(5*time.Minute),
+		outbox.WithIdleTime(5*time.Second),
 		outbox.WithLogger(outboxlogger.Default()),
 		outbox.WithJobsRepo(jobsRepo),
-		// Optional: only needed for svc.GetQueueStats(...)
-		outbox.WithJobsStatRepo(jobsRepo),
 		outbox.WithJobsFailedRepo(jobsFailedRepo),
 		outbox.WithTransactor(txManager),
 	)
@@ -79,14 +77,54 @@ only after worker loops start and becomes unavailable before `BeginDrain`
 closes claim admission. Pair it with a separate database probe; readiness never
 reserves a synthetic outbox job.
 
-`JobsStatRepository` is optional.  
-Set `WithJobsStatRepo(...)` only if you need `svc.GetQueueStats(...)`.
+`JobsStatRepository` is optional. `WithJobsRepo(...)` detects it automatically
+when the same value implements both interfaces. Use `WithJobsStatRepo(...)`
+only for a split composition; an explicit value takes priority.
 
-## Capability-aware workers (opt-in)
+## Version-aware fenced reservation batches
 
-Use capability mode when workers must claim only payload schemas they can
-decode. It is additive: legacy `Put`, repositories, and unknown-job/DLQ
-behavior stay unchanged until both capability repositories are configured.
+`WithReservationBatchSize(size)` reduces reservation round trips without
+changing handler concurrency. The default is `1`; valid values are `1..1000`.
+Each worker claims up to `size` jobs that are available immediately and then
+executes them sequentially. The service does not wait for a batch to fill, and
+`Handle`, retry/reschedule, DLQ, and conditional delete remain per-job.
+
+There is one execution path for every size. `limit=1` is a one-element fenced
+batch; larger limits change only prefetch. Every `JobsRepository` must expose
+its own `MaxReservationBatchSize()`. The core maximum is exported as
+`outbox.MaxReservationBatchSize` (`1000`). `outbox.New(...)` rejects a requested
+size above either maximum before workers start. PostgreSQL, MySQL, and SQLite
+return `1000`; Picodata returns `1`.
+
+One claim uses one fenced token and commits before any handler starts. A shared
+heartbeat extends the current and unstarted jobs. Successful jobs are deleted
+immediately and are not rolled back if a later job fails. An ordinary handler
+error leaves only that job reserved until its current lease expires and the
+worker continues through the batch. Infrastructure or fence errors stop the
+batch and best-effort release its unstarted tail. `BeginDrain()` finishes only
+the active handler and releases the tail while compensating the attempts added
+by that claim. Process crashes and failed releases keep the claimed attempts.
+
+When no matching job is available, repositories return `outbox.ErrNoJobs`.
+The legacy `sharederrors.ErrNoJobs` name refers to the same sentinel for
+migration compatibility; new consumers should use the public `outbox` name.
+
+Picodata implements the same slice contract for exactly one job. Configuring or
+directly requesting a larger batch returns
+`ErrReservationBatchSizeUnsupported` (constructor errors are also wrapped by
+`ErrOption`).
+
+```go
+svc, err := outbox.New(
+	outbox.WithReservationBatchSize(32),
+	// required repositories and transactor...
+)
+```
+
+## Version-aware workers
+
+Every worker claim is filtered by the exact registered `(name, schemaVersion)`
+set. There is no legacy or unfiltered execution mode.
 
 ```go
 type PublishV2Job struct {
@@ -101,9 +139,7 @@ func (*PublishV2Job) Handle(_ context.Context, _ string) error { return nil }
 
 svc, err := outbox.New(
 	outbox.WithJobsRepo(jobsRepo),
-	outbox.WithCapabilityJobsRepo(jobsRepo),
 	outbox.WithJobsFailedRepo(jobsFailedRepo),
-	outbox.WithCapabilityJobsFailedRepo(jobsFailedRepo),
 	outbox.WithTransactor(txManager),
 )
 if err != nil {
@@ -120,27 +156,44 @@ _, _ = svc.PutVersioned(
 )
 ```
 
-Jobs without `SchemaVersion()` use schema v1. In capability mode, ordinary
-`Put(...)` also persists schema v1. Claims are filtered by the registered
-`(name, schemaVersion)` set, so unsupported jobs remain pending and do not move
-to DLQ. Active handlers refresh their lease every `reserveFor / 3`; successful
-ack and DLQ deletion require the same live lease token.
+Jobs without `SchemaVersion()` register as schema v1. `Put(...)` is shorthand
+for `PutVersioned(..., 1, ...)`; `PutVersioned(...)` requires an explicit
+positive version. Unsupported schemas and unknown names remain pending: they
+are not claimed, their attempts stay unchanged, and they never enter automatic
+DLQ. This is the safe rolling-deployment policy because one worker cannot know
+whether another worker supports the row. Cleanup or DLQ of unsupported work is
+an explicit administrative operation outside the worker contract.
 
-Rollout rule: do not enqueue schemas newer than v1 while legacy workers are
-still running. Deploy capability-aware workers that understand both versions,
-remove legacy workers, and only then enable the new producer schema.
+Supported jobs use fenced outcomes. Active leases are refreshed every
+`reserveFor / 3`; successful ack, `RetryAt`, and version-preserving DLQ deletion
+all require the same live token. `Permanent` and attempt exhaustion move a
+supported job to DLQ.
 
 PostgreSQL, MySQL, and SQLite implement the complete capability and durable
 fan-out contracts. Picodata implements versioned/CAS capability storage only;
 it deliberately omits fan-out and standard runtime composition until its client
 can provide a real atomic transaction boundary.
 
-## Unique puts and persisted retry dispositions (v0.11 candidate)
+## Queue observability
+
+`Service.GetQueueStats(...)` returns one exact snapshot with UTC `ObservedAt`,
+aggregate `Total`, `Available`, and `Processing`, plus sorted `ByCapability`
+groups. Each group includes the exact name, schema version, the same counts, and
+`OldestAvailableAt`; a zero timestamp means that group has no ready job. For a
+group with ready work, its oldest age is
+`ObservedAt.Sub(OldestAvailableAt)`.
+
+The standard backends calculate this with one aggregate query that groups the
+entire active backlog. It is intentionally not cached and has no projection
+table, top-N truncation, or new index. Treat it as an active-queue scan and let
+the host choose a suitable polling/scrape frequency. Unsupported capabilities
+remain included in total backlog and are visible by name and schema version.
+
+## Unique puts and persisted retry dispositions
 
 `PutVersionedUnique` is an additive producer contract for one immutable
 deduplication key. PostgreSQL, MySQL, and SQLite repositories implement it and
-are detected automatically by `WithCapabilityJobsRepo(...)` or
-`WithFanoutJobsRepo(...)`:
+are detected automatically from `WithJobsRepo(...)`:
 
 ```go
 result, err := svc.PutVersionedUnique(
@@ -165,8 +218,7 @@ after the active job was acknowledged; different content returns
 `ErrIdempotencyConflict`. The host owns bounded tombstone retention and must not
 prune a key while the message can still be replayed.
 
-Capability handlers can classify a failure without changing the `Job`
-interface:
+Handlers can classify a failure without changing the `Job` interface:
 
 ```go
 func (j *PublishJob) Handle(ctx context.Context, payload string) error {
@@ -184,10 +236,10 @@ func (j *PublishJob) Handle(ctx context.Context, payload string) error {
 the next availability and releases the current lease; it never sleeps in a
 worker. Both terminal operations remain fenced by job ID, lease token, and an
 unexpired lease. Attempt limits still take precedence over a requested retry.
-Standard repositories are auto-detected; split compositions can use
-`WithUniqueJobsRepo(...)` and `WithReschedulableJobsRepo(...)` explicitly.
-Both explicit options require `WithCapabilityJobsRepo(...)`; construction fails
-closed rather than allowing versioned work onto the legacy claim path.
+`RescheduleJobWithLease` is part of the required `JobsRepository`; a custom
+backend cannot silently fall back to an unfenced retry path. Standard
+repositories auto-detect `UniqueJobsRepository`; split compositions can still
+use `WithUniqueJobsRepo(...)` explicitly.
 
 Picodata implements fenced rescheduling but not unique puts, because its
 current transaction boundary cannot honestly provide the complete immutable
@@ -196,7 +248,7 @@ the host supplies a separate `UniqueJobsRepository`.
 
 ## Durable fan-out (opt-in)
 
-Configure `WithFanoutJobsRepo(jobsRepo)` together with capability mode when one
+Configure `WithFanoutJobsRepo(jobsRepo)` when one
 integration event must produce independently retried deliveries. `PutFanout`
 stores the event plus the exact eligible target snapshots under the event ID.
 The built-in dispatcher is registered during construction and creates one job

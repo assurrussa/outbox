@@ -18,11 +18,14 @@ import (
 )
 
 type Config struct {
-	DSN        string
-	Workers    int
-	IdleTime   time.Duration
-	ReserveFor time.Duration
-	Logger     logger.Logger
+	DSN                  string
+	Workers              int
+	IdleTime             time.Duration
+	ReserveFor           time.Duration
+	ReservationBatchSize int
+	MinConnectionsCount  int32
+	MaxConnectionsCount  int32
+	Logger               logger.Logger
 }
 
 type Runtime struct {
@@ -38,10 +41,15 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	if config.DSN == "" {
 		return nil, errors.New("outbox PostgreSQL DSN is required")
 	}
+	poolOptions, err := runtimePoolOptions(config.MinConnectionsCount, config.MaxConnectionsCount)
+	if err != nil {
+		return nil, err
+	}
 	if config.Logger == nil {
 		config.Logger = logger.Default().Named("outbox-postgres-runtime")
 	}
-	client, err := pgsqlinit.Create(ctx, config.DSN, pgsqlclient.WithLogger(config.Logger))
+	poolOptions = append(poolOptions, pgsqlclient.WithLogger(config.Logger))
+	client, err := pgsqlinit.Create(ctx, config.DSN, poolOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("open outbox PostgreSQL client: %w", err)
 	}
@@ -58,11 +66,8 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	transactor := pgsqltx.New(client.DB())
 	options := []coreoutbox.OptOptionsSetter{
 		coreoutbox.WithJobsRepo(jobs),
-		coreoutbox.WithCapabilityJobsRepo(jobs),
 		coreoutbox.WithFanoutJobsRepo(jobs),
-		coreoutbox.WithJobsStatRepo(jobs),
 		coreoutbox.WithJobsFailedRepo(failed),
-		coreoutbox.WithCapabilityJobsFailedRepo(failed),
 		coreoutbox.WithTransactor(transactor),
 		coreoutbox.WithLogger(config.Logger),
 	}
@@ -75,12 +80,31 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	if config.ReserveFor != 0 {
 		options = append(options, coreoutbox.WithReserveFor(config.ReserveFor))
 	}
+	if config.ReservationBatchSize != 0 {
+		options = append(options, coreoutbox.WithReservationBatchSize(config.ReservationBatchSize))
+	}
 	service, err := coreoutbox.New(options...)
 	if err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("create outbox service: %w", err)
 	}
 	return &Runtime{client: client, service: service, jobs: jobs, failed: failed, transactor: transactor}, nil
+}
+
+func runtimePoolOptions(minConnectionsCount, maxConnectionsCount int32) ([]pgsqlclient.OptPoolOptionsSetter, error) {
+	switch {
+	case minConnectionsCount == 0 && maxConnectionsCount == 0:
+		return nil, nil
+	case minConnectionsCount <= 0 || maxConnectionsCount <= 0:
+		return nil, errors.New("outbox PostgreSQL min and max connection counts must both be positive or both be zero")
+	case minConnectionsCount > maxConnectionsCount:
+		return nil, errors.New("outbox PostgreSQL min connections count must not exceed max connections count")
+	default:
+		return []pgsqlclient.OptPoolOptionsSetter{
+			pgsqlclient.WithMinConnectionsCount(minConnectionsCount),
+			pgsqlclient.WithMaxConnectionsCount(maxConnectionsCount),
+		}, nil
+	}
 }
 
 func (r *Runtime) Run(ctx context.Context) error { return r.service.Run(ctx) }

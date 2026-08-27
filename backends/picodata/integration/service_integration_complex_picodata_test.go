@@ -139,15 +139,23 @@ func TestPicodataComplex(t *testing.T) {
 		ts.Equal(jobCounts[jobTmpTimeoutedAndFailedAfter]*2, job6.ExecutedTimes())
 	}
 	{
-		count, err := ts.jobsRepo.CountExact(context.WithoutCancel(ctx))
+		assertCtx := context.WithoutCancel(ctx)
+		count, err := activeJobsCount(assertCtx, ts.jobsRepo)
 		ts.Require().NoError(err)
-		ts.Equal(int64(0), count)
+		ts.Equal(int64(jobCounts[jobUnknown]), count)
+
+		activeJobs, err := ts.jobsRepo.All(assertCtx)
+		ts.Require().NoError(err)
+		ts.Require().Len(activeJobs, jobCounts[jobUnknown])
+		for _, job := range activeJobs {
+			ts.Equal(jobUnknown, job.Name)
+			ts.Zero(job.Attempts)
+		}
 
 		failedJobsTotal := jobCounts[jobFailedAfterSecondTime] +
 			jobCounts[jobFailedAfterFiveTime] +
-			jobCounts[jobTmpTimeoutedAndFailedAfter] +
-			jobCounts[jobUnknown]
-		count, err = ts.jobsFailedRepo.CountExact(context.WithoutCancel(ctx))
+			jobCounts[jobTmpTimeoutedAndFailedAfter]
+		count, err = ts.jobsFailedRepo.CountExact(assertCtx)
 		ts.Require().NoError(err)
 		ts.Equal(int64(failedJobsTotal), count)
 	}

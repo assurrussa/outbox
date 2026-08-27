@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -35,7 +36,6 @@ func run(ctx context.Context, log outboxlogger.Logger) error {
 		outbox.WithIdleTime(200*time.Millisecond),
 		outbox.WithReserveFor(5*time.Second),
 		outbox.WithJobsRepo(stubJobsRepo),
-		outbox.WithJobsStatRepo(stubJobsRepo),
 		outbox.WithJobsFailedRepo(stubJobsRepo),
 		outbox.WithTransactor(stubJobsRepo),
 		outbox.WithLogger(log),
@@ -154,92 +154,209 @@ type stubRepo struct {
 	mu         sync.Mutex
 }
 
-func (j *stubRepo) CreateJob(
-	_ context.Context, name string, payload string, availableAt time.Time,
+func (j *stubRepo) CreateJobVersioned(
+	_ context.Context,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
 ) (types.JobID, error) {
+	if err := (outbox.JobCapability{Name: name, SchemaVersion: schemaVersion}).Validate(); err != nil {
+		return types.JobIDNil, err
+	}
 	jobID := types.NewJobID()
 	now := time.Now().UTC()
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.data = append(j.data, models.Job{
-		ID:          jobID,
-		Queue:       "queue",
-		Name:        name,
-		Payload:     payload,
-		Attempts:    0,
-		ReservedAt:  sql.NullTime{},
-		AvailableAt: availableAt,
-		CreatedAt:   now,
+		ID:            jobID,
+		Queue:         "queue",
+		Name:          name,
+		SchemaVersion: schemaVersion,
+		Payload:       payload,
+		Attempts:      0,
+		ReservedAt:    sql.NullTime{},
+		LeaseToken:    types.LeaseTokenNil,
+		AvailableAt:   availableAt.UTC(),
+		CreatedAt:     now,
 	})
 	return jobID, nil
 }
-func (j *stubRepo) FindAndReserveJob(_ context.Context, now time.Time, until time.Time) (models.Job, error) {
-	j.mu.Lock()
-	data := j.data
-	j.mu.Unlock()
 
-	bestIdx := -1
-	for i := range data {
-		job := data[i]
+func (j *stubRepo) FindAndReserveJobsForCapabilities(
+	_ context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken outbox.LeaseToken,
+	capabilities []outbox.JobCapability,
+	limit int,
+) ([]models.Job, error) {
+	if err := leaseToken.Validate(); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > outbox.MaxReservationBatchSize {
+		return nil, fmt.Errorf("invalid reservation limit: %d", limit)
+	}
+	supported := make(map[outbox.JobCapability]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		if err := capability.Validate(); err != nil {
+			return nil, err
+		}
+		supported[capability] = struct{}{}
+	}
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	indices := make([]int, 0, limit)
+	for i := range j.data {
+		job := j.data[i]
+		capability := outbox.JobCapability{Name: job.Name, SchemaVersion: job.SchemaVersion}
+		if _, ok := supported[capability]; !ok {
+			continue
+		}
 		isAvailable := !job.AvailableAt.After(now)
 		isNotReserved := !job.ReservedAt.Valid || !job.ReservedAt.Time.After(now)
 		if !isAvailable || !isNotReserved {
 			continue
 		}
-
-		if bestIdx == -1 {
-			bestIdx = i
-			continue
+		indices = append(indices, i)
+	}
+	if len(indices) == 0 {
+		return nil, sharederrors.ErrNoJobs
+	}
+	sort.Slice(indices, func(a, b int) bool {
+		left, right := j.data[indices[a]], j.data[indices[b]]
+		if left.AvailableAt.Equal(right.AvailableAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
 		}
-
-		best := data[bestIdx]
-		if job.AvailableAt.Before(best.AvailableAt) ||
-			(job.AvailableAt.Equal(best.AvailableAt) && job.CreatedAt.Before(best.CreatedAt)) {
-			bestIdx = i
-		}
+		return left.AvailableAt.Before(right.AvailableAt)
+	})
+	if len(indices) > limit {
+		indices = indices[:limit]
 	}
 
-	if bestIdx == -1 {
-		return models.Job{}, sharederrors.ErrNoJobs
+	jobs := make([]models.Job, 0, len(indices))
+	for _, index := range indices {
+		j.data[index].Attempts++
+		j.data[index].ReservedAt = sql.NullTime{Time: until.UTC(), Valid: true}
+		j.data[index].LeaseToken = leaseToken
+		jobs = append(jobs, j.data[index])
 	}
-
-	data[bestIdx].Attempts++
-	data[bestIdx].ReservedAt = sql.NullTime{
-		Time:  until,
-		Valid: true,
-	}
-
-	return data[bestIdx], nil
+	return jobs, nil
 }
 
-func (j *stubRepo) DeleteJob(_ context.Context, jobID types.JobID) (int64, error) {
+func (j *stubRepo) ExtendJobLeases(
+	_ context.Context,
+	jobIDs []types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+	until time.Time,
+) (int64, error) {
+	wanted := jobIDSet(jobIDs)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var affected int64
+	for i := range j.data {
+		job := j.data[i]
+		if _, ok := wanted[job.ID]; !ok || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Valid || !job.ReservedAt.Time.After(now) {
+			continue
+		}
+		j.data[i].ReservedAt = sql.NullTime{Time: until.UTC(), Valid: true}
+		affected++
+	}
+	return affected, nil
+}
+
+func (j *stubRepo) ReleaseUnstartedJobsWithLease(
+	_ context.Context,
+	jobIDs []types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	wanted := jobIDSet(jobIDs)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var affected int64
+	for i := range j.data {
+		job := j.data[i]
+		if _, ok := wanted[job.ID]; !ok || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Valid || !job.ReservedAt.Time.After(now) || job.Attempts < 1 {
+			continue
+		}
+		j.data[i].Attempts--
+		j.data[i].ReservedAt = sql.NullTime{}
+		j.data[i].LeaseToken = types.LeaseTokenNil
+		affected++
+	}
+	return affected, nil
+}
+
+func (j *stubRepo) DeleteJobWithLease(
+	_ context.Context,
+	jobID types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for i, job := range j.data {
-		if job.ID == jobID {
+		if job.ID == jobID && job.LeaseToken == leaseToken &&
+			job.ReservedAt.Valid && job.ReservedAt.Time.After(now) {
 			j.data = append(j.data[:i], j.data[i+1:]...)
 			return 1, nil
 		}
 	}
-
 	return 0, nil
 }
 
-func (j *stubRepo) CreateFailedJob(_ context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error) {
+func (j *stubRepo) RescheduleJobWithLease(
+	_ context.Context,
+	jobID types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for i := range j.data {
+		job := j.data[i]
+		if job.ID == jobID && job.LeaseToken == leaseToken &&
+			job.ReservedAt.Valid && job.ReservedAt.Time.After(now) {
+			j.data[i].AvailableAt = availableAt.UTC()
+			j.data[i].ReservedAt = sql.NullTime{}
+			j.data[i].LeaseToken = types.LeaseTokenNil
+			return 1, nil
+		}
+	}
+	return 0, nil
+}
+
+func (*stubRepo) MaxReservationBatchSize() int { return outbox.MaxReservationBatchSize }
+
+func (j *stubRepo) CreateFailedJobVersioned(
+	_ context.Context,
+	jobID types.JobID,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	reason string,
+) (types.JobID, error) {
 	failedJobID := types.NewJobID()
 	now := time.Now().UTC()
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.dataFailed = append(j.dataFailed, models.JobFailed{
-		ID:        failedJobID,
-		JobID:     jobID,
-		Queue:     "queue",
-		Name:      name,
-		Payload:   payload,
-		Reason:    reason,
-		FailedAt:  now,
-		CreatedAt: now,
+		ID:            failedJobID,
+		JobID:         jobID,
+		Queue:         "queue",
+		Name:          name,
+		SchemaVersion: schemaVersion,
+		Payload:       payload,
+		Reason:        reason,
+		FailedAt:      now,
+		CreatedAt:     now,
 	})
 	return failedJobID, nil
 }
@@ -248,39 +365,47 @@ func (j *stubRepo) RunInTx(ctx context.Context, fn func(context.Context) error) 
 	return fn(ctx)
 }
 
-func (j *stubRepo) CountExact(_ context.Context) (int64, error) {
+func (j *stubRepo) GetQueueStats(
+	_ context.Context,
+	observedAt time.Time,
+) (outbox.QueueStats, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
-	return int64(len(j.data)), nil
-}
-
-func (j *stubRepo) CountAvailable(_ context.Context, now time.Time) (int64, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-
-	var count int64
-	for i := range j.data {
-		job := j.data[i]
-		if !job.AvailableAt.After(now) && (!job.ReservedAt.Valid || !job.ReservedAt.Time.After(now)) {
-			count++
+	observedAt = observedAt.UTC()
+	groups := make(map[outbox.JobCapability]*outbox.CapabilityQueueStats)
+	stats := outbox.QueueStats{ObservedAt: observedAt, Total: int64(len(j.data))}
+	for _, job := range j.data {
+		capability := outbox.JobCapability{Name: job.Name, SchemaVersion: job.SchemaVersion}
+		group := groups[capability]
+		if group == nil {
+			group = &outbox.CapabilityQueueStats{Name: job.Name, SchemaVersion: job.SchemaVersion}
+			groups[capability] = group
+		}
+		group.Total++
+		if job.ReservedAt.Valid && job.ReservedAt.Time.After(observedAt) {
+			group.Processing++
+			stats.Processing++
+			continue
+		}
+		if !job.AvailableAt.After(observedAt) {
+			group.Available++
+			stats.Available++
+			if group.OldestAvailableAt.IsZero() || job.AvailableAt.Before(group.OldestAvailableAt) {
+				group.OldestAvailableAt = job.AvailableAt.UTC()
+			}
 		}
 	}
-
-	return count, nil
+	for _, group := range groups {
+		stats.ByCapability = append(stats.ByCapability, *group)
+	}
+	return stats, nil
 }
 
-func (j *stubRepo) CountReserved(_ context.Context, now time.Time) (int64, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-
-	var count int64
-	for i := range j.data {
-		job := j.data[i]
-		if job.ReservedAt.Valid && job.ReservedAt.Time.After(now) {
-			count++
-		}
+func jobIDSet(jobIDs []types.JobID) map[types.JobID]struct{} {
+	result := make(map[types.JobID]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		result[jobID] = struct{}{}
 	}
-
-	return count, nil
+	return result
 }

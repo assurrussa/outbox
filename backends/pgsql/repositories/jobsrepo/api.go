@@ -35,49 +35,6 @@ var columns = []string{
 	"deduplication_key", columnAvailableAt, "created_at",
 }
 
-func (r *Repo) FindAndReserveJob(ctx context.Context, now time.Time, until time.Time) (models.Job, error) {
-	const op = "jobs.repo.FindAndReserveJob"
-
-	query := `
-	with cte as (
-		select "id" from "jobs" 
-		where "available_at" <= $1 
-			and "reserved_at" <= $2
-		limit 1 for update skip locked
-	) 
-	update "jobs" as "j" 
-	set "attempts" = "attempts" + 1, "reserved_at" = $3, "lease_token" = $4
-	from cte 
-	where "cte"."id" = "j"."id" returning
-		"j".id,
-		"j".queue,
-		"j".name,
-		"j".schema_version,
-		"j".payload,
-		"j".attempts,
-		"j".reserved_at,
-		"j".lease_token,
-		"j".deduplication_key,
-		"j".available_at,
-		"j".created_at;`
-
-	var data models.Job
-	err := r.pgsql.DB().ScanOne(ctx, op, &data, query, now, now, until, types.LeaseTokenNil)
-	if err != nil {
-		if pgxscan.NotFound(err) {
-			return models.Job{}, errors.Join(err, sharederrors.ErrNoJobs)
-		}
-
-		return models.Job{}, fmt.Errorf("query context: %w", pgsql.ErrorTransform(err))
-	}
-
-	return data, nil
-}
-
-func (r *Repo) CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
-	return r.CreateJobVersioned(ctx, name, coreoutbox.DefaultSchemaVersion, payload, availableAt)
-}
-
 func (r *Repo) CreateJobVersioned(
 	ctx context.Context,
 	name string,
@@ -97,10 +54,10 @@ func (r *Repo) CreateJobVersioned(
 		SchemaVersion: schemaVersion,
 		Payload:       payload,
 		Attempts:      0,
-		ReservedAt:    sql.NullTime{Valid: true, Time: availableAt},
+		ReservedAt:    sql.NullTime{},
 		LeaseToken:    types.LeaseTokenNil,
-		AvailableAt:   availableAt,
-		CreatedAt:     time.Now(),
+		AvailableAt:   availableAt.UTC(),
+		CreatedAt:     time.Now().UTC(),
 	})
 }
 
@@ -155,7 +112,7 @@ func (r *Repo) CreateJobVersionedUniqueResult(
 			lease_token, deduplication_key, available_at, created_at
 		)
 		select
-			key_row.job_id, 'queue', $5, $6, $7, 0, $8,
+			key_row.job_id, 'queue', $5, $6, $7, 0, null,
 			$9, $1, $8, $4
 		from key_row
 		where key_row.job_id = $2
@@ -251,10 +208,6 @@ func (r *Repo) PruneJobIdempotencyKeys(
 func (r *Repo) Create(ctx context.Context, job models.Job) (types.JobID, error) {
 	const op = "jobs.repo.Create"
 
-	reservedAt := job.ReservedAt
-	if !reservedAt.Valid {
-		reservedAt = sql.NullTime{Valid: true, Time: job.AvailableAt}
-	}
 	if job.SchemaVersion <= 0 {
 		job.SchemaVersion = coreoutbox.DefaultSchemaVersion
 	}
@@ -269,7 +222,7 @@ func (r *Repo) Create(ctx context.Context, job models.Job) (types.JobID, error) 
 			"schema_version":    job.SchemaVersion,
 			"payload":           job.Payload,
 			"attempts":          job.Attempts,
-			columnReservedAt:    reservedAt,
+			columnReservedAt:    job.ReservedAt,
 			columnLeaseToken:    job.LeaseToken,
 			"deduplication_key": job.DeduplicationKey,
 			columnAvailableAt:   job.AvailableAt,
@@ -284,36 +237,51 @@ func (r *Repo) Create(ctx context.Context, job models.Job) (types.JobID, error) 
 	return lastID, nil
 }
 
-func (r *Repo) FindAndReserveJobForCapabilities(
+func (r *Repo) FindAndReserveJobsForCapabilities(
 	ctx context.Context,
 	now time.Time,
 	until time.Time,
 	leaseToken coreoutbox.LeaseToken,
 	capabilities []coreoutbox.JobCapability,
-) (models.Job, error) {
-	const op = "jobs.repo.FindAndReserveJobForCapabilities"
-
-	if err := leaseToken.Validate(); err != nil {
-		return models.Job{}, fmt.Errorf("%s: invalid lease token: %w", op, err)
-	}
+	limit int,
+) ([]models.Job, error) {
 	if len(capabilities) == 0 {
-		return models.Job{}, sharederrors.ErrNoJobs
+		return nil, sharederrors.ErrNoJobs
 	}
 
+	return r.findAndReserveJobs(ctx, now, until, leaseToken, capabilities, limit)
+}
+
+func (r *Repo) findAndReserveJobs(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capabilities []coreoutbox.JobCapability,
+	limit int,
+) ([]models.Job, error) {
+	const op = "jobs.repo.FindAndReserveJobs"
+
+	if err := validateBatchRequest(leaseToken, limit); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	args := []any{now.UTC(), until.UTC(), leaseToken, limit}
 	names := make([]string, 0, len(capabilities))
 	versions := make([]int32, 0, len(capabilities))
 	for _, capability := range capabilities {
 		if err := capability.Validate(); err != nil {
-			return models.Job{}, fmt.Errorf("%s: invalid capability: %w", op, err)
+			return nil, fmt.Errorf("%s: invalid capability: %w", op, err)
 		}
 		names = append(names, capability.Name)
 		versions = append(versions, int32(capability.SchemaVersion))
 	}
+	args = append(args, names, versions)
 
 	query := `
 	with requested(name, schema_version) as (
-		select * from unnest($4::text[], $5::integer[])
-	), cte as (
+		select * from unnest($5::text[], $6::integer[])
+	), candidates as (
 		select j.id
 		from jobs as j
 		join requested as r
@@ -321,69 +289,142 @@ func (r *Repo) FindAndReserveJobForCapabilities(
 		where j.available_at <= $1
 			and (j.reserved_at is null or j.reserved_at <= $1)
 		order by j.available_at, j.created_at, j.id
-		limit 1
+		limit $4
 		for update of j skip locked
+	), updated as (
+		update jobs as j
+		set attempts = attempts + 1,
+			reserved_at = $2,
+			lease_token = $3
+		from candidates
+		where candidates.id = j.id
+		returning
+			j.id,
+			j.queue,
+			j.name,
+			j.schema_version,
+			j.payload,
+			j.attempts,
+			j.reserved_at,
+			j.lease_token,
+			j.deduplication_key,
+			j.available_at,
+			j.created_at
 	)
-	update jobs as j
-	set attempts = attempts + 1,
-		reserved_at = $2,
-		lease_token = $3
-	from cte
-	where cte.id = j.id
-	returning
-		j.id,
-		j.queue,
-		j.name,
-		j.schema_version,
-		j.payload,
-		j.attempts,
-		j.reserved_at,
-		j.lease_token,
-		j.deduplication_key,
-		j.available_at,
-		j.created_at;`
+	select * from updated
+	order by available_at, created_at, id;`
 
-	var data models.Job
-	err := r.pgsql.DB().ScanOne(ctx, op, &data, query, now, until, leaseToken, names, versions)
-	if err != nil {
-		if pgxscan.NotFound(err) {
-			return models.Job{}, errors.Join(err, sharederrors.ErrNoJobs)
-		}
-
-		return models.Job{}, fmt.Errorf("query context: %w", pgsql.ErrorTransform(err))
+	var jobs []models.Job
+	if err := r.pgsql.DB().ScanAll(ctx, op, &jobs, query, args...); err != nil {
+		return nil, fmt.Errorf("%s: query context: %w", op, pgsql.ErrorTransform(err))
+	}
+	if len(jobs) == 0 {
+		return nil, sharederrors.ErrNoJobs
 	}
 
-	return data, nil
+	return jobs, nil
 }
 
-func (r *Repo) ExtendJobLease(
+func (r *Repo) ExtendJobLeases(
 	ctx context.Context,
-	jobID types.JobID,
+	jobIDs []types.JobID,
 	leaseToken coreoutbox.LeaseToken,
 	now time.Time,
 	until time.Time,
 ) (int64, error) {
-	const op = "jobs.repo.ExtendJobLease"
+	const op = "jobs.repo.ExtendJobLeases"
 
-	if jobID.IsZero() {
-		return 0, fmt.Errorf("%s: invalid id", op)
-	}
-	if err := leaseToken.Validate(); err != nil {
-		return 0, fmt.Errorf("%s: invalid lease token: %w", op, err)
-	}
-
-	sqlBuilder := querybuilder.BuilderDollar().
-		Update(tableName).
-		Set(columnReservedAt, until).
-		Where(squirrel.Eq{"id": jobID, columnLeaseToken: leaseToken}).
-		Where(squirrel.Gt{columnReservedAt: now})
-
-	result, err := r.pgsql.DB().Execx(ctx, op, sqlBuilder)
+	ids, err := validateBatchLeaseRequest(jobIDs, leaseToken)
 	if err != nil {
-		return 0, fmt.Errorf("%s: extend lease: %w", op, pgsql.ErrorTransform(err))
+		return 0, fmt.Errorf("%s: %w", op, err)
+	}
+	query := `update jobs
+		set reserved_at = $4
+		where id = any($1::uuid[])
+			and lease_token = $2
+			and reserved_at > $3;`
+	result, err := r.pgsql.DB().Exec(ctx, op, query, ids, leaseToken, now.UTC(), until.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("%s: extend leases: %w", op, pgsql.ErrorTransform(err))
 	}
 
 	return result.RowsAffected(), nil
+}
+
+func (r *Repo) ReleaseUnstartedJobsWithLease(
+	ctx context.Context,
+	jobIDs []types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	const op = "jobs.repo.ReleaseUnstartedJobsWithLease"
+
+	ids, err := validateBatchLeaseRequest(jobIDs, leaseToken)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", op, err)
+	}
+	query := `update jobs
+		set attempts = attempts - 1,
+			reserved_at = null,
+			lease_token = $4
+		where id = any($1::uuid[])
+			and lease_token = $2
+			and reserved_at > $3
+			and attempts > 0;`
+	result, err := r.pgsql.DB().Exec(
+		ctx,
+		op,
+		query,
+		ids,
+		leaseToken,
+		now.UTC(),
+		types.LeaseTokenNil,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("%s: release leases: %w", op, pgsql.ErrorTransform(err))
+	}
+
+	return result.RowsAffected(), nil
+}
+
+func validateBatchRequest(leaseToken coreoutbox.LeaseToken, limit int) error {
+	if err := leaseToken.Validate(); err != nil {
+		return fmt.Errorf("invalid lease token: %w", err)
+	}
+	if limit < 1 || limit > coreoutbox.MaxReservationBatchSize {
+		return fmt.Errorf(
+			"limit must be between 1 and %d: %d",
+			coreoutbox.MaxReservationBatchSize,
+			limit,
+		)
+	}
+
+	return nil
+}
+
+func validateBatchLeaseRequest(
+	jobIDs []types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+) ([]string, error) {
+	if err := leaseToken.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid lease token: %w", err)
+	}
+	if len(jobIDs) < 1 || len(jobIDs) > coreoutbox.MaxReservationBatchSize {
+		return nil, fmt.Errorf(
+			"job ID count must be between 1 and %d: %d",
+			coreoutbox.MaxReservationBatchSize,
+			len(jobIDs),
+		)
+	}
+	ids := make([]string, 0, len(jobIDs))
+	for _, jobID := range jobIDs {
+		if err := jobID.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid job ID: %w", err)
+		}
+		ids = append(ids, jobID.String())
+	}
+
+	return ids, nil
 }
 
 func (r *Repo) DeleteJobWithLease(
@@ -499,69 +540,74 @@ func (r *Repo) CountLight(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
-func (r *Repo) CountExact(ctx context.Context) (int64, error) {
-	const op = "jobs.repo.CountExact"
-
-	sqlBuilderCount := querybuilder.BuilderDollar().
-		Select("count(id) as total").
-		From(tableName)
-
-	var count int64
-	if err := r.pgsql.DB().ScanOnex(ctx, op, &count, sqlBuilderCount); err != nil {
-		return 0, fmt.Errorf("%s: error get: %w", op, pgsql.ErrorTransform(err))
-	}
-
-	return count, nil
+func (*Repo) MaxReservationBatchSize() int {
+	return coreoutbox.MaxReservationBatchSize
 }
 
-func (r *Repo) CountAvailable(ctx context.Context, now time.Time) (int64, error) {
-	const op = "jobs.repo.CountAvailable"
+func (r *Repo) GetQueueStats(
+	ctx context.Context,
+	observedAt time.Time,
+) (coreoutbox.QueueStats, error) {
+	const op = "jobs.repo.GetQueueStats"
 
-	sqlBuilderCount := querybuilder.BuilderDollar().
-		Select("count(id) as total").
-		From(tableName).
-		Where(squirrel.LtOrEq{columnAvailableAt: now}).
-		Where(squirrel.Or{squirrel.Eq{columnReservedAt: nil}, squirrel.LtOrEq{columnReservedAt: now}})
-
-	var count int64
-	if err := r.pgsql.DB().ScanOnex(ctx, op, &count, sqlBuilderCount); err != nil {
-		return 0, fmt.Errorf("%s: error get: %w", op, pgsql.ErrorTransform(err))
+	observedAt = observedAt.UTC()
+	query := `select
+		name,
+		coalesce(schema_version, 1) as schema_version,
+		count(*) as total,
+		count(*) filter (
+			where available_at <= $1
+				and (reserved_at is null or reserved_at <= $1)
+		) as available,
+		count(*) filter (
+			where reserved_at > $1
+				and lease_token <> '00000000-0000-0000-0000-000000000000'
+		) as processing,
+		min(available_at) filter (
+			where available_at <= $1
+				and (reserved_at is null or reserved_at <= $1)
+		) as oldest_available_at
+	from jobs
+	group by name, coalesce(schema_version, 1)
+	order by name, schema_version;`
+	type capabilityStatsRow struct {
+		Name              string                   `db:"name"`
+		SchemaVersion     coreoutbox.SchemaVersion `db:"schema_version"`
+		Total             int64                    `db:"total"`
+		Available         int64                    `db:"available"`
+		Processing        int64                    `db:"processing"`
+		OldestAvailableAt sql.NullTime             `db:"oldest_available_at"`
 	}
 
-	return count, nil
-}
-
-func (r *Repo) CountReserved(ctx context.Context, now time.Time) (int64, error) {
-	const op = "jobs.repo.CountReserved"
-
-	sqlBuilderCount := querybuilder.BuilderDollar().
-		Select("count(id) as total").
-		From(tableName).
-		Where(squirrel.Gt{columnReservedAt: now})
-
-	var count int64
-	if err := r.pgsql.DB().ScanOnex(ctx, op, &count, sqlBuilderCount); err != nil {
-		return 0, fmt.Errorf("%s: error get: %w", op, pgsql.ErrorTransform(err))
+	var rows []capabilityStatsRow
+	if err := r.pgsql.DB().ScanAll(ctx, op, &rows, query, observedAt); err != nil {
+		return coreoutbox.QueueStats{}, fmt.Errorf(
+			"%s: aggregate active queue: %w",
+			op,
+			pgsql.ErrorTransform(err),
+		)
 	}
 
-	return count, nil
-}
-
-func (r *Repo) DeleteJob(ctx context.Context, jobID types.JobID) (int64, error) {
-	const op = "jobs.repo.DeleteJob"
-
-	if jobID.IsZero() {
-		return 0, fmt.Errorf("%s: invalid id", op)
+	stats := coreoutbox.QueueStats{
+		ObservedAt:   observedAt,
+		ByCapability: make([]coreoutbox.CapabilityQueueStats, 0, len(rows)),
+	}
+	for _, row := range rows {
+		group := coreoutbox.CapabilityQueueStats{
+			Name:          row.Name,
+			SchemaVersion: row.SchemaVersion,
+			Total:         row.Total,
+			Available:     row.Available,
+			Processing:    row.Processing,
+		}
+		if row.OldestAvailableAt.Valid {
+			group.OldestAvailableAt = row.OldestAvailableAt.Time.UTC()
+		}
+		stats.Total += row.Total
+		stats.Available += row.Available
+		stats.Processing += row.Processing
+		stats.ByCapability = append(stats.ByCapability, group)
 	}
 
-	sqlBuilder := querybuilder.BuilderDollar().
-		Delete(tableName).
-		Where(squirrel.Eq{"id": jobID})
-
-	result, err := r.pgsql.DB().Execx(ctx, op, sqlBuilder)
-	if err != nil {
-		return 0, fmt.Errorf("%s: error deleted: %w", op, pgsql.ErrorTransform(err))
-	}
-
-	return result.RowsAffected(), nil
+	return stats, nil
 }

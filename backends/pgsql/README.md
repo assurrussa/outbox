@@ -10,10 +10,11 @@ go get github.com/assurrussa/outbox/backends/pgsql@latest
 
 ## Usage
 
-For the standard capability/fan-out worker runtime, use the supported
+For the standard version-aware fenced worker runtime, use the supported
 `backends/pgsql/runtime` facade. It opens and verifies the database client,
-constructs legacy/capability/fan-out repositories, failed storage, transactor
-and `outbox.Service`, and exposes `Run`, `Readiness`, `BeginDrain`, and `Close`.
+constructs the required jobs repository, failed storage, transactor, the
+explicit fan-out repository, and `outbox.Service`, and exposes `Run`,
+`Readiness`, `BeginDrain`, and `Close`.
 It deliberately does not apply migrations:
 
 ```go
@@ -23,6 +24,30 @@ if err != nil {
 }
 defer runtime.Close()
 ```
+
+The runtime owns the PostgreSQL pool used by the relay. A `0/0` connection
+configuration keeps the historical `min=5/max=10` defaults. To reserve a
+bounded pool for relay progress, set both values explicitly:
+
+```go
+runtime, err := pgsqlruntime.Open(ctx, pgsqlruntime.Config{
+	DSN:                  relayDSN,
+	ReservationBatchSize: 32, // zero keeps the core default of 1
+	MinConnectionsCount:  1,
+	MaxConnectionsCount:  1,
+})
+```
+
+When producer traffic and relay work need isolation, the host should create a
+separate producer client/transactor for the same database and schema. Start the
+business transaction through that producer transactor, then call the service
+built with relay repositories. PostgreSQL repositories execute through the
+`pgx.Tx` carried in `context.Context`, so the business row and Outbox job remain
+atomic even though the repositories otherwise own a different pool. Keep the
+combined producer and relay maximum inside the host's connection budget.
+
+`Runtime.Close()` closes only its relay pool. The host remains responsible for
+closing the producer pool.
 
 ```go
 import (
@@ -63,30 +88,31 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 
 	return outbox.New(
 		outbox.WithWorkers(1),
+		outbox.WithReservationBatchSize(32),
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(jobs),
-		// Opt-in version-aware claims and fenced leases.
-		outbox.WithCapabilityJobsRepo(jobs),
 		// Opt-in immutable source snapshots and independent fan-out jobs.
 		outbox.WithFanoutJobsRepo(jobs),
-		// Optional: only if you call svc.GetQueueStats(...)
-		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
-		outbox.WithCapabilityJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
 		outbox.WithLogger(lg),
 	)
 }
 ```
 
-`JobsStatRepository` is optional.  
-Keep `WithJobsStatRepo(...)` only when queue stats are needed.
+The jobs repository is auto-detected for exact grouped queue stats and unique
+puts. Every claim is filtered by `(name, schema_version)`, refreshes leases with
+the reservation token, acknowledges only the current lease owner, and
+preserves schema version in DLQ. Unsupported exact capabilities remain pending.
 
-The capability options are also optional, but must be configured together.
-When enabled, this backend filters claims by `(name, schema_version)`, refreshes
-leases with the reservation token, conditionally acknowledges only the current
-lease owner, and preserves schema version in DLQ.
+A PostgreSQL batch claim is one ordered CTE
+`UPDATE ... RETURNING`; the statement commits before handlers run. Batch size
+does not increase handler concurrency: each worker processes its own claimed
+jobs sequentially.
+
+`GetQueueStats` uses one exact grouped scan of the active queue. The host owns
+its polling frequency; the backend adds no cache or projection table.
 
 ## Migrations
 
@@ -98,8 +124,8 @@ _ = pgmigrator.RunEmbedded(ctx, db, log, pgmigrator.WithCommand("up"))
 
 Migration `00003_add_capability_leases.sql` upgrades existing jobs and failed
 jobs to schema v1, adds fenced lease tokens, and creates the capability claim
-index. Apply it before enabling the capability options. Keep producers on v1
-until no legacy worker remains.
+index. Apply it before starting v0.12 workers. Keep producers on v1
+until every pre-v0.12 unfiltered worker has drained.
 
 Migration `00004_add_job_deduplication.sql` adds active-job deduplication and a
 durable idempotency registry used by fan-out. The registry deliberately

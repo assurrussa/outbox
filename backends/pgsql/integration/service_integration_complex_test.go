@@ -140,14 +140,22 @@ func TestComplex(t *testing.T) {
 		ts.Equal(jobCounts[jobTmpTimeoutedAndFailedAfter]*2, job6.ExecutedTimes())
 	}
 	{
-		count, err := ts.jobsRepo.CountExact(context.WithoutCancel(ctx))
+		count, err := activeJobsCount(context.WithoutCancel(ctx), ts.jobsRepo)
 		ts.Require().NoError(err)
-		ts.Equal(int64(0), count)
+		ts.Equal(int64(jobCounts[jobUnknown]), count)
+
+		pending, err := ts.jobsRepo.All(context.WithoutCancel(ctx))
+		ts.Require().NoError(err)
+		ts.Require().Len(pending, jobCounts[jobUnknown])
+		for _, job := range pending {
+			ts.Equal(jobUnknown, job.Name)
+			ts.Zero(job.Attempts)
+			ts.False(job.ReservedAt.Valid)
+		}
 
 		failedJobsTotal := jobCounts[jobFailedAfterSecondTime] +
 			jobCounts[jobFailedAfterFiveTime] +
-			jobCounts[jobTmpTimeoutedAndFailedAfter] +
-			jobCounts[jobUnknown]
+			jobCounts[jobTmpTimeoutedAndFailedAfter]
 		count, err = ts.jobsFailedRepo.CountExact(context.WithoutCancel(ctx))
 		ts.Require().NoError(err)
 		ts.Equal(int64(failedJobsTotal), count)

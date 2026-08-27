@@ -44,6 +44,7 @@ func TestRegisterJob_WhileRun_ReturnsErrServiceRunning(t *testing.T) {
 
 	repo := newRuntimeRepo(withBlockingFind())
 	svc := newRuntimeService(t, repo)
+	svc.MustRegisterJob(noopJob{name: "existing_job"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -93,41 +94,65 @@ func newRuntimeRepo(opts ...runtimeRepoOption) *runtimeRepo {
 	return r
 }
 
-func (r *runtimeRepo) CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
-	_ = ctx
+func (r *runtimeRepo) CreateJobVersioned(
+	_ context.Context,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) (types.JobID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	id := types.NewJobID()
 	r.jobs = append(r.jobs, models.Job{
-		ID:          id,
-		Queue:       testQueue,
-		Name:        name,
-		Payload:     payload,
-		Attempts:    0,
-		ReservedAt:  sql.NullTime{},
-		AvailableAt: availableAt.UTC(),
-		CreatedAt:   time.Now().UTC(),
+		ID:            id,
+		Queue:         testQueue,
+		Name:          name,
+		SchemaVersion: schemaVersion,
+		Payload:       payload,
+		Attempts:      0,
+		ReservedAt:    sql.NullTime{},
+		AvailableAt:   availableAt.UTC(),
+		CreatedAt:     time.Now().UTC(),
 	})
 
 	return id, nil
 }
 
-func (r *runtimeRepo) FindAndReserveJob(ctx context.Context, now, until time.Time) (models.Job, error) {
+func (r *runtimeRepo) FindAndReserveJobsForCapabilities(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken outbox.LeaseToken,
+	capabilities []outbox.JobCapability,
+	limit int,
+) ([]models.Job, error) {
 	r.findOnce.Do(func() {
 		close(r.findStarted)
 	})
 
 	if r.blockFind {
 		<-ctx.Done()
-		return models.Job{}, ctx.Err()
+		return nil, ctx.Err()
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	supported := make(map[outbox.JobCapability]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		supported[capability] = struct{}{}
+	}
+
+	jobs := make([]models.Job, 0, limit)
 	for i := range r.jobs {
 		job := r.jobs[i]
+		if _, ok := supported[outbox.JobCapability{
+			Name: job.Name, SchemaVersion: job.SchemaVersion,
+		}]; !ok {
+			continue
+		}
 		isAvailable := !job.AvailableAt.After(now)
 		isFree := !job.ReservedAt.Valid || !job.ReservedAt.Time.After(now)
 		if !isAvailable || !isFree {
@@ -136,49 +161,147 @@ func (r *runtimeRepo) FindAndReserveJob(ctx context.Context, now, until time.Tim
 
 		job.Attempts++
 		job.ReservedAt = sql.NullTime{Time: until.UTC(), Valid: true}
+		job.LeaseToken = leaseToken
 		r.jobs[i] = job
-
-		return job, nil
+		jobs = append(jobs, job)
+		if len(jobs) == limit {
+			break
+		}
 	}
-
-	return models.Job{}, sharederrors.ErrNoJobs
+	if len(jobs) == 0 {
+		return nil, sharederrors.ErrNoJobs
+	}
+	return jobs, nil
 }
 
-func (r *runtimeRepo) DeleteJob(ctx context.Context, jobID types.JobID) (int64, error) {
-	_ = ctx
+func (r *runtimeRepo) ExtendJobLeases(
+	_ context.Context,
+	jobIDs []types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+	until time.Time,
+) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	wanted := make(map[types.JobID]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		wanted[jobID] = struct{}{}
+	}
+	var affected int64
+	for i := range r.jobs {
+		job := r.jobs[i]
+		if _, ok := wanted[job.ID]; !ok || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Valid || !job.ReservedAt.Time.After(now) {
+			continue
+		}
+		job.ReservedAt = sql.NullTime{Time: until.UTC(), Valid: true}
+		r.jobs[i] = job
+		affected++
+	}
+	return affected, nil
+}
+
+func (r *runtimeRepo) ReleaseUnstartedJobsWithLease(
+	_ context.Context,
+	jobIDs []types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	wanted := make(map[types.JobID]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		wanted[jobID] = struct{}{}
+	}
+	var affected int64
+	for i := range r.jobs {
+		job := r.jobs[i]
+		if _, ok := wanted[job.ID]; !ok || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Valid || !job.ReservedAt.Time.After(now) {
+			continue
+		}
+		job.Attempts--
+		job.ReservedAt = sql.NullTime{}
+		job.LeaseToken = types.LeaseTokenNil
+		r.jobs[i] = job
+		affected++
+	}
+	return affected, nil
+}
+
+func (r *runtimeRepo) DeleteJobWithLease(
+	_ context.Context,
+	jobID types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	for i := range r.jobs {
-		if r.jobs[i].ID == jobID {
-			r.jobs = append(r.jobs[:i], r.jobs[i+1:]...)
-			return 1, nil
+		job := r.jobs[i]
+		if job.ID != jobID || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Valid || !job.ReservedAt.Time.After(now) {
+			continue
 		}
+		r.jobs = append(r.jobs[:i], r.jobs[i+1:]...)
+		return 1, nil
 	}
-
 	return 0, nil
 }
 
-func (r *runtimeRepo) CreateFailedJob(
-	ctx context.Context,
+func (r *runtimeRepo) RescheduleJobWithLease(
+	_ context.Context,
 	jobID types.JobID,
-	name, payload, reason string,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.jobs {
+		job := r.jobs[i]
+		if job.ID != jobID || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Valid || !job.ReservedAt.Time.After(now) {
+			continue
+		}
+		job.AvailableAt = availableAt.UTC()
+		job.ReservedAt = sql.NullTime{}
+		job.LeaseToken = types.LeaseTokenNil
+		r.jobs[i] = job
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (*runtimeRepo) MaxReservationBatchSize() int { return outbox.MaxReservationBatchSize }
+
+func (r *runtimeRepo) CreateFailedJobVersioned(
+	_ context.Context,
+	jobID types.JobID,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	reason string,
 ) (types.JobID, error) {
-	_ = ctx
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	id := types.NewJobID()
 	now := time.Now().UTC()
 	r.failed = append(r.failed, models.JobFailed{
-		ID:        id,
-		JobID:     jobID,
-		Queue:     testQueue,
-		Name:      name,
-		Payload:   payload,
-		Reason:    reason,
-		FailedAt:  now,
-		CreatedAt: now,
+		ID:            id,
+		JobID:         jobID,
+		Queue:         testQueue,
+		Name:          name,
+		SchemaVersion: schemaVersion,
+		Payload:       payload,
+		Reason:        reason,
+		FailedAt:      now,
+		CreatedAt:     now,
 	})
 
 	return id, nil

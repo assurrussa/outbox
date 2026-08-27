@@ -30,20 +30,25 @@ Expected logs:
 4. Run worker loop.
 5. Collect queue stats.
 
-## How `FindAndReserveJob` works here
+## How fenced batch reservation works here
 
-`stubRepo.FindAndReserveJob(...)` follows outbox semantics:
+`stubRepo.FindAndReserveJobsForCapabilities(...)` follows the same contract for
+every limit, including the default `1`:
 1. Lock repository state (`mutex`).
-2. Select a job that is:
+2. Select only rows whose exact `(name, schemaVersion)` was registered and that
+   are:
    - available: `available_at <= now`
    - not reserved: `reserved_at IS NULL OR reserved_at <= now`
 3. Pick deterministic order:
    - earlier `available_at`
    - then earlier `created_at`
-4. Atomically reserve:
+4. Atomically reserve up to `limit` rows with one supplied lease token:
    - `attempts++`
    - `reserved_at = until`
-5. Return `ErrNoJobs` when no candidate exists.
+5. Heartbeat outstanding IDs and use fenced ack/reschedule/DLQ; unstarted tail
+   release compensates the claim-time attempt.
+6. Return `ErrNoJobs` when no candidate exists. Unsupported pairs remain
+   pending with attempts unchanged.
 
 ## Important limitations
 

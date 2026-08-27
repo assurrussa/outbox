@@ -15,12 +15,6 @@ import (
 	"github.com/assurrussa/outbox/shared/types"
 )
 
-func (r *Repo) CreateFailedJob(ctx context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error) {
-	return r.CreateFailedJobVersioned(
-		ctx, jobID, name, coreoutbox.DefaultSchemaVersion, payload, reason,
-	)
-}
-
 func (r *Repo) CreateFailedJobVersioned(
 	ctx context.Context,
 	jobID types.JobID,

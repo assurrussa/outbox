@@ -7,8 +7,8 @@ This repository is the local source of truth for the Go outbox library
 
 The project provides a core outbox runtime that accepts jobs, reserves available
 jobs for workers, executes registered handlers, deletes successful jobs, and
-moves exhausted or unknown jobs to a failed-jobs store. Storage is pluggable
-through backend modules.
+moves supported exhausted/permanent jobs to a failed-jobs store. Unregistered
+name/schema pairs remain pending. Storage is pluggable through backend modules.
 
 ## Modules
 
@@ -30,10 +30,9 @@ Workspace modules also include runnable examples:
 
 ## Directory Responsibilities
 
-- `outbox/`: public core runtime, legacy and capability-aware repository
-  contracts, fenced worker lifecycle, durable fan-out snapshots/deliveries,
-  options, job context helpers, logger adapter, models, and small payload
-  helpers.
+- `outbox/`: public core runtime, one version-aware fenced batch repository
+  contract, durable fan-out snapshots/deliveries, options, job context helpers,
+  logger adapter, models, and small payload helpers.
 - `shared/`: support code reused by core and backend modules. It is internal to
   this repository's modules and is not a stable external consumer API.
 - `backends/mysql/`: MySQL storage, repositories, transaction manager, and
@@ -76,9 +75,9 @@ Current driver ownership:
 - Postgres backend: `github.com/jackc/pgx/v5`
 - Picodata backend: `github.com/picodata/picodata-go`
 
-Capability-aware storage and durable fan-out support are additive and
-backend-owned. PostgreSQL, MySQL, and SQLite implement both opt-in surfaces.
-Picodata implements only safe versioned/CAS capability primitives and does not
+Version-aware fenced batch storage is required and backend-owned. PostgreSQL,
+MySQL, and SQLite support limits through `1000` plus optional durable fan-out.
+Picodata implements the same contract for a one-element batch and does not
 claim atomic fan-out support.
 
 ## Shared Wiki Context

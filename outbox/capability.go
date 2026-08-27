@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/types"
 )
 
@@ -13,15 +14,26 @@ type (
 	LeaseToken    = types.LeaseToken
 )
 
-const DefaultSchemaVersion SchemaVersion = types.DefaultSchemaVersion
+const (
+	DefaultSchemaVersion    SchemaVersion = types.DefaultSchemaVersion
+	MaxReservationBatchSize               = 1000
+)
 
 var (
-	ErrCapabilityRepositoryNotConfigured = errors.New("outbox capability repository is not configured")
-	ErrUniqueRepositoryNotConfigured     = errors.New("outbox unique repository is not configured")
-	ErrRescheduleRepositoryNotConfigured = errors.New("outbox reschedule repository is not configured")
-	ErrInvalidSchemaVersion              = errors.New("outbox schema version must be positive")
-	ErrLeaseLost                         = errors.New("outbox job lease lost")
-	ErrUnsupportedClaim                  = errors.New("outbox repository claimed an unsupported capability")
+	// ErrNoJobs means a repository found no jobs available for claiming.
+	// It is the same sentinel as sharederrors.ErrNoJobs for compatibility.
+	ErrNoJobs = sharederrors.ErrNoJobs
+
+	ErrReservationBatchSizeUnsupported = errors.New("outbox reservation batch size is unsupported by repository")
+	// ErrEmptyReservationBatch means a repository returned no claimed jobs with a nil error.
+	// Repositories must return ErrNoJobs when no jobs are available.
+	ErrEmptyReservationBatch = errors.New(
+		"outbox repository returned an empty reservation batch with a nil error; return ErrNoJobs when no jobs are available",
+	)
+	ErrUniqueRepositoryNotConfigured = errors.New("outbox unique repository is not configured")
+	ErrInvalidSchemaVersion          = errors.New("outbox schema version must be positive")
+	ErrLeaseLost                     = errors.New("outbox job lease lost")
+	ErrUnsupportedClaim              = errors.New("outbox repository claimed an unsupported capability")
 )
 
 // JobCapability identifies a handler and persisted payload schema understood by a worker.

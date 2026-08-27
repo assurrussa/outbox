@@ -66,7 +66,6 @@ func run(ctx context.Context, log outboxlogger.Logger) error {
 		outbox.WithIdleTime(200*time.Millisecond),
 		outbox.WithReserveFor(5*time.Second),
 		outbox.WithJobsRepo(jobs),
-		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
 		outbox.WithLogger(log),

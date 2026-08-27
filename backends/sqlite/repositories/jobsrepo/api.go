@@ -32,10 +32,6 @@ type sqlExecutor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func (r *Repo) CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
-	return r.CreateJobVersioned(ctx, name, coreoutbox.DefaultSchemaVersion, payload, availableAt)
-}
-
 func (r *Repo) CreateJobVersioned(
 	ctx context.Context,
 	name string,
@@ -62,145 +58,183 @@ func (r *Repo) CreateJobVersioned(
 	return id, nil
 }
 
-func (r *Repo) FindAndReserveJob(ctx context.Context, now, until time.Time) (models.Job, error) {
-	return r.findAndReserve(ctx, now, until, types.LeaseTokenNil, nil)
-}
-
-func (r *Repo) FindAndReserveJobForCapabilities(
+func (r *Repo) FindAndReserveJobsForCapabilities(
 	ctx context.Context,
 	now time.Time,
 	until time.Time,
 	leaseToken coreoutbox.LeaseToken,
 	capabilities []coreoutbox.JobCapability,
-) (models.Job, error) {
-	if err := leaseToken.Validate(); err != nil {
-		return models.Job{}, fmt.Errorf("invalid lease token: %w", err)
-	}
+	limit int,
+) ([]models.Job, error) {
 	if len(capabilities) == 0 {
-		return models.Job{}, sharederrors.ErrNoJobs
+		return nil, sharederrors.ErrNoJobs
 	}
 	for _, capability := range capabilities {
 		if err := capability.Validate(); err != nil {
-			return models.Job{}, fmt.Errorf("invalid capability: %w", err)
+			return nil, fmt.Errorf("invalid capability: %w", err)
 		}
 	}
 
-	return r.findAndReserve(ctx, now, until, leaseToken, capabilities)
+	return r.findAndReserveBatch(ctx, now, until, leaseToken, capabilities, limit)
 }
 
-func (r *Repo) findAndReserve(
+func (r *Repo) findAndReserveBatch(
 	ctx context.Context,
 	now time.Time,
 	until time.Time,
-	leaseToken types.LeaseToken,
+	leaseToken coreoutbox.LeaseToken,
 	capabilities []coreoutbox.JobCapability,
-) (models.Job, error) {
-	if tx := transaction.GetTx(ctx); tx != nil {
-		return r.findAndReserveWithExecutor(ctx, tx, now, until, leaseToken, capabilities)
+	limit int,
+) ([]models.Job, error) {
+	if err := validateBatchClaim(leaseToken, limit); err != nil {
+		return nil, err
 	}
+	if tx := transaction.GetTx(ctx); tx != nil {
+		return r.findAndReserveBatchWithExecutor(ctx, tx, now, until, leaseToken, capabilities, limit)
+	}
+
 	conn, err := r.client.DB().Conn(ctx)
 	if err != nil {
-		return models.Job{}, err
+		return nil, err
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE;"); err != nil {
-		return models.Job{}, err
+	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout=5000;"); err != nil {
+		return nil, err
 	}
-	job, err := r.findAndReserveWithExecutor(ctx, conn, now, until, leaseToken, capabilities)
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE;"); err != nil {
+		return nil, err
+	}
+	jobs, err := r.findAndReserveBatchWithExecutor(ctx, conn, now, until, leaseToken, capabilities, limit)
 	if err != nil {
 		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
-		return models.Job{}, err
+		return nil, err
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT;"); err != nil {
 		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
-		return models.Job{}, err
+		return nil, err
 	}
-
-	return job, nil
+	return jobs, nil
 }
 
-func (r *Repo) findAndReserveWithExecutor(
+func (r *Repo) findAndReserveBatchWithExecutor(
 	ctx context.Context,
 	exec sqlExecutor,
 	now time.Time,
 	until time.Time,
-	leaseToken types.LeaseToken,
+	leaseToken coreoutbox.LeaseToken,
 	capabilities []coreoutbox.JobCapability,
-) (models.Job, error) {
-	whereCapability := ""
+	limit int,
+) ([]models.Job, error) {
 	args := []any{now.UTC().UnixMilli(), now.UTC().UnixMilli()}
-	if capabilities != nil {
-		clauses := make([]string, 0, len(capabilities))
-		for _, capability := range capabilities {
-			clauses = append(clauses, "(name = ? AND schema_version = ?)")
-			args = append(args, capability.Name, capability.SchemaVersion)
-		}
-		whereCapability = " AND (" + stdstrings.Join(clauses, " OR ") + ")"
+	clauses := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		clauses = append(clauses, "(name = ? AND schema_version = ?)")
+		args = append(args, capability.Name, capability.SchemaVersion)
 	}
+	whereCapability := " AND (" + stdstrings.Join(clauses, " OR ") + ")"
+	args = append(args, limit)
 	querySelect := fmt.Sprintf(`SELECT %s FROM %s
 		WHERE available_at <= ? AND (reserved_at IS NULL OR reserved_at <= ?)%s
-		ORDER BY available_at, created_at, id LIMIT 10;`,
+		ORDER BY available_at, created_at, id LIMIT ?;`,
 		stdstrings.Join(jobColumns, ", "), r.tableName, whereCapability,
 	)
-	queryUpdate := sharedstrings.Concate(`UPDATE %s
-		SET attempts = attempts + 1, reserved_at = ?, lease_token = ?
-		WHERE id = ? AND attempts = ? AND (reserved_at IS NULL OR reserved_at <= ?);`, r.tableName)
 	rows, err := exec.QueryContext(ctx, querySelect, args...)
 	if err != nil {
-		return models.Job{}, err
+		return nil, err
 	}
-	defer rows.Close()
-
-	untilMS := until.UTC().UnixMilli()
-	nowMS := now.UTC().UnixMilli()
+	jobs := make([]models.Job, 0, limit)
 	for rows.Next() {
 		job, scanErr := scanJob(rows)
 		if scanErr != nil {
-			return models.Job{}, scanErr
+			_ = rows.Close()
+			return nil, scanErr
 		}
-		result, updateErr := exec.ExecContext(
-			ctx, queryUpdate, untilMS, leaseToken, job.ID, job.Attempts, nowMS,
-		)
-		if updateErr != nil {
-			return models.Job{}, updateErr
-		}
-		affected, updateErr := result.RowsAffected()
-		if updateErr != nil {
-			return models.Job{}, updateErr
-		}
-		if affected == 0 {
-			continue
-		}
-		job.Attempts++
-		job.ReservedAt = sql.NullTime{Time: until.UTC(), Valid: true}
-		job.LeaseToken = leaseToken
-		return job, nil
+		jobs = append(jobs, job)
 	}
 	if err := rows.Err(); err != nil {
-		return models.Job{}, err
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(jobs) == 0 {
+		return nil, sharederrors.ErrNoJobs
 	}
 
-	return models.Job{}, sharederrors.ErrNoJobs
+	jobIDs := make([]types.JobID, 0, len(jobs))
+	for _, job := range jobs {
+		jobIDs = append(jobIDs, job.ID)
+	}
+	queryUpdate := fmt.Sprintf(`UPDATE %s
+		SET attempts = attempts + 1, reserved_at = ?, lease_token = ?
+		WHERE id IN (%s);`, r.tableName, sqlPlaceholders(len(jobIDs)))
+	updateArgs := []any{until.UTC().UnixMilli(), leaseToken}
+	for _, jobID := range jobIDs {
+		updateArgs = append(updateArgs, jobID)
+	}
+	result, err := exec.ExecContext(ctx, queryUpdate, updateArgs...)
+	if err != nil {
+		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected != int64(len(jobs)) {
+		return nil, sharederrors.ErrNoJobs
+	}
+	for index := range jobs {
+		jobs[index].Attempts++
+		jobs[index].ReservedAt = sql.NullTime{Time: until.UTC(), Valid: true}
+		jobs[index].LeaseToken = leaseToken
+	}
+	return jobs, nil
 }
 
-func (r *Repo) ExtendJobLease(
+func (r *Repo) ExtendJobLeases(
 	ctx context.Context,
-	jobID types.JobID,
+	jobIDs []types.JobID,
 	leaseToken coreoutbox.LeaseToken,
 	now time.Time,
 	until time.Time,
 ) (int64, error) {
-	if jobID.IsZero() {
-		return 0, errors.New("invalid job id")
+	if err := validateBatchLease(jobIDs, leaseToken); err != nil {
+		return 0, err
 	}
-	if err := leaseToken.Validate(); err != nil {
-		return 0, fmt.Errorf("invalid lease token: %w", err)
+	query := fmt.Sprintf(`UPDATE %s SET reserved_at = ?
+		WHERE id IN (%s) AND lease_token = ? AND reserved_at > ?;`, r.tableName, sqlPlaceholders(len(jobIDs)))
+	args := []any{until.UTC().UnixMilli()}
+	for _, jobID := range jobIDs {
+		args = append(args, jobID)
 	}
-	query := sharedstrings.Concate(`UPDATE %s SET reserved_at = ?
-		WHERE id = ? AND lease_token = ? AND reserved_at > ?;`, r.tableName)
-	result, err := r.executor(ctx).ExecContext(
-		ctx, query, until.UTC().UnixMilli(), jobID, leaseToken, now.UTC().UnixMilli(),
-	)
+	args = append(args, leaseToken, now.UTC().UnixMilli())
+	result, err := r.executor(ctx).ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *Repo) ReleaseUnstartedJobsWithLease(
+	ctx context.Context,
+	jobIDs []types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	if err := validateBatchLease(jobIDs, leaseToken); err != nil {
+		return 0, err
+	}
+	query := fmt.Sprintf(`UPDATE %s
+		SET attempts = attempts - 1, reserved_at = NULL, lease_token = ?
+		WHERE id IN (%s) AND lease_token = ? AND reserved_at > ? AND attempts > 0;`,
+		r.tableName, sqlPlaceholders(len(jobIDs)))
+	args := []any{types.LeaseTokenNil}
+	for _, jobID := range jobIDs {
+		args = append(args, jobID)
+	}
+	args = append(args, leaseToken, now.UTC().UnixMilli())
+	result, err := r.executor(ctx).ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -404,15 +438,6 @@ func jobFingerprint(name string, schemaVersion coreoutbox.SchemaVersion, payload
 	return hex.EncodeToString(digest[:])
 }
 
-func (r *Repo) DeleteJob(ctx context.Context, jobID types.JobID) (int64, error) {
-	query := sharedstrings.Concate(`DELETE FROM %s WHERE id = ?;`, r.tableName)
-	result, err := r.executor(ctx).ExecContext(ctx, query, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 func (r *Repo) GetByID(ctx context.Context, jobID types.JobID) (models.Job, error) {
 	if jobID.IsZero() {
 		return models.Job{}, errors.New("invalid job id")
@@ -445,37 +470,79 @@ func (r *Repo) All(ctx context.Context) ([]models.Job, error) {
 	return result, rows.Err()
 }
 
-func (r *Repo) CountLight(ctx context.Context) (int64, error) { return r.CountExact(ctx) }
-
-func (r *Repo) Count(ctx context.Context) (int64, error) { return r.CountExact(ctx) }
-
-func (r *Repo) CountExact(ctx context.Context) (int64, error) {
-	query := sharedstrings.Concate(`SELECT COUNT(*) FROM %s;`, r.tableName)
-	var count int64
-	if err := r.executor(ctx).QueryRowContext(ctx, query).Scan(&count); err != nil {
-		return 0, err
-	}
-	return count, nil
+func (*Repo) MaxReservationBatchSize() int {
+	return coreoutbox.MaxReservationBatchSize
 }
 
-func (r *Repo) CountAvailable(ctx context.Context, now time.Time) (int64, error) {
-	query := sharedstrings.Concate(`SELECT COUNT(*) FROM %s
-		WHERE available_at <= ? AND (reserved_at IS NULL OR reserved_at <= ?);`, r.tableName)
-	nowMS := now.UTC().UnixMilli()
-	var count int64
-	if err := r.executor(ctx).QueryRowContext(ctx, query, nowMS, nowMS).Scan(&count); err != nil {
-		return 0, err
+func (r *Repo) GetQueueStats(
+	ctx context.Context,
+	observedAt time.Time,
+) (coreoutbox.QueueStats, error) {
+	observedAt = observedAt.UTC()
+	observedMS := observedAt.UnixMilli()
+	query := sharedstrings.Concate(`SELECT
+		name,
+		COALESCE(schema_version, 1) AS schema_version,
+		COUNT(*) AS total,
+		SUM(CASE
+			WHEN available_at <= ? AND (reserved_at IS NULL OR reserved_at <= ?) THEN 1
+			ELSE 0
+		END) AS available,
+		SUM(CASE
+			WHEN reserved_at > ?
+				AND lease_token <> '00000000-0000-0000-0000-000000000000' THEN 1
+			ELSE 0
+		END) AS processing,
+		MIN(CASE
+			WHEN available_at <= ? AND (reserved_at IS NULL OR reserved_at <= ?) THEN available_at
+			ELSE NULL
+		END) AS oldest_available_at
+	FROM %s
+	GROUP BY name, COALESCE(schema_version, 1)
+	ORDER BY name, schema_version;`, r.tableName)
+	rows, err := r.executor(ctx).QueryContext(
+		ctx,
+		query,
+		observedMS,
+		observedMS,
+		observedMS,
+		observedMS,
+		observedMS,
+	)
+	if err != nil {
+		return coreoutbox.QueueStats{}, fmt.Errorf("aggregate active queue: %w", err)
 	}
-	return count, nil
-}
+	defer rows.Close()
 
-func (r *Repo) CountReserved(ctx context.Context, now time.Time) (int64, error) {
-	query := sharedstrings.Concate(`SELECT COUNT(*) FROM %s WHERE reserved_at > ?;`, r.tableName)
-	var count int64
-	if err := r.executor(ctx).QueryRowContext(ctx, query, now.UTC().UnixMilli()).Scan(&count); err != nil {
-		return 0, err
+	stats := coreoutbox.QueueStats{ObservedAt: observedAt}
+	for rows.Next() {
+		var (
+			group    coreoutbox.CapabilityQueueStats
+			oldestMS sql.NullInt64
+		)
+		if err := rows.Scan(
+			&group.Name,
+			&group.SchemaVersion,
+			&group.Total,
+			&group.Available,
+			&group.Processing,
+			&oldestMS,
+		); err != nil {
+			return coreoutbox.QueueStats{}, fmt.Errorf("scan active queue aggregate: %w", err)
+		}
+		if oldestMS.Valid {
+			group.OldestAvailableAt = time.UnixMilli(oldestMS.Int64).UTC()
+		}
+		stats.Total += group.Total
+		stats.Available += group.Available
+		stats.Processing += group.Processing
+		stats.ByCapability = append(stats.ByCapability, group)
 	}
-	return count, nil
+	if err := rows.Err(); err != nil {
+		return coreoutbox.QueueStats{}, fmt.Errorf("iterate active queue aggregate: %w", err)
+	}
+
+	return stats, nil
 }
 
 func (r *Repo) ListPaged(ctx context.Context, limit int, before time.Time) ([]models.Job, error) {
@@ -530,4 +597,36 @@ func scanJob(row scanner) (models.Job, error) {
 	job.AvailableAt = time.UnixMilli(availableMS).UTC()
 	job.CreatedAt = time.UnixMilli(createdMS).UTC()
 	return job, nil
+}
+
+func validateBatchClaim(leaseToken coreoutbox.LeaseToken, limit int) error {
+	if err := leaseToken.Validate(); err != nil {
+		return fmt.Errorf("invalid lease token: %w", err)
+	}
+	if limit < 1 || limit > coreoutbox.MaxReservationBatchSize {
+		return fmt.Errorf("limit must be between 1 and %d", coreoutbox.MaxReservationBatchSize)
+	}
+	return nil
+}
+
+func validateBatchLease(jobIDs []types.JobID, leaseToken coreoutbox.LeaseToken) error {
+	if len(jobIDs) == 0 || len(jobIDs) > coreoutbox.MaxReservationBatchSize {
+		return fmt.Errorf(
+			"job ID count must be between 1 and %d",
+			coreoutbox.MaxReservationBatchSize,
+		)
+	}
+	for _, jobID := range jobIDs {
+		if jobID.IsZero() {
+			return errors.New("invalid job id")
+		}
+	}
+	if err := leaseToken.Validate(); err != nil {
+		return fmt.Errorf("invalid lease token: %w", err)
+	}
+	return nil
+}
+
+func sqlPlaceholders(count int) string {
+	return stdstrings.TrimSuffix(stdstrings.Repeat("?,", count), ",")
 }

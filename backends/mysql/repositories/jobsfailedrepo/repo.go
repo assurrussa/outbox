@@ -16,7 +16,7 @@ type Repo struct {
 	tableName string
 }
 
-var _ coreoutbox.CapabilityJobsFailedRepository = (*Repo)(nil)
+var _ coreoutbox.JobsFailedRepository = (*Repo)(nil)
 
 func New(client mysql.Client, tableNames ...string) (*Repo, error) {
 	if client == nil {

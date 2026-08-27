@@ -17,6 +17,7 @@ import (
 	"github.com/assurrussa/outbox/backends/picodata"
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsrepo"
 	picodatatests "github.com/assurrussa/outbox/backends/picodata/tests"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/tests"
@@ -67,13 +68,15 @@ func Test_FindAndReserveJob_JobFoundAndReserved(t *testing.T) {
 
 	// Arrange.
 	jobExpected := createModel()
-	jobID, err := ts.repo.CreateJob(ctx, jobExpected.Name, jobExpected.Payload, jobExpected.AvailableAt)
+	jobID, err := ts.repo.CreateJobVersioned(
+		ctx, jobExpected.Name, coreoutbox.DefaultSchemaVersion, jobExpected.Payload, jobExpected.AvailableAt,
+	)
 	ts.Require().NoError(err)
 	ts.NotEmpty(jobID)
 	jobExpected.ID = jobID
 
 	// Action.
-	job, err := ts.repo.FindAndReserveJob(ctx, nowTime(), reservationTime())
+	job, err := claimDefault(ctx, ts.repo, nowTime(), reservationTime())
 
 	// Assert.
 	ts.Require().NoError(err)
@@ -93,7 +96,9 @@ func Test_FindAndReserveJob_SkipReservedJob(t *testing.T) {
 	expected := make([]types.JobID, jobs)
 	for i := 0; i < jobs; i++ {
 		jobExpected := createModel()
-		jobID, err := ts.repo.CreateJob(ctx, jobExpected.Name, jobExpected.Payload, jobExpected.AvailableAt)
+		jobID, err := ts.repo.CreateJobVersioned(
+			ctx, jobExpected.Name, coreoutbox.DefaultSchemaVersion, jobExpected.Payload, jobExpected.AvailableAt,
+		)
 		ts.Require().NoError(err)
 		ts.NotEmpty(jobID)
 		expected[i] = jobID
@@ -105,7 +110,7 @@ func Test_FindAndReserveJob_SkipReservedJob(t *testing.T) {
 	for i := 0; i < jobs; i++ {
 		i := i
 		wg.Go(func() error {
-			job, err := ts.repo.FindAndReserveJob(ctx, nowTime(), reservationTime())
+			job, err := claimDefault(ctx, ts.repo, nowTime(), reservationTime())
 			if err != nil {
 				return err
 			}
@@ -119,7 +124,7 @@ func Test_FindAndReserveJob_SkipReservedJob(t *testing.T) {
 	wg, ctx = errgroup.WithContext(context.WithoutCancel(ctx)) // Because wg.Wait() cancel context.
 	for i := 0; i < jobs; i++ {
 		wg.Go(func() error {
-			_, err := ts.repo.FindAndReserveJob(ctx, nowTime(), reservationTime())
+			_, err := claimDefault(ctx, ts.repo, nowTime(), reservationTime())
 			if nil == err || errors.Is(err, sharederrors.ErrNoJobs) {
 				return nil
 			}
@@ -140,12 +145,14 @@ func Test_FindAndReserveJob_SkipDelayedJob(t *testing.T) {
 		// Arrange.
 		jobExpected := createModel()
 		jobExpected.AvailableAt = time.Now().Add(2 * time.Second)
-		jobID, err := ts.repo.CreateJob(ctx, jobExpected.Name, jobExpected.Payload, jobExpected.AvailableAt)
+		jobID, err := ts.repo.CreateJobVersioned(
+			ctx, jobExpected.Name, coreoutbox.DefaultSchemaVersion, jobExpected.Payload, jobExpected.AvailableAt,
+		)
 		ts.Require().NoError(err)
 		ts.NotEmpty(jobID)
 
 		// Action.
-		job, err := ts.repo.FindAndReserveJob(ctx, nowTime(), reservationTime())
+		job, err := claimDefault(ctx, ts.repo, nowTime(), reservationTime())
 
 		// Assert.
 		ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
@@ -157,7 +164,7 @@ func Test_FindAndReserveJob_SkipDelayedJob(t *testing.T) {
 		time.Sleep(3 * time.Second)
 
 		// Action.
-		job, err := ts.repo.FindAndReserveJob(ctx, nowTime(), reservationTime())
+		job, err := claimDefault(ctx, ts.repo, nowTime(), reservationTime())
 
 		// Assert.
 		ts.Require().NoError(err)
@@ -169,20 +176,22 @@ func Test_FindAndReserveJob_JobNotFound(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 	// Action.
-	job, err := ts.repo.FindAndReserveJob(ctx, nowTime(), reservationTime())
+	job, err := claimDefault(ctx, ts.repo, nowTime(), reservationTime())
 
 	// Assert.
 	ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
 	ts.Empty(job.ID)
 }
 
-func Test_CreateJob(t *testing.T) {
+func Test_CreateJobVersioned(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
 	// Action.
 	jobExpected := createModel()
-	jobID, err := ts.repo.CreateJob(ctx, jobExpected.Name, jobExpected.Payload, jobExpected.AvailableAt)
+	jobID, err := ts.repo.CreateJobVersioned(
+		ctx, jobExpected.Name, coreoutbox.DefaultSchemaVersion, jobExpected.Payload, jobExpected.AvailableAt,
+	)
 
 	// Assert.
 	ts.Require().NoError(err)
@@ -201,7 +210,7 @@ func Test_CreateJob(t *testing.T) {
 	)
 }
 
-func Test_CreateJob_Multiple(t *testing.T) {
+func Test_CreateJobVersioned_Multiple(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
@@ -211,51 +220,61 @@ func Test_CreateJob_Multiple(t *testing.T) {
 	// Action.
 	for i := 0; i < jobs; i++ {
 		jobExpected := createModel()
-		jobID, err := ts.repo.CreateJob(ctx, jobExpected.Name, jobExpected.Payload, jobExpected.AvailableAt)
+		jobID, err := ts.repo.CreateJobVersioned(
+			ctx, jobExpected.Name, coreoutbox.DefaultSchemaVersion, jobExpected.Payload, jobExpected.AvailableAt,
+		)
 		ts.Require().NoError(err)
 		ts.NotEmpty(jobID)
 	}
 
 	// Assert.
-	count, err := ts.repo.CountExact(ctx)
+	stats, err := ts.repo.GetQueueStats(ctx, time.Now().UTC())
 	ts.Require().NoError(err)
-	ts.Equal(int64(jobs), count)
-
-	// light it's trigger in DB...
-	time.Sleep(time.Millisecond * 2000)
-	count, err = ts.repo.CountLight(ctx)
-	ts.Require().NoError(err)
-	ts.Equal(int64(jobs), count)
+	ts.Equal(int64(jobs), stats.Total)
 }
 
-func Test_DeleteJob(t *testing.T) {
+func Test_DeleteJobWithLease(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
 	// Arrange.
 	jobExpected := createModel()
-	jobID, err := ts.repo.CreateJob(ctx, jobExpected.Name, jobExpected.Payload, jobExpected.AvailableAt)
+	jobID, err := ts.repo.CreateJobVersioned(
+		ctx, jobExpected.Name, coreoutbox.DefaultSchemaVersion, jobExpected.Payload, jobExpected.AvailableAt,
+	)
 	ts.Require().NoError(err)
 	ts.Require().NotEmpty(jobID)
 
 	// Action.
-	count, err := ts.repo.DeleteJob(ctx, jobID)
+	leaseToken := types.NewLeaseToken()
+	job, err := claimOne(
+		ctx,
+		ts.repo,
+		nowTime(),
+		reservationTime(),
+		leaseToken,
+		[]coreoutbox.JobCapability{{Name: jobExpected.Name, SchemaVersion: coreoutbox.DefaultSchemaVersion}},
+	)
+	ts.Require().NoError(err)
+	count, err := ts.repo.DeleteJobWithLease(ctx, job.ID, leaseToken, time.Now().UTC())
 
 	// Assert.
 	ts.Require().NoError(err)
 	ts.Equal(int64(1), count)
 
 	// Checking if failed job was deleted.
-	job, err := ts.repo.GetByID(ctx, jobID)
+	job, err = ts.repo.GetByID(ctx, jobID)
 	ts.Require().ErrorIs(err, sharederrors.ErrNoJobs)
 	ts.Empty(job)
 }
 
-func Test_DeleteJob_NoJobs(t *testing.T) {
+func Test_DeleteJobWithLease_NoJobs(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 	// Action.
-	count, err := ts.repo.DeleteJob(ctx, types.NewJobID())
+	count, err := ts.repo.DeleteJobWithLease(
+		ctx, types.NewJobID(), types.NewLeaseToken(), time.Now().UTC(),
+	)
 
 	// Assert.
 	ts.Require().NoError(err)
@@ -266,13 +285,6 @@ func Test_ListPaged(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
-	// Clean table
-	all, err := ts.repo.All(ctx)
-	ts.Require().NoError(err)
-	for _, job := range all {
-		_, _ = ts.repo.DeleteJob(ctx, job.ID)
-	}
-
 	now := time.Now()
 	jobs := []models.Job{
 		{Queue: "q", Name: "newest", Payload: "p1", AvailableAt: now, CreatedAt: now},
@@ -281,7 +293,9 @@ func Test_ListPaged(t *testing.T) {
 	}
 
 	for i := range jobs {
-		id, err := ts.repo.CreateJob(ctx, jobs[i].Name, jobs[i].Payload, jobs[i].AvailableAt)
+		id, err := ts.repo.CreateJobVersioned(
+			ctx, jobs[i].Name, coreoutbox.DefaultSchemaVersion, jobs[i].Payload, jobs[i].AvailableAt,
+		)
 		ts.Require().NoError(err)
 		jobs[i].ID = id
 	}
@@ -329,7 +343,9 @@ func createModels(t *testing.T, ts *TestRepoSuite, ctx context.Context, size int
 			rowModel.ReservedAt = sql.NullTime{}
 		}
 
-		id, err := ts.repo.CreateJob(ctx, rowModel.Name, rowModel.Payload, rowModel.AvailableAt)
+		id, err := ts.repo.CreateJobVersioned(
+			ctx, rowModel.Name, coreoutbox.DefaultSchemaVersion, rowModel.Payload, rowModel.AvailableAt,
+		)
 		ts.Require().NoError(err)
 		rowModel.ID = id
 
@@ -337,4 +353,41 @@ func createModels(t *testing.T, ts *TestRepoSuite, ctx context.Context, size int
 	}
 
 	return list
+}
+
+func claimDefault(
+	ctx context.Context,
+	repo *jobsrepo.Repo,
+	now time.Time,
+	until time.Time,
+) (models.Job, error) {
+	return claimOne(
+		ctx,
+		repo,
+		now,
+		until,
+		types.NewLeaseToken(),
+		[]coreoutbox.JobCapability{{Name: name, SchemaVersion: coreoutbox.DefaultSchemaVersion}},
+	)
+}
+
+func claimOne(
+	ctx context.Context,
+	repo *jobsrepo.Repo,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capabilities []coreoutbox.JobCapability,
+) (models.Job, error) {
+	jobs, err := repo.FindAndReserveJobsForCapabilities(
+		ctx, now, until, leaseToken, capabilities, 1,
+	)
+	if err != nil {
+		return models.Job{}, err
+	}
+	if len(jobs) != 1 {
+		return models.Job{}, errors.New("claim returned an unexpected batch size")
+	}
+
+	return jobs[0], nil
 }

@@ -129,7 +129,7 @@ func TestPicodataAllJobsProcessed(t *testing.T) {
 	// Assert.
 	ts.Equal(jobsCount, job.ExecutedTimes())
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
@@ -137,35 +137,29 @@ func TestPicodataAllJobsProcessed(t *testing.T) {
 	ts.Require().Equal(int64(0), count)
 }
 
-func TestPicodataDLQ_UnknownJob(t *testing.T) {
+func TestPicodataUnsupportedNameRemainsPending(t *testing.T) {
 	ctx, _, ts := NewTestPicodataSuite(t)
 	defer ts.cleanUp(ctx)
 	// Arrange.
 	const jobName = "unknown-job"
 	const jobPayload = "{}"
-	_, err := ts.outboxSvc.Put(ctx, jobName, jobPayload, time.Now())
+	jobID, err := ts.outboxSvc.Put(ctx, jobName, jobPayload, time.Now().UTC())
 	ts.Require().NoError(err)
 
 	// Action.
 	runPicodataOutboxFor(ctx, ts, time.Second)
 
 	// Assert.
-	count, err := ts.jobsRepo.CountExact(ctx)
-	ts.Require().NoError(err)
-	ts.Require().Equal(int64(0), count)
-	count, err = ts.jobsFailedRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(1), count)
-
-	data, err := ts.jobsFailedRepo.All(ctx)
+	count, err = ts.jobsFailedRepo.CountExact(ctx)
 	ts.Require().NoError(err)
-	ts.Len(data, 1)
-	j := data[0]
-	ts.NotEmpty(j.ID)
-	ts.Equal(jobName, j.Name)
-	ts.Equal(jobPayload, j.Payload)
-	ts.NotEmpty(j.Reason)
-	ts.NotEmpty(j.CreatedAt)
+	ts.Require().Equal(int64(0), count)
+
+	job, err := ts.jobsRepo.GetByID(ctx, jobID)
+	ts.Require().NoError(err)
+	ts.Zero(job.Attempts)
 }
 
 func TestPicodataDLQ_AfterMaxAttemptsExceeding(t *testing.T) {
@@ -198,7 +192,7 @@ func TestPicodataDLQ_AfterMaxAttemptsExceeding(t *testing.T) {
 	runPicodataOutboxFor(ctx, ts, maxAttempts*time.Second)
 
 	// Assert.
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
@@ -240,14 +234,14 @@ func TestPicodataIfNoJobsThenWorkersSleepForIdleTime(t *testing.T) {
 		ts.Require().NoError(err)
 	}
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(jobsCount), count) // Workers fell asleep before the jobsrepo appearing.
 	ts.Equal(0, job.ExecutedTimes())
 
 	time.Sleep(2 * idleTime)
 
-	count, err = ts.jobsRepo.CountExact(ctx)
+	count, err = activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count) // Workers woke up and processed the jobsrepo.
 	count, err = ts.jobsFailedRepo.CountExact(ctx)

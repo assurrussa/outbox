@@ -46,7 +46,7 @@ The app resolves DSN in this order:
 
 ## Notes
 
-- `WithJobsStatRepo(...)` is optional and needed only for `GetQueueStats(...)`.
+- The standard jobs repository is auto-detected for `GetQueueStats(...)`.
 - This example uses `WithWorkers(1)` for predictable demo logs.
 
 ## Switch to another backend

@@ -42,29 +42,37 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 
 	return outbox.New(
 		outbox.WithWorkers(1),
+		outbox.WithReservationBatchSize(32),
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(jobs),
-		outbox.WithCapabilityJobsRepo(jobs),
 		outbox.WithFanoutJobsRepo(jobs),
-		// Optional: only if you call svc.GetQueueStats(...)
-		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
-		outbox.WithCapabilityJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
 		outbox.WithLogger(lg),
 	)
 }
 ```
 
-`JobsStatRepository` is optional.  
-Keep `WithJobsStatRepo(...)` only when queue stats are needed.
+The jobs repository is auto-detected for exact grouped queue stats and unique
+puts. Fan-out remains the explicit opt-in shown above.
 
-The backend implements the complete capability, fenced-lease, schema-preserving
-DLQ, and durable fan-out contracts. For standard worker composition, prefer
+The backend implements the complete version-aware fenced batch,
+schema-preserving DLQ, and durable fan-out contracts. Unsupported exact
+capabilities remain pending. For standard worker composition, prefer
 `runtime.Open(ctx, runtime.Config{DSN: dsn})` after the migrate role has applied
 the embedded migrations. The runtime does not migrate automatically and pins
 the pool to one connection because SQLite is a single-writer database.
+
+For the standard facade, set
+`runtime.Config.ReservationBatchSize` (`0` keeps the default `1`). A batch uses
+a short `BEGIN IMMEDIATE` write transaction and commits before handlers run.
+Concurrent direct repository users serialize at SQLite's writer boundary; the
+repository applies the busy timeout to every batch connection rather than only
+the first pooled connection.
+
+`GetQueueStats` uses one exact grouped scan of the active queue. The host owns
+its polling frequency; the backend adds no cache or projection table.
 
 ## Migrations
 

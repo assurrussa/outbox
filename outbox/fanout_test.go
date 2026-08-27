@@ -120,13 +120,14 @@ func TestPutFanoutValidatesTargetSetAndConfiguration(t *testing.T) {
 	)
 	require.ErrorIs(t, err, outbox.ErrFanoutRepositoryNotConfigured)
 
-	_, err = outbox.New(
+	configured, err := outbox.New(
 		outbox.WithJobsRepo(repo),
 		outbox.WithJobsFailedRepo(repo),
 		outbox.WithFanoutJobsRepo(repo),
 		outbox.WithTransactor(repo),
 	)
-	require.ErrorIs(t, err, outbox.ErrOption)
+	require.NoError(t, err)
+	require.NotNil(t, configured)
 
 	svc := newFanoutService(t, repo)
 	target := outbox.FanoutTarget{Kind: testFanoutWebhookKind, ID: "same"}
@@ -167,10 +168,8 @@ func newFanoutService(t *testing.T, repo *capabilityRepo) *outbox.Service {
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(repo),
-		outbox.WithCapabilityJobsRepo(repo),
 		outbox.WithFanoutJobsRepo(repo),
 		outbox.WithJobsFailedRepo(repo),
-		outbox.WithCapabilityJobsFailedRepo(repo),
 		outbox.WithTransactor(repo),
 		outbox.WithLogger(logger.Discard()),
 	)

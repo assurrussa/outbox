@@ -15,6 +15,7 @@ import (
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsrepo"
 	picodatatests "github.com/assurrussa/outbox/backends/picodata/tests"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/tests"
 	"github.com/assurrussa/outbox/shared/types"
@@ -57,12 +58,14 @@ func Test_Init(t *testing.T) {
 	})
 }
 
-func Test_CreateFailedJob(t *testing.T) {
+func Test_CreateFailedJobVersioned(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
 	jobID := types.NewJobID()
-	failedJobID, err := ts.repo.CreateFailedJob(ctx, jobID, name, payload, reason)
+	failedJobID, err := ts.repo.CreateFailedJobVersioned(
+		ctx, jobID, name, coreoutbox.DefaultSchemaVersion, payload, reason,
+	)
 
 	// Assert.
 	ts.Require().NoError(err)
@@ -87,7 +90,9 @@ func Test_CreateFailedJob_Multiple(t *testing.T) {
 	// Action.
 	for i := 0; i < fJobs; i++ {
 		jobID := types.NewJobID()
-		_, err := ts.repo.CreateFailedJob(ctx, jobID, name, payload, reason)
+		_, err := ts.repo.CreateFailedJobVersioned(
+			ctx, jobID, name, coreoutbox.DefaultSchemaVersion, payload, reason,
+		)
 		ts.Require().NoError(err)
 	}
 
@@ -129,13 +134,20 @@ func Test_Create_StoresFailedAtAndCreatedAt(t *testing.T) {
 	ts.Equal(createdAtExpected.UnixMilli(), got.CreatedAt.UnixMilli())
 }
 
-func Test_DeleteJob(t *testing.T) {
+func Test_DeleteFailedJob(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
 	// Arrange.
 	jobExpected := createModel()
-	jobID, err := ts.repo.CreateFailedJob(ctx, jobExpected.JobID, jobExpected.Name, jobExpected.Payload, jobExpected.Reason)
+	jobID, err := ts.repo.CreateFailedJobVersioned(
+		ctx,
+		jobExpected.JobID,
+		jobExpected.Name,
+		coreoutbox.DefaultSchemaVersion,
+		jobExpected.Payload,
+		jobExpected.Reason,
+	)
 	ts.Require().NoError(err)
 	ts.Require().NotEmpty(jobID)
 

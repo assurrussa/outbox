@@ -40,6 +40,6 @@ In a real project, replace SQLite imports with one backend module:
 
 The core service wiring stays the same:
 - `WithJobsRepo(...)`
-- `WithJobsStatRepo(...)` (optional, only for `GetQueueStats`)
+- automatic `JobsStatRepository` detection for `GetQueueStats`
 - `WithJobsFailedRepo(...)`
 - `WithTransactor(...)`

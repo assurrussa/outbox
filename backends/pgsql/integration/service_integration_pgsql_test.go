@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,8 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	pgsqlruntime "github.com/assurrussa/outbox/backends/pgsql/runtime"
+	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlclient"
+	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlinit"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
 	"github.com/assurrussa/outbox/outbox"
@@ -122,7 +125,7 @@ func TestPutJob(t *testing.T) {
 	ts.Equal(jobPayload, j.Payload)
 	ts.Equal(0, j.Attempts)
 	ts.Equal(availableAt.Unix(), j.AvailableAt.Unix())
-	ts.NotEmpty(j.ReservedAt)
+	ts.False(j.ReservedAt.Valid)
 	ts.NotEmpty(j.CreatedAt)
 }
 
@@ -131,10 +134,13 @@ func TestStandardRuntimePlansFanoutAndDrains(t *testing.T) {
 	defer ts.cleanUp(ctx)
 	runtime, err := pgsqlruntime.Open(ctx, pgsqlruntime.Config{
 		DSN: ts.db.DB().Pool().Config().ConnString(), Workers: 2,
-		IdleTime: 100 * time.Millisecond, ReserveFor: time.Second, Logger: logger.Discard(),
+		IdleTime: 100 * time.Millisecond, ReserveFor: time.Second, ReservationBatchSize: 2,
+		Logger: logger.Discard(),
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, runtime.Close()) }()
+	require.Equal(t, int32(5), runtime.Client().DB().Pool().Config().MinConns)
+	require.Equal(t, int32(10), runtime.Client().DB().Pool().Config().MaxConns)
 	require.NoError(t, runtime.DatabaseReadiness(ctx))
 	event := integrationFanoutEvent()
 	targets := integrationFanoutTargets()
@@ -153,6 +159,141 @@ func TestStandardRuntimePlansFanoutAndDrains(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, jobs, len(targets))
 	assertUniqueIntegrationDeliveries(t, jobs)
+}
+
+func TestSplitPoolsPreserveAtomicStagingAndRelayProgress(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	dsn := ts.db.DB().Pool().Config().ConnString()
+	producer, err := pgsqlinit.Create(
+		ctx,
+		dsn,
+		pgsqlclient.WithMinConnectionsCount(1),
+		pgsqlclient.WithMaxConnectionsCount(1),
+		pgsqlclient.WithLogger(logger.Discard()),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, producer.Close()) }()
+
+	relay, err := pgsqlruntime.Open(ctx, pgsqlruntime.Config{
+		DSN:                 dsn,
+		Workers:             1,
+		IdleTime:            100 * time.Millisecond,
+		ReserveFor:          time.Second,
+		MinConnectionsCount: 1,
+		MaxConnectionsCount: 1,
+		Logger:              logger.Discard(),
+	})
+	require.NoError(t, err)
+	relayClosed := false
+	defer func() {
+		if !relayClosed {
+			require.NoError(t, relay.Close())
+		}
+	}()
+	require.Equal(t, int32(1), relay.Client().DB().Pool().Config().MinConns)
+	require.Equal(t, int32(1), relay.Client().DB().Pool().Config().MaxConns)
+
+	_, err = producer.DB().Exec(ctx, "create_split_pool_orders", `
+		CREATE TABLE split_pool_orders (
+			id text PRIMARY KEY
+		)
+	`)
+	require.NoError(t, err)
+
+	producerTx := transaction.New(producer.DB())
+	job := newJobMock("split_pool_delivery", nop, time.Second, 1)
+	relay.Service().MustRegisterJob(job)
+
+	rollbackErr := errors.New("rollback split-pool staging")
+	err = producerTx.RunInTx(ctx, func(txCtx context.Context) error {
+		_, execErr := producer.DB().Exec(txCtx, "insert_rolled_back_order", `
+			INSERT INTO split_pool_orders (id) VALUES ($1)
+		`, "rolled-back")
+		if execErr != nil {
+			return execErr
+		}
+		if _, putErr := relay.Service().Put(txCtx, job.Name(), `{}`, time.Now().UTC()); putErr != nil {
+			return putErr
+		}
+		return rollbackErr
+	})
+	require.ErrorIs(t, err, rollbackErr)
+	requireSplitPoolCounts(t, ctx, producer, relay, 0, 0)
+
+	err = producerTx.RunInTx(ctx, func(txCtx context.Context) error {
+		if _, execErr := producer.DB().Exec(txCtx, "insert_committed_order", `
+			INSERT INTO split_pool_orders (id) VALUES ($1)
+		`, "committed"); execErr != nil {
+			return execErr
+		}
+		_, putErr := relay.Service().Put(txCtx, job.Name(), `{}`, time.Now().UTC())
+		return putErr
+	})
+	require.NoError(t, err)
+	requireSplitPoolCounts(t, ctx, producer, relay, 1, 1)
+
+	producerAcquired := make(chan struct{})
+	releaseProducer := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseProducer) })
+	producerErr := make(chan error, 1)
+	go func() {
+		producerErr <- producerTx.RunInTx(ctx, func(context.Context) error {
+			close(producerAcquired)
+			select {
+			case <-releaseProducer:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+	select {
+	case <-producerAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("producer pool was not acquired")
+	}
+	require.Equal(t, int32(1), producer.Pool().Stat().AcquiredConns())
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- relay.Run(ctx) }()
+	require.Eventually(t, func() bool { return job.ExecutedTimes() == 1 }, 2*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool {
+		count, countErr := activeJobsCount(ctx, relay.Jobs())
+		return countErr == nil && count == 0
+	}, 2*time.Second, 20*time.Millisecond)
+	require.Equal(t, int32(1), producer.Pool().Stat().AcquiredConns())
+
+	relay.BeginDrain()
+	require.NoError(t, <-runErr)
+	require.NoError(t, relay.Close())
+	relayClosed = true
+	releaseOnce.Do(func() { close(releaseProducer) })
+	require.NoError(t, <-producerErr)
+	require.NoError(t, producer.DB().Ping(ctx), "closing the relay runtime must not close the host-owned producer pool")
+}
+
+func requireSplitPoolCounts(
+	t *testing.T,
+	ctx context.Context,
+	producer pgsql.Client,
+	relay *pgsqlruntime.Runtime,
+	wantOrders int64,
+	wantJobs int64,
+) {
+	t.Helper()
+
+	var orders int64
+	require.NoError(t, producer.DB().QueryRow(ctx, "count_split_pool_orders", `
+		SELECT COUNT(*) FROM split_pool_orders
+	`).Scan(&orders))
+	require.Equal(t, wantOrders, orders)
+
+	jobs, err := activeJobsCount(ctx, relay.Jobs())
+	require.NoError(t, err)
+	require.Equal(t, wantJobs, jobs)
 }
 
 func TestAllJobsProcessed(t *testing.T) {
@@ -176,7 +317,7 @@ func TestAllJobsProcessed(t *testing.T) {
 	// Assert.
 	ts.Equal(jobsCount, job.ExecutedTimes())
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
@@ -184,35 +325,29 @@ func TestAllJobsProcessed(t *testing.T) {
 	ts.Require().Equal(int64(0), count)
 }
 
-func TestDLQ_UnknownJob(t *testing.T) {
+func TestUnsupportedNameRemainsPending(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 	// Arrange.
 	const jobName = "unknown-job"
 	const jobPayload = "{}"
-	_, err := ts.outboxSvc.Put(ctx, jobName, jobPayload, time.Now().Local())
+	jobID, err := ts.outboxSvc.Put(ctx, jobName, jobPayload, time.Now().UTC())
 	ts.Require().NoError(err)
 
 	// Action.
 	runOutboxFor(ctx, ts, time.Second)
 
 	// Assert.
-	count, err := ts.jobsRepo.CountExact(ctx)
-	ts.Require().NoError(err)
-	ts.Require().Equal(int64(0), count)
-	count, err = ts.jobsFailedRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(1), count)
-
-	data, err := ts.jobsFailedRepo.All(ctx)
+	count, err = ts.jobsFailedRepo.CountExact(ctx)
 	ts.Require().NoError(err)
-	ts.Len(data, 1)
-	j := data[0]
-	ts.NotEmpty(j.ID)
-	ts.Equal(jobName, j.Name)
-	ts.Equal(jobPayload, j.Payload)
-	ts.NotEmpty(j.Reason)
-	ts.NotEmpty(j.CreatedAt)
+	ts.Require().Equal(int64(0), count)
+
+	job, err := ts.jobsRepo.GetByID(ctx, jobID)
+	ts.Require().NoError(err)
+	ts.Zero(job.Attempts)
 }
 
 func TestDLQ_AfterMaxAttemptsExceeding(t *testing.T) {
@@ -245,7 +380,7 @@ func TestDLQ_AfterMaxAttemptsExceeding(t *testing.T) {
 	runOutboxFor(ctx, ts, maxAttempts*time.Second)
 
 	// Assert.
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
@@ -287,14 +422,14 @@ func TestIfNoJobsThenWorkersSleepForIdleTime(t *testing.T) {
 		ts.Require().NoError(err)
 	}
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(jobsCount), count) // Workers fell asleep before the jobsrepo appearing.
 	ts.Equal(0, job.ExecutedTimes())
 
 	time.Sleep(2 * idleTime)
 
-	count, err = ts.jobsRepo.CountExact(ctx)
+	count, err = activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count) // Workers woke up and processed the jobsrepo.
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
@@ -317,7 +452,14 @@ func TestQueueStats_ReservedJobIsNotAvailable(t *testing.T) {
 	_, err := ts.outboxSvc.Put(ctx, jobName, `{}`, time.Now().Local())
 	ts.Require().NoError(err)
 
-	_, err = ts.jobsRepo.FindAndReserveJob(ctx, time.Now().Local(), time.Now().Local().Add(time.Minute))
+	_, err = ts.jobsRepo.FindAndReserveJobsForCapabilities(
+		ctx,
+		time.Now().UTC(),
+		time.Now().UTC().Add(time.Minute),
+		types.NewLeaseToken(),
+		[]outbox.JobCapability{{Name: jobName, SchemaVersion: outbox.DefaultSchemaVersion}},
+		1,
+	)
 	ts.Require().NoError(err)
 
 	stats, err := ts.outboxSvc.GetQueueStats(ctx)
@@ -387,25 +529,20 @@ func TestFanoutPartialPlanningRollsBackCompleteDeliverySet(t *testing.T) {
 
 func newFanoutIntegrationService(
 	t *testing.T,
-	capabilityRepo outbox.CapabilityJobsRepository,
+	jobsRepo outbox.JobsRepository,
 	fanoutRepo outbox.FanoutJobsRepository,
 	failedRepo *jobsfailedrepo.Repo,
 	txManager outbox.Transactor,
 ) *outbox.Service {
 	t.Helper()
 
-	legacyRepo, ok := capabilityRepo.(outbox.JobsRepository)
-	require.True(t, ok)
-
 	svc, err := outbox.New(
 		outbox.WithWorkers(1),
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(reserveFor),
-		outbox.WithJobsRepo(legacyRepo),
-		outbox.WithCapabilityJobsRepo(capabilityRepo),
+		outbox.WithJobsRepo(jobsRepo),
 		outbox.WithFanoutJobsRepo(fanoutRepo),
 		outbox.WithJobsFailedRepo(failedRepo),
-		outbox.WithCapabilityJobsFailedRepo(failedRepo),
 		outbox.WithTransactor(txManager),
 		outbox.WithLogger(logger.Discard()),
 	)

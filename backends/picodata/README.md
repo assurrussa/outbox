@@ -47,8 +47,6 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(jobs),
-		// Optional: only if you call svc.GetQueueStats(...)
-		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
 		outbox.WithLogger(lg),
@@ -67,24 +65,28 @@ if err != nil {
 dsn := cfg.ConnectionURL()
 ```
 
-`JobsStatRepository` is optional.  
-Keep `WithJobsStatRepo(...)` only when queue stats are needed.
+The jobs repository is auto-detected for exact grouped queue stats.
 
 `Transactor` in Picodata backend is currently best-effort (no connection-pinned SQL transaction in current client API).
 
-The repository exposes versioned create, capability-filtered claim, fenced
-heartbeat/ack, and version-preserving failed-job storage primitives. Do not wire
-them into the standard capability/fan-out service composition yet: Picodata Go
+The repository exposes the required version-aware fenced batch contract for
+exactly one job, plus version-preserving failed-job storage. Picodata Go
 client v1.0.0 has no connection-pinned transaction, so failed-row plus leased
 delete and complete fan-out planning cannot be committed atomically. The
 backend intentionally does not implement `FanoutJobsRepository` or expose a
 standard runtime facade.
 
+Picodata returns `1` from `MaxReservationBatchSize`. Keep
+`WithReservationBatchSize` unset or equal to `1`; a larger value is rejected by
+`outbox.New` with `ErrReservationBatchSizeUnsupported` wrapped by `ErrOption`.
+Direct claim and plural lease/release calls also reject any size other than
+one. `GetQueueStats` is one exact grouped scan of the active queue.
+
 Migration `00003_add_capability_leases.sql` is additive. Picodata 25.2 supports
 only `ADD COLUMN` in `ALTER TABLE`, so a one-step down records the migration as
 rolled back but retains the added columns. A full reset drops the owning tables.
-Rows inserted by a legacy process after the migration are read as schema v1
-with a nil lease until a capability-aware worker claims them.
+Rows inserted before the capability columns existed are read as schema v1 with
+a nil lease until a version-aware worker claims them.
 Table drops and additive alters wait for cluster-wide application so a
 subsequent migration cannot race DDL that is still being applied.
 

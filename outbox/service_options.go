@@ -13,35 +13,35 @@ var ErrOption = errors.New("outbox invalid option")
 type OptOptionsSetter func(o *Options)
 
 type Options struct {
-	workers                  int
-	idleTime                 time.Duration
-	reserveFor               time.Duration
-	jobsRepo                 JobsRepository
-	capabilityJobsRepo       CapabilityJobsRepository
-	reschedulableJobsRepo    ReschedulableJobsRepository
-	fanoutJobsRepo           FanoutJobsRepository
-	uniqueJobsRepo           UniqueJobsRepository
-	jobsStatRepo             JobsStatRepository
-	jobsFailedRepo           JobsFailedRepository
-	capabilityJobsFailedRepo CapabilityJobsFailedRepository
-	transactor               Transactor
-	logger                   logger.Logger
+	workers              int
+	idleTime             time.Duration
+	reserveFor           time.Duration
+	reservationBatchSize int
+	jobsRepo             JobsRepository
+	fanoutJobsRepo       FanoutJobsRepository
+	uniqueJobsRepo       UniqueJobsRepository
+	jobsStatRepo         JobsStatRepository
+	jobsFailedRepo       JobsFailedRepository
+	transactor           Transactor
+	logger               logger.Logger
 }
 
 func NewOptions(options ...OptOptionsSetter) (Options, error) {
 	o := Options{
-		workers:        1,
-		idleTime:       time.Second,
-		reserveFor:     5 * time.Minute,
-		logger:         logger.WrapNamed(logger.Default(), serviceName),
-		jobsRepo:       nil,
-		jobsFailedRepo: nil,
-		transactor:     nil,
+		workers:              1,
+		idleTime:             time.Second,
+		reserveFor:           5 * time.Minute,
+		reservationBatchSize: 1,
+		logger:               logger.WrapNamed(logger.Default(), serviceName),
+		jobsRepo:             nil,
+		jobsFailedRepo:       nil,
+		transactor:           nil,
 	}
 
 	for _, opt := range options {
 		opt(&o)
 	}
+	o.detectOptionalRepositories()
 
 	if err := o.Validate(); err != nil {
 		return o, errors.Join(ErrOption, err)
@@ -60,28 +60,13 @@ func (o *Options) Validate() error {
 	if o.jobsFailedRepo == nil {
 		return errors.New("nil jobsFailedRepo")
 	}
-	if o.capabilityJobsRepo != nil && o.capabilityJobsFailedRepo == nil {
-		return errors.New("nil capabilityJobsFailedRepo")
-	}
-	if o.capabilityJobsRepo == nil && o.capabilityJobsFailedRepo != nil {
-		return errors.New("nil capabilityJobsRepo")
-	}
-	if o.fanoutJobsRepo != nil && o.capabilityJobsRepo == nil {
-		return errors.New("fanoutJobsRepo requires capabilityJobsRepo")
-	}
-	if o.uniqueJobsRepo != nil && o.capabilityJobsRepo == nil {
-		return errors.New("uniqueJobsRepo requires capabilityJobsRepo")
-	}
-	if o.reschedulableJobsRepo != nil && o.capabilityJobsRepo == nil {
-		return errors.New("reschedulableJobsRepo requires capabilityJobsRepo")
-	}
 	if o.transactor == nil {
 		return errors.New("nil transactor")
 	}
 	if o.logger == nil {
 		return errors.New("nil logger")
 	}
-	if o.workers < 1 || o.workers > 32 {
+	if o.workers < 1 {
 		return fmt.Errorf("invalid number of workers: %d", o.workers)
 	}
 	if o.idleTime < 100*time.Millisecond || o.idleTime > 10*time.Second {
@@ -90,7 +75,43 @@ func (o *Options) Validate() error {
 	if o.reserveFor < 1*time.Second || o.reserveFor > 10*time.Minute {
 		return fmt.Errorf("invalid reserve for: %s", o.reserveFor)
 	}
+	return o.validateReservationBatch()
+}
+
+func (o *Options) validateReservationBatch() error {
+	if o.reservationBatchSize < 1 || o.reservationBatchSize > MaxReservationBatchSize {
+		return fmt.Errorf(
+			"invalid reservation batch size: %d (must be between 1 and %d)",
+			o.reservationBatchSize,
+			MaxReservationBatchSize,
+		)
+	}
+	repositoryMax := o.jobsRepo.MaxReservationBatchSize()
+	if repositoryMax < 1 {
+		return fmt.Errorf("invalid repository reservation batch maximum: %d", repositoryMax)
+	}
+	if o.reservationBatchSize > repositoryMax {
+		return fmt.Errorf(
+			"%w: requested %d, repository maximum %d",
+			ErrReservationBatchSizeUnsupported,
+			o.reservationBatchSize,
+			repositoryMax,
+		)
+	}
 	return nil
+}
+
+func (o *Options) detectOptionalRepositories() {
+	if o.uniqueJobsRepo == nil {
+		if repo, ok := o.jobsRepo.(UniqueJobsRepository); ok {
+			o.uniqueJobsRepo = repo
+		}
+	}
+	if o.jobsStatRepo == nil {
+		if repo, ok := o.jobsRepo.(JobsStatRepository); ok {
+			o.jobsStatRepo = repo
+		}
+	}
 }
 
 func WithWorkers(workers int) OptOptionsSetter {
@@ -108,6 +129,15 @@ func WithIdleTime(idleTime time.Duration) OptOptionsSetter {
 func WithReserveFor(reserveFor time.Duration) OptOptionsSetter {
 	return func(o *Options) {
 		o.reserveFor = reserveFor
+	}
+}
+
+// WithReservationBatchSize sets the maximum number of immediately available
+// jobs reserved by one worker claim. The default is one and valid values are
+// between one and 1000.
+func WithReservationBatchSize(size int) OptOptionsSetter {
+	return func(o *Options) {
+		o.reservationBatchSize = size
 	}
 }
 
@@ -129,58 +159,27 @@ func WithJobsRepo(jobsRepo JobsRepository) OptOptionsSetter {
 	}
 }
 
-// WithCapabilityJobsRepo enables version-aware claims and fenced leases.
-// The legacy JobsRepository remains required for backward-compatible operations.
-func WithCapabilityJobsRepo(jobsRepo CapabilityJobsRepository) OptOptionsSetter {
-	return func(o *Options) {
-		o.capabilityJobsRepo = jobsRepo
-		if repo, ok := jobsRepo.(ReschedulableJobsRepository); ok {
-			o.reschedulableJobsRepo = repo
-		}
-		if repo, ok := jobsRepo.(UniqueJobsRepository); ok {
-			o.uniqueJobsRepo = repo
-		}
-	}
-}
-
-// WithReschedulableJobsRepo enables persisted retry scheduling for capability
-// jobs. Standard backend repositories are detected automatically by
-// WithCapabilityJobsRepo; this option supports split repository compositions.
-func WithReschedulableJobsRepo(jobsRepo ReschedulableJobsRepository) OptOptionsSetter {
-	return func(o *Options) {
-		o.reschedulableJobsRepo = jobsRepo
-	}
-}
-
 // WithFanoutJobsRepo enables immutable fan-out source and delivery jobs.
-// Capability mode must be enabled so unsupported delivery schemas remain pending.
+// Unsupported delivery schemas remain pending because the required jobs
+// repository claims only registered capabilities.
 func WithFanoutJobsRepo(jobsRepo FanoutJobsRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.fanoutJobsRepo = jobsRepo
-		if repo, ok := jobsRepo.(UniqueJobsRepository); ok {
-			o.uniqueJobsRepo = repo
-		}
 	}
 }
 
 // WithUniqueJobsRepo enables immutable idempotency keys for direct versioned
-// puts. Standard fan-out and capability repositories are detected
-// automatically when they implement this contract.
+// puts. Standard jobs repositories are detected automatically; this option
+// supports split repository compositions.
 func WithUniqueJobsRepo(jobsRepo UniqueJobsRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.uniqueJobsRepo = jobsRepo
 	}
 }
 
-// WithCapabilityJobsFailedRepo preserves schema versions for capability-mode DLQ records.
-func WithCapabilityJobsFailedRepo(jobsFailedRepo CapabilityJobsFailedRepository) OptOptionsSetter {
-	return func(o *Options) {
-		o.capabilityJobsFailedRepo = jobsFailedRepo
-	}
-}
-
 // WithJobsStatRepo configures optional queue stats provider.
-// It is required only for Service.GetQueueStats.
+// Standard jobs repositories are detected automatically; this option supports
+// split repository compositions.
 func WithJobsStatRepo(jobsStatRepo JobsStatRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.jobsStatRepo = jobsStatRepo
