@@ -1,8 +1,8 @@
 # Implementation Notes
 
-## 2026-08-28: Unified version-aware fenced execution candidate
+## 2026-08-28: Unified version-aware fenced execution in v0.12.0
 
-- This v0.12 candidate removes the legacy single/unfiltered path and all split
+- The v0.12.0 release removes the legacy single/unfiltered path and all split
   capability, batch, lease, reschedule, and failed-repository aliases. One
   required `JobsRepository` owns versioned create, exact capability batch
   claim, plural heartbeat/tail release, fenced ack/reschedule, and its maximum
@@ -25,8 +25,8 @@
   conditional ready timestamp to RFC 3339 text before the repository restores
   UTC `time.Time`; the live grouped-stats integration test covers this path.
 - Existing migrations and schema-v1 defaults are retained. Published v0.11
-  tags are not changed; publication, tags, dependency pins, and clean-consumer
-  gates are outside this candidate implementation.
+  tags are not changed; the v0.12.0 core and backend modules follow the
+  repository's ordered immutable-tag release workflow.
 - Review of the MySQL claim plan found that the availability-only forced index
   examined unsupported rows before applying exact capability filters. The
   corrected path performs one bounded candidate lookup per unique capability

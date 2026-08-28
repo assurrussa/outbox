@@ -52,9 +52,9 @@ are not a stable public import surface for external consumers.
 For runnable wiring examples, use the README files under `examples/` and
 `backends/*/README.md`.
 
-## v0.11 to v0.12 candidate migration
+## Migrating from v0.11 to v0.12
 
-The future v0.12 line intentionally removes the legacy execution contracts;
+The v0.12.0 release intentionally removes the legacy execution contracts;
 there are no deprecated aliases. Existing v0.11 tags remain immutable.
 
 Custom repositories must replace the old split interfaces with one required
@@ -80,8 +80,8 @@ maximum is `MaxReservationBatchSize == 1000`; PostgreSQL, MySQL, and SQLite
 advertise that value, while Picodata advertises `1` and rejects larger values
 at construction and direct claim boundaries.
 
-Before deploying v0.12 workers, drain every v0.11 worker that can perform an
-unfiltered claim. Once only v0.12 workers remain, an unregistered
+Before deploying v0.12.0 workers, drain every v0.11 worker that can perform an
+unfiltered claim. Once only v0.12.0 workers remain, an unregistered
 `(name, schemaVersion)` stays pending with zero additional attempts and no
 automatic DLQ. Operators should alert on exact capability count and oldest
 ready age; cleanup or DLQ is an explicit administrative decision.
