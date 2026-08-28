@@ -17,8 +17,8 @@ type Repo struct {
 }
 
 var (
-	_ coreoutbox.JobsRepository           = (*Repo)(nil)
-	_ coreoutbox.CapabilityJobsRepository = (*Repo)(nil)
+	_ coreoutbox.JobsRepository     = (*Repo)(nil)
+	_ coreoutbox.JobsStatRepository = (*Repo)(nil)
 )
 
 func New(client picodata.Client, tableNames ...string) (*Repo, error) {

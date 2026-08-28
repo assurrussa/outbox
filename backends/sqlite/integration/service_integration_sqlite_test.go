@@ -116,7 +116,7 @@ func TestSQLiteAllJobsProcessed(t *testing.T) {
 
 	ts.Equal(jobsCount, job.ExecutedTimes())
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
@@ -124,22 +124,25 @@ func TestSQLiteAllJobsProcessed(t *testing.T) {
 	ts.Equal(int64(0), count)
 }
 
-func TestSQLiteDLQUnknownJob(t *testing.T) {
+func TestSQLiteUnsupportedNameRemainsPending(t *testing.T) {
 	ctx, _, ts := NewTestSQLiteSuite(t)
 	defer ts.cleanUp(ctx)
 
 	const jobName = "unknown-job"
-	_, err := ts.outboxSvc.Put(ctx, jobName, "{}", time.Now().UTC())
+	jobID, err := ts.outboxSvc.Put(ctx, jobName, "{}", time.Now().UTC())
 	ts.Require().NoError(err)
 
 	runSQLiteOutboxFor(ctx, ts, time.Second)
 
-	count, err := ts.jobsRepo.CountExact(ctx)
-	ts.Require().NoError(err)
-	ts.Equal(int64(0), count)
-	count, err = ts.jobsFailedRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Equal(int64(1), count)
+	count, err = ts.jobsFailedRepo.CountExact(ctx)
+	ts.Require().NoError(err)
+	ts.Equal(int64(0), count)
+	job, err := ts.jobsRepo.GetByID(ctx, jobID)
+	ts.Require().NoError(err)
+	ts.Zero(job.Attempts)
 }
 
 func TestSQLiteDLQAfterMaxAttemptsExceeding(t *testing.T) {
@@ -168,7 +171,7 @@ func TestSQLiteDLQAfterMaxAttemptsExceeding(t *testing.T) {
 
 	runSQLiteOutboxFor(ctx, ts, maxAttempts*time.Second)
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)

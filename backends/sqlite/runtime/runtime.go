@@ -17,11 +17,12 @@ import (
 )
 
 type Config struct {
-	DSN        string
-	Workers    int
-	IdleTime   time.Duration
-	ReserveFor time.Duration
-	Logger     logger.Logger
+	DSN                  string
+	Workers              int
+	IdleTime             time.Duration
+	ReserveFor           time.Duration
+	ReservationBatchSize int
+	Logger               logger.Logger
 }
 
 type Runtime struct {
@@ -63,11 +64,8 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	transactor := sqlitetx.New(client.DB())
 	options := []coreoutbox.OptOptionsSetter{
 		coreoutbox.WithJobsRepo(jobs),
-		coreoutbox.WithCapabilityJobsRepo(jobs),
 		coreoutbox.WithFanoutJobsRepo(jobs),
-		coreoutbox.WithJobsStatRepo(jobs),
 		coreoutbox.WithJobsFailedRepo(failed),
-		coreoutbox.WithCapabilityJobsFailedRepo(failed),
 		coreoutbox.WithTransactor(transactor),
 		coreoutbox.WithLogger(config.Logger),
 	}
@@ -79,6 +77,9 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	if config.ReserveFor != 0 {
 		options = append(options, coreoutbox.WithReserveFor(config.ReserveFor))
+	}
+	if config.ReservationBatchSize != 0 {
+		options = append(options, coreoutbox.WithReservationBatchSize(config.ReservationBatchSize))
 	}
 	service, err := coreoutbox.New(options...)
 	if err != nil {

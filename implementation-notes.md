@@ -1,5 +1,93 @@
 # Implementation Notes
 
+## 2026-08-28: Unified version-aware fenced execution candidate
+
+- This v0.12 candidate removes the legacy single/unfiltered path and all split
+  capability, batch, lease, reschedule, and failed-repository aliases. One
+  required `JobsRepository` owns versioned create, exact capability batch
+  claim, plural heartbeat/tail release, fenced ack/reschedule, and its maximum
+  batch size.
+- `limit=1` and larger reservations execute the same service code. One worker
+  remains sequential; reservation size changes prefetch, not handler
+  concurrency. PostgreSQL, MySQL, and SQLite advertise `1000`; Picodata wraps
+  its CAS claim in a one-element slice and advertises `1`.
+- Unsupported `(name, schemaVersion)` pairs, including unknown names, are never
+  claimed. They remain pending with attempts unchanged and no automatic DLQ.
+  Supported permanent/exhausted jobs use versioned fenced DLQ; `RetryAt` always
+  uses fenced rescheduling.
+- Queue observability is one exact aggregate snapshot grouped by name/schema
+  version. It includes UTC observation time and oldest ready time, scans the
+  active backlog, and intentionally adds no cache, projection table, top-N, or
+  index.
+- Picodata 25.2 cannot aggregate `DATETIME` through a conditional `MIN` and
+  returns `COUNT`/`SUM` as a numeric type that pgx cannot safely decode to
+  `int64`. Its single snapshot query therefore casts counts to `INT` and the
+  conditional ready timestamp to RFC 3339 text before the repository restores
+  UTC `time.Time`; the live grouped-stats integration test covers this path.
+- Existing migrations and schema-v1 defaults are retained. Published v0.11
+  tags are not changed; publication, tags, dependency pins, and clean-consumer
+  gates are outside this candidate implementation.
+- Review of the MySQL claim plan found that the availability-only forced index
+  examined unsupported rows before applying exact capability filters. The
+  corrected path performs one bounded candidate lookup per unique capability
+  through the index introduced by `00003`, then conditionally reserves and
+  reloads only the winning IDs. A lost concurrent race repeats selection.
+- Migration `00005` now extends the existing capability index with the full
+  `(available_at, created_at, id)` ordering instead of introducing a runtime
+  dependency on a separate availability-first index. Pre-`00005` schemas remain
+  functionally compatible; the migration removes their supported-backlog
+  filesort.
+- Before this review correction, verification passed `make prepare` followed by
+  `make check-all`, with core race/coverage and live MySQL, SQLite, PostgreSQL,
+  and Picodata suites.
+  GoMessenger also passed its full workspace-aligned `make check`, including
+  the SQLite Outbox-to-JetStream E2E, without changing module dependency pins.
+- The correction passed the query-builder regression, live concurrent and
+  multi-capability claims, a live default claim after restoring the original
+  `00003` index, the full race-enabled `make test-integration-mysql`, and
+  `make check`. The first full integration invocation was blocked before its
+  database connection by the local network sandbox; the identical canonical
+  target passed with loopback access.
+- The earlier additive batch notes below describe the branch baseline that this
+  unified contract supersedes.
+
+## 2026-08-28: Fenced reservation batches
+
+- The public option is `WithReservationBatchSize(1..1000)` with default `1`;
+  the default keeps the existing single-job repository path and custom-store
+  compatibility unchanged.
+- Batch reservation is additive for capability and legacy execution. One
+  worker claims up to the configured maximum with a shared token, executes
+  handlers sequentially, heartbeats explicit outstanding job IDs, and keeps
+  ACK, retry, and DLQ finalization individual.
+- Handler-level outcomes do not stop later jobs. A lease, heartbeat, database,
+  or finalization error stops the batch and returns from `Service.Run` after a
+  best-effort fenced release of unstarted jobs.
+- A graceful release clears unstarted leases and compensates the claim-time
+  attempt increment. A crashed process retains those claim attempts. Batch
+  transactions never span handler or external broker work.
+- PostgreSQL, MySQL, and SQLite are the implementation scope. Picodata retains
+  the source-compatible `batch=1` path because its current client cannot offer
+  the same atomic batch boundary.
+- PostgreSQL uses one ordered CTE `UPDATE ... RETURNING`. SQLite uses a short
+  `BEGIN IMMEDIATE` transaction and reapplies its five-second busy timeout on
+  every acquired batch connection; the first concurrent race run exposed that
+  the pool-level setup had configured only the initial connection.
+- The first MySQL concurrent claim test showed the second worker observing no
+  jobs even though ten of twenty rows were unclaimed. Exact `EXPLAIN FORMAT=JSON`
+  on the full-row claim selected `access_type: ALL` plus filesort. Migration
+  `00005_add_batch_claim_index.sql` adds `(available_at, created_at, id)`, and
+  the batch query explicitly selects it; the resulting plan is range access
+  without filesort and the concurrent plus full MySQL race integration passed.
+- Targeted race-enabled integration is green for PostgreSQL, MySQL, and SQLite,
+  covering disjoint concurrent claims, capability filtering, partial/empty
+  batches, heartbeat/release fences, and transaction rollback. Picodata has an
+  explicit integration assertion that batch values above one are rejected.
+- After generation and formatting, the maximal `make check-all` gate passed:
+  core vet/lint/race/coverage, every backend unit module, and race-enabled
+  MySQL, SQLite, PostgreSQL, and Picodata integration with final container
+  cleanup. No tag, publication, push, or deployment was performed.
+
 ## 2026-08-23: stable v0.11.0 backend release preparation
 
 - The additive core contract was merged and published first as immutable root
@@ -327,3 +415,25 @@ Decisions made:
 - Kept five-run core race stress and HTML coverage as explicit diagnostics.
 - Added ignored repository-local Go and linter caches so sandboxed runs do not
   fail or serialize work around user-level cache permissions.
+- 2026-08-27: added explicit PostgreSQL relay-pool sizing to the standard
+  runtime. `0/0` retains the existing `5/10` defaults; partial, non-positive,
+  and `min > max` configurations fail before opening a connection. The same
+  ordering check now lives in the low-level `pgsqlclient.PoolOptions` contract.
+- Documented the host-owned split-pool pattern: relay repositories may execute
+  staging inside a producer-owned `pgx.Tx` carried in context, while
+  `Runtime.Close` owns only the relay pool. This preserves atomic staging and
+  allows a fixed producer/relay connection budget without changing core or
+  other backend interfaces.
+- Profiled the capability reservation statement on disposable PostgreSQL 17.9
+  after `ANALYZE`, with `EXPLAIN (ANALYZE, BUFFERS, WAL, FORMAT JSON)` and three
+  rollback-safe repetitions at 0, 1,000, and 10,000 eligible jobs. With
+  realistic distinct `available_at`/`created_at` timestamps, the current schema
+  used `jobs_available_at_index` plus an incremental sort. Its median execution
+  time was 0.093/0.209/0.191 ms and the warm 1k/10k plans both used 30 shared
+  buffer hits, so backlog size did not cause material sort or scan growth.
+- A temporary `(name, schema_version, available_at, created_at, id) INCLUDE
+  (reserved_at)` candidate was selected by the planner and removed the sort. At
+  10k it reduced median execution time from 0.191 to 0.139 ms and warm shared
+  hits from 30 to 19, with the same six WAL records. Because the required
+  size-dependent regression was absent, no forward migration replaces the
+  existing capability-claim index in this iteration.

@@ -71,32 +71,30 @@ dependencies:
 
 Optional:
 - `WithLogger(...)` overrides the default logger.
-- `WithJobsStatRepo(...)` is needed only for `Service.GetQueueStats(...)`.
-  `Put` and `Run` do not require it.
-- Capability-aware execution is opt-in and requires both
-  `WithCapabilityJobsRepo(...)` and `WithCapabilityJobsFailedRepo(...)` in
-  addition to the legacy repositories.
+- `WithJobsRepo(...)` auto-detects stats and unique-put extensions;
+  `WithJobsStatRepo(...)` and `WithUniqueJobsRepo(...)` are split-composition
+  overrides.
 - Durable independent fan-out is opt-in through `WithFanoutJobsRepo(...)` and
-  requires capability mode. Eligible targets are immutable event-time
-  snapshots; the built-in dispatcher creates one fenced job per target.
+  uses immutable event-time snapshots; the built-in dispatcher creates one
+  fenced job per target.
 
 Important behavior:
 - Register jobs before `Service.Run(...)`; registering while running returns
   `ErrServiceRunning`.
 - `Service.Run(...)` starts worker loops and returns `ErrServiceRunning` when
   called twice concurrently.
-- Unknown job names and jobs that exceed `MaxAttempts()` are moved to the failed
-  jobs repository through `dlq(...)`.
-- In capability mode, claim identity is `(name, schemaVersion)`; unsupported
-  schemas remain pending, active handlers heartbeat their fenced lease, and
-  ack/DLQ deletion require the current token.
+- Every worker uses exact `(name, schemaVersion)` fenced batch claim, including
+  `limit=1`. Unsupported pairs, including unknown names, remain pending without
+  attempts or automatic DLQ.
+- Supported permanent or exhausted jobs move to versioned DLQ; ack, retry, and
+  DLQ deletion require the current token.
 - Fan-out event IDs and delivery IDs are idempotency boundaries. Do not prune
   PostgreSQL, MySQL, or SQLite idempotency tombstones until the host
   replay/audit retention has elapsed.
 - Successful jobs are deleted from the jobs repository after `Handle(...)`
   succeeds.
 - `JobIDFromContext(ctx)` exposes the current job ID while a handler executes.
-- Option bounds are part of the public behavior: workers `1..32`, idle time
+- Option bounds are part of the public behavior: workers must be positive, idle time
   `100ms..10s`, reserve time `1s..10m`.
 
 ## Backend Contract
@@ -104,13 +102,12 @@ Important behavior:
 Each backend owns storage initialization, repositories, transaction manager, and
 embedded migrations. Prefer backend README examples when wiring a real consumer.
 
-Postgres, MySQL, and SQLite implement the complete additive capability and
-fan-out repository contracts and expose standard runtime facades. The MySQL
-capability runtime targets MySQL 8.0, matching the integration image. Picodata
-implements only the safe versioned create/claim, fenced heartbeat/ack, and
-version-preserving failed-row primitives; it deliberately has no fan-out
-repository or standard runtime because its current client cannot provide the
-required atomic transaction boundary.
+Postgres, MySQL, and SQLite implement the complete required fenced batch
+contract with maximum `1000`, optional fan-out, and standard runtime facades.
+The MySQL runtime targets MySQL 8.0, matching the integration image. Picodata
+implements the same repository contract with maximum `1`; it deliberately has
+no fan-out repository or standard runtime because its current client cannot
+provide the required atomic transaction boundary.
 
 Migration convention:
 - Use `RunEmbedded(..., WithCommand("up"))` for normal consumers.

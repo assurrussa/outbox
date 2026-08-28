@@ -13,8 +13,10 @@ type Options struct {
 }
 
 var (
-	_ coreoutbox.CapabilityJobsRepository    = (*Repo)(nil)
+	_ coreoutbox.JobsRepository              = (*Repo)(nil)
+	_ coreoutbox.JobsStatRepository          = (*Repo)(nil)
 	_ coreoutbox.FanoutJobsRepository        = (*Repo)(nil)
+	_ coreoutbox.UniqueJobsRepository        = (*Repo)(nil)
 	_ coreoutbox.FanoutMaintenanceRepository = (*Repo)(nil)
 )
 

@@ -1,33 +1,29 @@
 # Runtime And Backend Contracts
 
-## Core Service
+## Core Construction
 
-`outbox.New(...)` constructs a `*outbox.Service` from options and validates the
-required dependencies before returning.
+`outbox.New(...)` requires:
 
-Required caller dependencies:
-- `WithJobsRepo(...)`
-- `WithJobsFailedRepo(...)`
-- `WithTransactor(...)`
+- `WithJobsRepo(...)`;
+- `WithJobsFailedRepo(...)`;
+- `WithTransactor(...)`.
 
-Defaulted options:
-- workers: `1`
-- idle time: `1s`
-- reserve duration: `5m`
-- logger: named default logger
+Defaults are one worker, `1s` idle time, `5m` reservation duration, reservation
+batch size `1`, and the named default logger. Validation bounds are:
 
-Validation bounds:
-- workers: `1..32`
-- idle time: `100ms..10s`
-- reserve duration: `1s..10m`
+- workers: any positive integer;
+- idle time: `100ms..10s`;
+- reservation duration: `1s..10m`;
+- reservation batch size: `1..MaxReservationBatchSize` (`1000`) and no larger
+  than the configured repository maximum.
 
-Optional stats:
-- `WithLogger(...)` can override the default logger.
-- `WithJobsStatRepo(...)` is required only for `Service.GetQueueStats(...)`.
-- If stats repo is missing, `GetQueueStats(...)` returns
-  `sharederrors.ErrJobStatNotInit`.
+`WithJobsRepo(...)` automatically detects `JobsStatRepository` and
+`UniqueJobsRepository`. `WithJobsStatRepo(...)` and
+`WithUniqueJobsRepo(...)` support split compositions and take priority over
+auto-detection. Fan-out is never auto-detected; it remains an explicit
+`WithFanoutJobsRepo(...)` opt-in.
 
-## Job Registration And Execution
+## Registration And Version Identity
 
 Jobs implement:
 
@@ -40,259 +36,215 @@ type Job interface {
 }
 ```
 
-Register jobs before starting the service. `RegisterJob(...)` rejects nil jobs,
-duplicate names, and registration after the service is running. `MustRegisterJob`
-panics on registration failure.
+A job may also implement `VersionedJob`. Otherwise it registers as schema v1.
+Registration identity is the exact `(name, schemaVersion)` pair, so several
+versions of one job name may coexist. Versions must be positive. Registration
+while the service is running returns `ErrServiceRunning`.
 
-`Service.Run(ctx)` starts worker loops. A concurrent second run returns
-`ErrServiceRunning`.
+`Put(...)` is shorthand for `PutVersioned(..., DefaultSchemaVersion, ...)` and
+always calls `JobsRepository.CreateJobVersioned`. `PutVersioned(...)` preserves
+the supplied positive version.
 
-Execution behavior:
-- The repository reserves a job until `now + reserveFor`.
-- The handler runs with a timeout from `ExecutionTimeout()`.
-- `JobIDFromContext(ctx)` returns the current job ID inside the handler.
-- A successful handler causes the job to be deleted.
-- A panic in `Handle(...)` is converted into an error.
-- Unknown jobs and jobs whose attempts reach `MaxAttempts()` move to DLQ.
+## One Fenced Batch Execution Path
 
-DLQ behavior uses `Transactor.RunInTx(...)` to create the failed-job row and
-delete the original job.
+Every worker uses `FindAndReserveJobsForCapabilities`, including when the limit
+is one. `WithReservationBatchSize(size)` changes prefetch only. A worker handles
+its claimed slice sequentially, so maximum handler concurrency remains the
+configured worker count.
 
-## Capability-Aware Execution
+The repository receives the complete registered capability set and one new
+non-zero lease token. It must atomically claim at most `limit` ready rows in
+`available_at, created_at, id` order, increment their attempts, and return the
+same token on every row. An empty queue must return `outbox.ErrNoJobs`;
+`sharederrors.ErrNoJobs` remains the same sentinel for migration compatibility.
+Returning an empty slice with a `nil` error is a contract violation surfaced as
+`ErrEmptyReservationBatch`, so a broken custom adapter cannot silently spin.
+The service also rejects too many rows or a token mismatch.
 
-Capability mode is enabled only when callers provide both:
+One owned heartbeat extends every unfinished row every `reserveFor / 3`. The
+heartbeat goroutine is stopped and joined before tail release or final return.
+A database error or affected-row mismatch is a lost fence: the active handler
+is cancelled, no later handler starts, and the worker returns `ErrLeaseLost`.
 
-- `WithCapabilityJobsRepo(...)`;
-- `WithCapabilityJobsFailedRepo(...)`.
+Per-job outcomes are fenced:
 
-The legacy repositories remain required, which keeps `Put(...)`, queue stats,
-and existing consumers source-compatible. A handler may implement
-`VersionedJob`; otherwise it is registered as schema v1. Registration identity
-is `(name, schemaVersion)`, so one worker can intentionally support more than
-one schema for the same job name.
+- success calls `DeleteJobWithLease`;
+- `RetryAt(err, at)` calls `RescheduleJobWithLease`, clears the lease, and does
+  not sleep in the worker;
+- `Permanent(err)` creates a versioned failed row and deletes the active row in
+  one transaction;
+- reaching `MaxAttempts()` takes precedence over `RetryAt` and uses the same
+  versioned DLQ transaction;
+- an ordinary retriable error leaves that job reserved until its current lease
+  expires and the worker continues with the next claimed row.
 
-In capability mode:
+`BeginDrain`, run cancellation, or an infrastructure/fence error releases only
+the unstarted tail. `ReleaseUnstartedJobsWithLease` clears its reservation and
+token and compensates the attempt added by that claim. The active row is never
+acknowledged merely because the run context ended. A crash or failed release
+leaves the claimed attempts intact.
 
-- `Put(...)` persists schema v1;
-- `PutVersioned(...)` validates and persists an explicit positive version;
-- the repository receives the complete registered capability set and must not
-  reserve anything else;
-- an unsupported job remains pending without consuming attempts or entering
-  DLQ;
-- every reservation receives a new non-zero lease token;
-- the service extends the lease every `reserveFor / 3` while the handler runs;
-- heartbeat failure or a lost fence cancels the handler and returns
-  `ErrLeaseLost`;
-- ack and DLQ deletion affect exactly one row only when token and lease are
-  still current;
-- versioned DLQ rows retain the source schema version.
+Delivery remains at-least-once. Fencing prevents a stale worker from deleting a
+row owned by a newer worker; it cannot make an external side effect exactly
+once.
 
-When the configured capability repository also implements
-`ReschedulableJobsRepository`, a handler may return `RetryAt(err, at)`. The
-service increments the current attempt and atomically moves `available_at`
-while clearing the lease token and reservation. The update is conditional on
-job ID, the current token, and a lease that is still live at `now`. Zero
-affected rows returns `ErrLeaseLost`; it must not be treated as a successful
-schedule. Attempt exhaustion still moves the job to DLQ.
+## Unsupported Capability Policy
 
-`Permanent(err)` classifies an input or policy failure that cannot succeed by
-retrying unchanged content. Capability mode moves it directly to the
-schema-preserving DLQ with the same fenced transaction. A nil error remains
-nil and wrapped disposition errors retain their original cause for
-`errors.Is`/`errors.As`.
+Any unregistered `(name, schemaVersion)` pair, including an unknown name, must
+remain pending:
 
-Delivery remains at-least-once. A handler may finish its external side effect
-and lose the fence before ack, so payloads need a stable delivery/idempotency
-identifier. Fencing prevents a stale worker from deleting a job owned by a
-newer worker; it cannot provide exactly-once semantics in a remote system.
+- it is not claimed;
+- attempts are not incremented;
+- it is not sent to automatic DLQ;
+- it becomes eligible when a matching worker is registered;
+- it remains included in backlog statistics.
 
-Capability rollout is expand-first. Legacy workers do not understand schema
-filters, so producers must stay on v1 until all legacy workers have drained.
-Capability-aware workers can register v1 and v2 together during the transition.
+This is required for safe rolling deployment. One worker cannot infer that no
+other worker supports a version. Cleanup or DLQ of unsupported work is an
+explicit administrative operation; there is no callback, flag, or cluster
+capability registry in the core contract.
 
-## Durable Fan-Out
+## Queue Snapshot
 
-Fan-out is a second opt-in layer enabled by `WithFanoutJobsRepo(...)`. It also
-requires capability mode. `PutFanout(...)` writes one source job containing:
+`Service.GetQueueStats(...)` is optional and returns one exact snapshot:
 
-- a stable event ID, topic, schema version, payload, and occurrence time;
-- the complete eligible target set fixed at event commit;
-- an opaque immutable snapshot per target, such as config and secret revisions;
-- the requested delivery availability time.
+```go
+type QueueStats struct {
+	ObservedAt   time.Time
+	Total        int64
+	Available    int64
+	Processing   int64
+	ByCapability []CapabilityQueueStats
+}
 
-Call `PutFanout` inside the same host transaction that commits the source
-domain event when atomic domain-state/event publication is required. Target
-ordering is canonicalized. Reusing an event ID with different event data,
-target eligibility, snapshots, or availability returns
-`ErrIdempotencyConflict`.
+type CapabilityQueueStats struct {
+	Name              string
+	SchemaVersion     SchemaVersion
+	Total             int64
+	Available         int64
+	Processing        int64
+	OldestAvailableAt time.Time
+}
+```
 
-Snapshots and event payloads are byte-immutable idempotency inputs. Store only
-secret identifiers/revisions in a target snapshot, never plaintext signing
-secrets. The consumer resolves the referenced encrypted secret version and the
-host retains that version until every related delivery reaches terminal state.
+`ObservedAt` and non-zero `OldestAvailableAt` values are UTC. Groups are sorted
+by name and schema version. A zero oldest timestamp means that the group has no
+ready row. When it is non-zero, the oldest ready age is
+`ObservedAt.Sub(OldestAvailableAt)`. `Total` includes ready, scheduled,
+processing, and unsupported active rows; `Available` means ready and not
+currently leased; `Processing` means a lease is live at `ObservedAt`.
 
-Target kinds use `[A-Za-z0-9_-]`; topics use `[A-Za-z0-9._-]`. The derived
-delivery capability name must fit the PostgreSQL `varchar(255)` job-name
-contract.
+The backend interface is one aggregate call:
 
-The internal `outbox.fanout.dispatch` v1 handler materializes all target jobs
-inside one transaction. Its source job is acknowledged only after that commit.
-A crash before commit leaves no partial set; a crash after commit but before
-source ack may replay the dispatcher, but stable delivery keys prevent duplicate
-jobs. Each materialized job has:
+```go
+type JobsStatRepository interface {
+	GetQueueStats(ctx context.Context, observedAt time.Time) (QueueStats, error)
+}
+```
 
-- capability name `FanoutDeliveryJobName(target.Kind, event.Topic)`;
-- the event schema version;
-- a deterministic delivery ID;
-- the original event and target snapshot in its payload;
-- its own attempts, lease/fence, retry, ack, and DLQ lifecycle.
-
-Idempotency keys live in a separate backend registry, so deleting a completed
-job does not reopen its delivery key. `PruneJobIdempotencyKeys` removes only
-tombstones without an active job and works in bounded batches. The caller owns
-the retention cutoff and must keep tombstones at least as long as any event can
-be replayed or audited.
+Standard backends execute one exact `GROUP BY name, schema_version` query over
+the active queue. There is no cache, projection table, top-N truncation, or new
+index. Treat it as an active-backlog scan and let the host control call
+frequency. Without a stats repository, the service returns
+`sharederrors.ErrJobStatNotInit`.
 
 ## Repository Interfaces
 
-Core storage dependencies are interfaces:
-
 ```go
 type JobsRepository interface {
-	CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error)
-	FindAndReserveJob(ctx context.Context, now time.Time, until time.Time) (models.Job, error)
-	DeleteJob(ctx context.Context, jobID types.JobID) (int64, error)
+	CreateJobVersioned(
+		ctx context.Context,
+		name string,
+		schemaVersion SchemaVersion,
+		payload string,
+		availableAt time.Time,
+	) (types.JobID, error)
+	FindAndReserveJobsForCapabilities(
+		ctx context.Context,
+		now, until time.Time,
+		leaseToken LeaseToken,
+		capabilities []JobCapability,
+		limit int,
+	) ([]models.Job, error)
+	ExtendJobLeases(
+		ctx context.Context,
+		jobIDs []types.JobID,
+		leaseToken LeaseToken,
+		now, until time.Time,
+	) (int64, error)
+	ReleaseUnstartedJobsWithLease(
+		ctx context.Context,
+		jobIDs []types.JobID,
+		leaseToken LeaseToken,
+		now time.Time,
+	) (int64, error)
+	DeleteJobWithLease(
+		ctx context.Context,
+		jobID types.JobID,
+		leaseToken LeaseToken,
+		now time.Time,
+	) (int64, error)
+	RescheduleJobWithLease(
+		ctx context.Context,
+		jobID types.JobID,
+		leaseToken LeaseToken,
+		now, availableAt time.Time,
+	) (int64, error)
+	MaxReservationBatchSize() int
 }
-```
 
-```go
 type JobsFailedRepository interface {
-	CreateFailedJob(ctx context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error)
+	CreateFailedJobVersioned(
+		ctx context.Context,
+		jobID types.JobID,
+		name string,
+		schemaVersion SchemaVersion,
+		payload, reason string,
+	) (types.JobID, error)
 }
-```
 
-```go
 type Transactor interface {
 	RunInTx(ctx context.Context, f func(context.Context) error) error
 }
 ```
 
-`JobsStatRepository` is separate so normal producer/worker flows do not depend
-on exact queue-count support.
+There are no legacy single-claim, unfiltered batch, unconditional delete, or
+unversioned failed-job interfaces and no deprecated aliases.
 
-Capability storage is deliberately separate from `JobsRepository` so adding
-it does not break existing custom repository implementations. The opt-in
-interfaces cover versioned create/claim, lease heartbeat, conditional delete,
-and version-preserving DLQ writes. PostgreSQL, MySQL, and SQLite implement the
-complete capability and fan-out contracts. Picodata implements only the safe
-single-statement/CAS capability primitives described below.
+`UniqueJobsRepository` remains an optional immutable-idempotency extension.
+Identical active or tombstone replay returns the original ID with
+`Created == false`; a mismatch returns `ErrIdempotencyConflict`.
 
-`UniqueJobsRepository` is an additive extension of
-`FanoutJobsRepository`. Its `CreateJobVersionedUniqueResult` returns both the
-stable job ID and whether the immutable key created a new record. An identical
-active-job or tombstone replay returns `Created == false`; a mismatch in name,
-schema version, payload, or availability returns `ErrIdempotencyConflict`.
-`Service.PutVersionedUnique` exposes that result through the public
-`UniqueVersionedPutter` contract.
+## Durable Fan-Out
 
-`ReschedulableJobsRepository` is separate from
-`CapabilityJobsRepository` so custom stores are not forced to implement a new
-method. `WithCapabilityJobsRepo` detects both extensions when available;
-explicit options support repositories split across different values. Direct
-unique and reschedulable options still require capability mode at construction.
+`WithFanoutJobsRepo(...)` enables the built-in `outbox.fanout.dispatch` v1
+handler. `PutFanout(...)` stores an immutable source event plus the exact target
+snapshots selected at event time. The dispatcher creates one independently
+retried versioned job per target inside a transaction. Stable event and
+delivery IDs are idempotency boundaries.
 
-## Backend Pattern
+PostgreSQL, MySQL, and SQLite keep completed idempotency tombstones separately
+from active jobs. Hosts may prune them only after their replay, audit, and
+delivery retry windows. Picodata does not implement fan-out or unique puts.
 
-Every backend module follows the same consumer shape:
+## Backend Boundaries
 
-1. Create storage client.
-2. Run embedded migrations.
-3. Build `jobsrepo`, `jobsfailedrepo`, and transaction manager.
-4. Pass those into `outbox.New(...)`.
-5. Register jobs and run the service.
+PostgreSQL, MySQL, and SQLite implement the full required repository contract
+and return `1000` from `MaxReservationBatchSize()`. Their standard runtimes
+accept `ReservationBatchSize`; zero preserves the core default of one.
 
-Backend modules expose embedded migrations and filesystem migration mode:
+MySQL capability claims target MySQL 8.0. They select a bounded set per exact
+capability, merge those candidates in queue order, and conditionally reserve
+the winning IDs in a short read-committed transaction. SQLite uses a short
+`BEGIN IMMEDIATE` and the standard runtime owns one pooled connection because
+SQLite is single-writer. PostgreSQL uses one ordered CTE `UPDATE ... RETURNING`
+statement.
 
-```go
-RunEmbedded(ctx, ..., log, WithCommand("up"))
-Run(ctx, ..., log, WithCommand("up"), WithDirectory("/path/to/migrations"))
-```
+Picodata implements the same public slice contract but only for a single row
+and returns `1` from `MaxReservationBatchSize()`. Plural lease and release
+methods reject any slice whose length is not one. Its pool API still lacks a
+connection-pinned SQL transaction, so its transactor is best-effort and the
+backend does not expose the standard atomic runtime or fan-out contract.
 
-Use embedded migrations for normal applications. Filesystem migrations are for
-explicit migration-directory control.
-
-## Backend Notes
-
-MySQL:
-- Client contract exposes `DB() *sql.DB` and `Close() error`.
-- Compose maps local MySQL to `127.0.0.1:33306` by default.
-- Capability claims target MySQL 8.0 and use
-  `SELECT ... FOR UPDATE SKIP LOCKED`.
-- Embedded migrations add schema versions, fenced leases, and an immutable
-  idempotency registry.
-- The jobs repository implements unique put results and fenced persisted
-  rescheduling.
-- `runtime.Open` is the standard capability/fan-out worker composition.
-
-SQLite:
-- Client contract exposes `DB() *sql.DB` and `Close() error`.
-- The standard runtime enforces one pooled connection because SQLite is a
-  single-writer database.
-- Embedded migrations add schema versions, fenced leases, and an immutable
-  idempotency registry.
-- The jobs repository implements unique put results and fenced persisted
-  rescheduling.
-- `runtime.Open` is the standard capability/fan-out worker composition.
-
-Postgres:
-- Client contract exposes `DB() storage.DBEngine` and `Close() error`.
-- Compose maps local Postgres to `127.0.0.1:54335` by default.
-- The backend uses pgx under the storage/client layer.
-- Embedded migration `00003_add_capability_leases.sql` adds positive
-  `schema_version`, lease tokens, a capability claim index, and DLQ schema
-  versions without rewriting existing v1 rows.
-- `jobsrepo.Repo` and `jobsfailedrepo.Repo` implement the opt-in capability
-contracts.
-- `jobsrepo.Repo` implements unique put results and fenced persisted
-  rescheduling.
-
-`FanoutJobsRepository` is another additive interface for immutable unique job
-creation. `FanoutMaintenanceRepository` is optional operational maintenance;
-normal producer and worker execution does not depend on pruning.
-
-Picodata:
-- Client contract exposes `Pool() *picodata-go.Pool` and `Close() error`.
-- Deployment config is env-only.
-- `PICODATA_CONFIG_FILE` and `cluster-storage*.yml` render flows are not
-  supported.
-- Client DSN host `0.0.0.0` is rejected.
-- `localhost` is normalized to `127.0.0.1` by the deploy-env helper.
-- Do not set both `PICODATA_LISTEN` and `PICODATA_IPROTO_LISTEN`.
-- Do not set both `PICODATA_PG_ADVERTISE` and `PICODATA_IPROTO_ADVERTISE`.
-- The current transaction manager is best-effort because the Picodata client API
-  does not provide connection-pinned SQL transactions.
-- Versioned create, capability-filtered claim, heartbeat, conditional leased
-  delete, fenced persisted rescheduling, and versioned failed-job persistence
-  are available as storage primitives.
-- Unique put results and the immutable idempotency registry are not available.
-- The backend deliberately does not implement `FanoutJobsRepository` or expose
-  the standard runtime facade. Best-effort callbacks are not an atomic fan-out
-  or DLQ boundary.
-- Picodata 25.2 only supports additive `ALTER TABLE ... ADD COLUMN`; migration
-  00003 therefore retains its columns on a one-step down. Full reset still
-  drops the owning tables.
-- Null capability columns written by a legacy process during an expand-first
-  rollout are interpreted as schema v1 and a nil lease.
-
-## Release Boundary
-
-Before claiming a backend module is safe for standalone consumers, verify it
-without workspace replacement:
-
-```sh
-make release-verify-backends
-```
-
-The dependency isolation test also checks package dependencies with
-`GOWORK=off`, so it is a useful guard for accidental cross-backend dependency
-leaks.
+Existing migrations and schema-v1 defaults are preserved. Rows created before
+capability columns existed are interpreted as schema v1 with an empty lease.

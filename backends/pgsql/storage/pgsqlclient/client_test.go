@@ -142,3 +142,19 @@ func TestNewPool_Error_Validate(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, pool)
 }
+
+func TestNewPoolRejectsMinimumAboveMaximum(t *testing.T) {
+	t.Parallel()
+
+	pool, err := pgsqlclient.NewPool(context.Background(), pgsqlclient.NewOptions(
+		"localhost:54752",
+		"test-username",
+		"test-pwd",
+		"test-db-name",
+		pgsqlclient.WithMinConnectionsCount(2),
+		pgsqlclient.WithMaxConnectionsCount(1),
+		pgsqlclient.WithCheck(false),
+	))
+	require.ErrorContains(t, err, "min connections count must not exceed max connections count")
+	assert.Nil(t, pool)
+}

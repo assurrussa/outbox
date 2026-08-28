@@ -111,7 +111,7 @@ func TestMySQLAllJobsProcessed(t *testing.T) {
 	defer cancel()
 
 	ts.Require().Eventually(func() bool {
-		count, err := ts.jobsRepo.CountExact(ctx)
+		count, err := activeJobsCount(ctx, ts.jobsRepo)
 		return err == nil && count == 0
 	}, 5*time.Second, 20*time.Millisecond)
 
@@ -120,7 +120,7 @@ func TestMySQLAllJobsProcessed(t *testing.T) {
 
 	ts.Equal(jobsCount, job.ExecutedTimes())
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
@@ -128,23 +128,26 @@ func TestMySQLAllJobsProcessed(t *testing.T) {
 	ts.Require().Equal(int64(0), count)
 }
 
-func TestMySQLDLQUnknownJob(t *testing.T) {
+func TestMySQLUnsupportedNameRemainsPending(t *testing.T) {
 	ctx, _, ts := NewTestMySQLSuite(t)
 	defer ts.cleanUp(ctx)
 
 	const jobName = "unknown-job"
 	const jobPayload = "{}"
-	_, err := ts.outboxSvc.Put(ctx, jobName, jobPayload, time.Now().UTC())
+	jobID, err := ts.outboxSvc.Put(ctx, jobName, jobPayload, time.Now().UTC())
 	ts.Require().NoError(err)
 
 	runMySQLOutboxFor(ctx, ts, time.Second)
 
-	count, err := ts.jobsRepo.CountExact(ctx)
-	ts.Require().NoError(err)
-	ts.Require().Equal(int64(0), count)
-	count, err = ts.jobsFailedRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(1), count)
+	count, err = ts.jobsFailedRepo.CountExact(ctx)
+	ts.Require().NoError(err)
+	ts.Require().Equal(int64(0), count)
+	job, err := ts.jobsRepo.GetByID(ctx, jobID)
+	ts.Require().NoError(err)
+	ts.Zero(job.Attempts)
 }
 
 func TestMySQLDLQAfterMaxAttemptsExceeding(t *testing.T) {
@@ -174,7 +177,7 @@ func TestMySQLDLQAfterMaxAttemptsExceeding(t *testing.T) {
 
 	runMySQLOutboxFor(ctx, ts, maxAttempts*time.Second)
 
-	count, err := ts.jobsRepo.CountExact(ctx)
+	count, err := activeJobsCount(ctx, ts.jobsRepo)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count)
 	count, err = ts.jobsFailedRepo.CountExact(ctx)

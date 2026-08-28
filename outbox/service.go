@@ -13,8 +13,6 @@ import (
 
 	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/sharederrors"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 const serviceName = "outbox"
@@ -74,9 +72,6 @@ func (s *Service) RegisterJobs(jobs ...Job) error {
 		capability, err := capabilityForJob(job)
 		if err != nil {
 			return fmt.Errorf("job %d capability: %w", index, err)
-		}
-		if capability.SchemaVersion != DefaultSchemaVersion && s.capabilityJobsRepo == nil {
-			return ErrCapabilityRepositoryNotConfigured
 		}
 		if _, duplicate := capabilities[capability]; duplicate {
 			return fmt.Errorf(
@@ -229,97 +224,14 @@ func (s *Service) processAvailableJobs(
 		default:
 		}
 
-		if err := s.findAndProcessJob(ctx, log, capabilities); err != nil {
-			if errors.Is(err, sharederrors.ErrNoJobs) || errors.Is(err, ErrServiceDraining) {
+		if err := s.findAndProcessBatch(ctx, log, capabilities); err != nil {
+			if errors.Is(err, ErrNoJobs) || errors.Is(err, ErrServiceDraining) {
 				log.DebugContext(ctx, "no jobsrepo found to process")
 				return nil
 			}
 			return err
 		}
 	}
-}
-
-func (s *Service) findAndProcessLegacyJob(ctx context.Context, log logger.Logger) error {
-	job, err := func() (models.Job, error) {
-		s.claimMu.RLock()
-		defer s.claimMu.RUnlock()
-		if s.IsDraining() {
-			return models.Job{}, ErrServiceDraining
-		}
-		return s.jobsRepo.FindAndReserveJob(ctx, time.Now().Local(), time.Now().Local().Add(s.reserveFor))
-	}()
-	if err != nil {
-		return fmt.Errorf("find and reserve job: %w", err)
-	}
-
-	capability := JobCapability{
-		Name:          job.Name,
-		SchemaVersion: normalizeSchemaVersion(job.SchemaVersion),
-	}
-
-	s.mu.RLock()
-	j, ok := s.jobs[capability]
-	s.mu.RUnlock()
-	if !ok {
-		log.WarnContext(ctx, "drop to dlq: job is not registered",
-			slog.String("job_name", job.Name),
-			slog.String("job_id", job.ID.String()),
-			slog.Int("attempt_number", job.Attempts),
-		)
-		return s.dlq(ctx, job.ID, job.Name, job.Payload, "unknown job")
-	}
-
-	err = s.executeJob(ctx, j, job)
-	if err != nil {
-		log.ErrorContext(ctx, "handle job error",
-			logger.Error(err),
-			slog.String("job_name", job.Name),
-			slog.String("job_id", job.ID.String()),
-			slog.Int("attempt_number", job.Attempts),
-		)
-
-		if IsPermanent(err) {
-			log.WarnContext(ctx, "drop to dlq: permanent job failure",
-				slog.String("job_name", job.Name),
-				slog.String("job_id", job.ID.String()),
-				slog.Int("attempt_number", job.Attempts),
-			)
-			return s.dlq(
-				ctx,
-				job.ID,
-				job.Name,
-				job.Payload,
-				fmt.Sprintf("permanent failure: %v", err),
-			)
-		}
-
-		if job.Attempts >= j.MaxAttempts() {
-			log.WarnContext(ctx, "drop to dlq: job max attempts exceeded",
-				slog.String("job_name", job.Name),
-				slog.String("job_id", job.ID.String()),
-				slog.Int("attempt_number", job.Attempts),
-			)
-			return s.dlq(
-				ctx,
-				job.ID,
-				job.Name,
-				job.Payload,
-				fmt.Sprintf("max attempts exceeded: %v", err),
-			)
-		}
-		return nil
-	}
-
-	if _, err := s.jobsRepo.DeleteJob(context.WithoutCancel(ctx), job.ID); err != nil {
-		log.ErrorContext(ctx, "delete job error",
-			logger.Error(err),
-			slog.String("job_name", job.Name),
-			slog.String("job_id", job.ID.String()),
-			slog.Int("attempt_number", job.Attempts),
-		)
-	}
-
-	return nil
 }
 
 func (s *Service) executeJob(ctx context.Context, j Job, job models.Job) (err error) {
@@ -339,18 +251,4 @@ func (s *Service) handleJob(ctx context.Context, j Job, job models.Job) (err err
 	}()
 
 	return j.Handle(ctx, job.Payload)
-}
-
-func (s *Service) dlq(ctx context.Context, jobID types.JobID, name, payload, reason string) error {
-	return s.transactor.RunInTx(ctx, func(ctx context.Context) error {
-		if _, err := s.jobsFailedRepo.CreateFailedJob(ctx, jobID, name, payload, reason); err != nil {
-			return fmt.Errorf("create failed job: %w", err)
-		}
-
-		if _, err := s.jobsRepo.DeleteJob(ctx, jobID); err != nil {
-			return fmt.Errorf("delete job: %w", err)
-		}
-
-		return nil
-	})
 }

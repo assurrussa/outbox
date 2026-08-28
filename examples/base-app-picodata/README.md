@@ -52,7 +52,7 @@ Rules:
 
 ## Notes
 
-- `WithJobsStatRepo(...)` is optional and needed only for `GetQueueStats(...)`.
+- The standard jobs repository is auto-detected for `GetQueueStats(...)`.
 - This example uses `WithWorkers(1)` for predictable demo logs.
 - Migrations in example use custom version table `picodata_db_version_examples`.
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	stdstrings "strings"
 	"time"
 
@@ -17,10 +18,6 @@ import (
 	"github.com/assurrussa/outbox/shared/strings"
 	"github.com/assurrussa/outbox/shared/types"
 )
-
-func (r *Repo) CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
-	return r.CreateJobVersioned(ctx, name, coreoutbox.DefaultSchemaVersion, payload, availableAt)
-}
 
 func (r *Repo) CreateJobVersioned(
 	ctx context.Context,
@@ -52,33 +49,42 @@ func (r *Repo) CreateJobVersioned(
 	return id, nil
 }
 
-func (r *Repo) FindAndReserveJob(ctx context.Context, now, until time.Time) (models.Job, error) {
-	return r.findAndReserve(ctx, now, until, types.LeaseTokenNil, nil)
-}
-
-func (r *Repo) FindAndReserveJobForCapabilities(
+func (r *Repo) FindAndReserveJobsForCapabilities(
 	ctx context.Context,
 	now time.Time,
 	until time.Time,
 	leaseToken coreoutbox.LeaseToken,
 	capabilities []coreoutbox.JobCapability,
-) (models.Job, error) {
+	limit int,
+) ([]models.Job, error) {
+	if limit != 1 {
+		return nil, fmt.Errorf(
+			"%w: Picodata supports reservation batch size 1, got %d",
+			coreoutbox.ErrReservationBatchSizeUnsupported,
+			limit,
+		)
+	}
 	if err := leaseToken.Validate(); err != nil {
-		return models.Job{}, fmt.Errorf("invalid lease token: %w", err)
+		return nil, fmt.Errorf("invalid lease token: %w", err)
 	}
 	if len(capabilities) == 0 {
-		return models.Job{}, sharederrors.ErrNoJobs
+		return nil, sharederrors.ErrNoJobs
 	}
 	for _, capability := range capabilities {
 		if err := capability.Validate(); err != nil {
-			return models.Job{}, fmt.Errorf("invalid capability: %w", err)
+			return nil, fmt.Errorf("invalid capability: %w", err)
 		}
 	}
 
-	return r.findAndReserve(ctx, now, until, leaseToken, capabilities)
+	job, err := r.findAndReserveForCapabilities(ctx, now, until, leaseToken, capabilities)
+	if err != nil {
+		return nil, err
+	}
+
+	return []models.Job{job}, nil
 }
 
-func (r *Repo) findAndReserve(
+func (r *Repo) findAndReserveForCapabilities(
 	ctx context.Context,
 	now time.Time,
 	until time.Time,
@@ -86,24 +92,21 @@ func (r *Repo) findAndReserve(
 	capabilities []coreoutbox.JobCapability,
 ) (models.Job, error) {
 	args := []any{now}
-	capabilityPredicate := ""
-	if capabilities != nil {
-		clauses := make([]string, 0, len(capabilities))
-		for _, capability := range capabilities {
-			namePosition := len(args) + 1
-			versionPosition := namePosition + 1
-			clauses = append(
-				clauses,
-				fmt.Sprintf(
-					"(name = $%d AND COALESCE(schema_version, 1) = $%d)",
-					namePosition,
-					versionPosition,
-				),
-			)
-			args = append(args, capability.Name, capability.SchemaVersion)
-		}
-		capabilityPredicate = " AND (" + stdstrings.Join(clauses, " OR ") + ")"
+	clauses := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		namePosition := len(args) + 1
+		versionPosition := namePosition + 1
+		clauses = append(
+			clauses,
+			fmt.Sprintf(
+				"(name = $%d AND COALESCE(schema_version, 1) = $%d)",
+				namePosition,
+				versionPosition,
+			),
+		)
+		args = append(args, capability.Name, capability.SchemaVersion)
 	}
+	capabilityPredicate := " AND (" + stdstrings.Join(clauses, " OR ") + ")"
 	queryRows := fmt.Sprintf(`
 	SELECT id, queue, name, COALESCE(schema_version, 1), payload, attempts, reserved_at,
 		COALESCE(lease_token, '00000000-0000-0000-0000-000000000000'), available_at, created_at
@@ -168,22 +171,48 @@ WHERE id = $1 AND attempts = $2 AND (reserved_at IS NULL OR reserved_at <= $5);
 	return models.Job{}, sharederrors.ErrNoJobs
 }
 
-func (r *Repo) ExtendJobLease(
+func (r *Repo) ExtendJobLeases(
 	ctx context.Context,
-	jobID types.JobID,
+	jobIDs []types.JobID,
 	leaseToken coreoutbox.LeaseToken,
 	now time.Time,
 	until time.Time,
 ) (int64, error) {
-	if jobID.IsZero() {
-		return 0, errors.New("invalid job id")
-	}
-	if err := leaseToken.Validate(); err != nil {
-		return 0, fmt.Errorf("invalid lease token: %w", err)
+	jobID, err := validateSingleLeaseRequest(jobIDs, leaseToken)
+	if err != nil {
+		return 0, err
 	}
 	query := strings.Concate(`UPDATE %s SET reserved_at = $1
 		WHERE id = $2 AND lease_token = $3 AND reserved_at > $4;`, r.tableName)
-	result, err := r.executor(ctx).Exec(ctx, query, until, jobID, leaseToken, now)
+	result, err := r.executor(ctx).Exec(ctx, query, until.UTC(), jobID, leaseToken, now.UTC())
+	if err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected(), nil
+}
+
+func (r *Repo) ReleaseUnstartedJobsWithLease(
+	ctx context.Context,
+	jobIDs []types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	jobID, err := validateSingleLeaseRequest(jobIDs, leaseToken)
+	if err != nil {
+		return 0, err
+	}
+	query := strings.Concate(`UPDATE %s
+		SET attempts = attempts - 1, reserved_at = NULL, lease_token = $1
+		WHERE id = $2 AND lease_token = $3 AND reserved_at > $4 AND attempts > 0;`, r.tableName)
+	result, err := r.executor(ctx).Exec(
+		ctx,
+		query,
+		types.LeaseTokenNil,
+		jobID,
+		leaseToken,
+		now.UTC(),
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -245,17 +274,6 @@ func (r *Repo) RescheduleJobWithLease(
 	return result.RowsAffected(), nil
 }
 
-func (r *Repo) DeleteJob(ctx context.Context, jobID types.JobID) (int64, error) {
-	query := strings.Concate(`DELETE FROM %s WHERE id = $1;`, r.tableName)
-
-	cmd, err := r.executor(ctx).Exec(ctx, query, jobID)
-	if err != nil {
-		return 0, err
-	}
-
-	return cmd.RowsAffected(), nil
-}
-
 func (r *Repo) GetByID(ctx context.Context, jobID types.JobID) (models.Job, error) {
 	const op = "jobs.repo.GetByID"
 
@@ -282,51 +300,110 @@ FROM %s WHERE id = $1;
 	return job, nil
 }
 
-func (r *Repo) CountLight(ctx context.Context) (int64, error) {
-	return r.CountExact(ctx)
-}
+func (*Repo) MaxReservationBatchSize() int { return 1 }
 
-func (r *Repo) Count(ctx context.Context) (int64, error) {
-	return r.CountExact(ctx)
-}
-
-func (r *Repo) CountExact(ctx context.Context) (int64, error) {
+func (r *Repo) GetQueueStats(
+	ctx context.Context,
+	observedAt time.Time,
+) (coreoutbox.QueueStats, error) {
+	observedAt = observedAt.UTC()
 	query := strings.Concate(`
-SELECT COUNT(*) FROM %s;
+SELECT
+	name,
+	schema_version,
+	CAST(COUNT(*) AS INT) AS total,
+	CAST(SUM(CASE
+		WHEN available_at <= $1 AND (reserved_at IS NULL OR reserved_at <= $1) THEN 1
+		ELSE 0
+	END) AS INT) AS available,
+	CAST(SUM(CASE
+		WHEN reserved_at > $1
+			AND lease_token <> '00000000-0000-0000-0000-000000000000' THEN 1
+		ELSE 0
+	END) AS INT) AS processing,
+	MIN(CASE
+		WHEN available_at <= $1 AND (reserved_at IS NULL OR reserved_at <= $1)
+			THEN CAST(available_at AS TEXT)
+		ELSE CAST(NULL AS TEXT)
+	END) AS oldest_available_at
+FROM %s
+GROUP BY name, schema_version
+ORDER BY name, schema_version;
 `, r.tableName)
+	rows, err := r.executor(ctx).Query(ctx, query, observedAt)
+	if err != nil {
+		return coreoutbox.QueueStats{}, fmt.Errorf("aggregate active queue: %w", err)
+	}
+	defer rows.Close()
 
-	var count int64
-	if err := r.executor(ctx).QueryRow(ctx, query).Scan(&count); err != nil {
-		return 0, err
+	stats := coreoutbox.QueueStats{ObservedAt: observedAt}
+	groups := make(map[coreoutbox.JobCapability]coreoutbox.CapabilityQueueStats)
+	for rows.Next() {
+		var (
+			group         coreoutbox.CapabilityQueueStats
+			schemaVersion sql.NullInt64
+			oldest        sql.NullString
+		)
+		if err := rows.Scan(
+			&group.Name,
+			&schemaVersion,
+			&group.Total,
+			&group.Available,
+			&group.Processing,
+			&oldest,
+		); err != nil {
+			return coreoutbox.QueueStats{}, fmt.Errorf("scan active queue aggregate: %w", err)
+		}
+		group.SchemaVersion = coreoutbox.DefaultSchemaVersion
+		if schemaVersion.Valid && schemaVersion.Int64 > 0 {
+			group.SchemaVersion = coreoutbox.SchemaVersion(schemaVersion.Int64)
+		}
+		if oldest.Valid {
+			oldestAvailableAt, err := time.Parse(time.RFC3339Nano, oldest.String)
+			if err != nil {
+				return coreoutbox.QueueStats{}, fmt.Errorf(
+					"parse oldest available time %q: %w",
+					oldest.String,
+					err,
+				)
+			}
+			group.OldestAvailableAt = oldestAvailableAt.UTC()
+		}
+		stats.Total += group.Total
+		stats.Available += group.Available
+		stats.Processing += group.Processing
+
+		capability := coreoutbox.JobCapability{
+			Name: group.Name, SchemaVersion: group.SchemaVersion,
+		}
+		merged := groups[capability]
+		merged.Name = group.Name
+		merged.SchemaVersion = group.SchemaVersion
+		merged.Total += group.Total
+		merged.Available += group.Available
+		merged.Processing += group.Processing
+		if !group.OldestAvailableAt.IsZero() &&
+			(merged.OldestAvailableAt.IsZero() || group.OldestAvailableAt.Before(merged.OldestAvailableAt)) {
+			merged.OldestAvailableAt = group.OldestAvailableAt
+		}
+		groups[capability] = merged
+	}
+	if err := rows.Err(); err != nil {
+		return coreoutbox.QueueStats{}, fmt.Errorf("iterate active queue aggregate: %w", err)
 	}
 
-	return count, nil
-}
-
-func (r *Repo) CountAvailable(ctx context.Context, now time.Time) (int64, error) {
-	query := strings.Concate(`
-SELECT COUNT(*) FROM %s WHERE available_at <= $1 AND (reserved_at IS NULL OR reserved_at <= $1);
-`, r.tableName)
-
-	var count int64
-	if err := r.executor(ctx).QueryRow(ctx, query, now).Scan(&count); err != nil {
-		return 0, err
+	stats.ByCapability = make([]coreoutbox.CapabilityQueueStats, 0, len(groups))
+	for _, group := range groups {
+		stats.ByCapability = append(stats.ByCapability, group)
 	}
+	sort.Slice(stats.ByCapability, func(i, j int) bool {
+		if stats.ByCapability[i].Name == stats.ByCapability[j].Name {
+			return stats.ByCapability[i].SchemaVersion < stats.ByCapability[j].SchemaVersion
+		}
+		return stats.ByCapability[i].Name < stats.ByCapability[j].Name
+	})
 
-	return count, nil
-}
-
-func (r *Repo) CountReserved(ctx context.Context, now time.Time) (int64, error) {
-	query := strings.Concate(`
-SELECT COUNT(*) FROM %s WHERE reserved_at > $1;
-`, r.tableName)
-
-	var count int64
-	if err := r.executor(ctx).QueryRow(ctx, query, now).Scan(&count); err != nil {
-		return 0, err
-	}
-
-	return count, nil
+	return stats, nil
 }
 
 func (r *Repo) All(ctx context.Context) ([]models.Job, error) {
@@ -394,6 +471,27 @@ LIMIT %d;
 	}
 
 	return result, nil
+}
+
+func validateSingleLeaseRequest(
+	jobIDs []types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+) (types.JobID, error) {
+	if len(jobIDs) != 1 {
+		return types.JobIDNil, fmt.Errorf(
+			"%w: Picodata supports exactly one leased job, got %d",
+			coreoutbox.ErrReservationBatchSizeUnsupported,
+			len(jobIDs),
+		)
+	}
+	if jobIDs[0].IsZero() {
+		return types.JobIDNil, errors.New("invalid job id")
+	}
+	if err := leaseToken.Validate(); err != nil {
+		return types.JobIDNil, fmt.Errorf("invalid lease token: %w", err)
+	}
+
+	return jobIDs[0], nil
 }
 
 func (r *Repo) executor(ctx context.Context) transaction.TxExecutor {

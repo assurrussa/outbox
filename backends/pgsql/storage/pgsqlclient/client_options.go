@@ -79,6 +79,9 @@ func (o *PoolOptions) Validate() error {
 	if o.minConnectionsCount < 1 {
 		return errors.New("min connections count must be greater than zero")
 	}
+	if o.minConnectionsCount > o.maxConnectionsCount {
+		return errors.New("min connections count must not exceed max connections count")
+	}
 
 	return nil
 }

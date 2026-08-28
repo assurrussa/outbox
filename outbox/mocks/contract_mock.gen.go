@@ -240,77 +240,8 @@ func (m *MockJobsRepository) EXPECT() *MockJobsRepositoryMockRecorder {
 	return m.recorder
 }
 
-// CreateJob mocks base method.
-func (m *MockJobsRepository) CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateJob", ctx, name, payload, availableAt)
-	ret0, _ := ret[0].(types.JobID)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CreateJob indicates an expected call of CreateJob.
-func (mr *MockJobsRepositoryMockRecorder) CreateJob(ctx, name, payload, availableAt any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateJob", reflect.TypeOf((*MockJobsRepository)(nil).CreateJob), ctx, name, payload, availableAt)
-}
-
-// DeleteJob mocks base method.
-func (m *MockJobsRepository) DeleteJob(ctx context.Context, jobID types.JobID) (int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteJob", ctx, jobID)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DeleteJob indicates an expected call of DeleteJob.
-func (mr *MockJobsRepositoryMockRecorder) DeleteJob(ctx, jobID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteJob", reflect.TypeOf((*MockJobsRepository)(nil).DeleteJob), ctx, jobID)
-}
-
-// FindAndReserveJob mocks base method.
-func (m *MockJobsRepository) FindAndReserveJob(ctx context.Context, now, until time.Time) (models.Job, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindAndReserveJob", ctx, now, until)
-	ret0, _ := ret[0].(models.Job)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FindAndReserveJob indicates an expected call of FindAndReserveJob.
-func (mr *MockJobsRepositoryMockRecorder) FindAndReserveJob(ctx, now, until any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAndReserveJob", reflect.TypeOf((*MockJobsRepository)(nil).FindAndReserveJob), ctx, now, until)
-}
-
-// MockCapabilityJobsRepository is a mock of CapabilityJobsRepository interface.
-type MockCapabilityJobsRepository struct {
-	ctrl     *gomock.Controller
-	recorder *MockCapabilityJobsRepositoryMockRecorder
-	isgomock struct{}
-}
-
-// MockCapabilityJobsRepositoryMockRecorder is the mock recorder for MockCapabilityJobsRepository.
-type MockCapabilityJobsRepositoryMockRecorder struct {
-	mock *MockCapabilityJobsRepository
-}
-
-// NewMockCapabilityJobsRepository creates a new mock instance.
-func NewMockCapabilityJobsRepository(ctrl *gomock.Controller) *MockCapabilityJobsRepository {
-	mock := &MockCapabilityJobsRepository{ctrl: ctrl}
-	mock.recorder = &MockCapabilityJobsRepositoryMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockCapabilityJobsRepository) EXPECT() *MockCapabilityJobsRepositoryMockRecorder {
-	return m.recorder
-}
-
 // CreateJobVersioned mocks base method.
-func (m *MockCapabilityJobsRepository) CreateJobVersioned(ctx context.Context, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (types.JobID, error) {
+func (m *MockJobsRepository) CreateJobVersioned(ctx context.Context, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (types.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateJobVersioned", ctx, name, schemaVersion, payload, availableAt)
 	ret0, _ := ret[0].(types.JobID)
@@ -319,13 +250,13 @@ func (m *MockCapabilityJobsRepository) CreateJobVersioned(ctx context.Context, n
 }
 
 // CreateJobVersioned indicates an expected call of CreateJobVersioned.
-func (mr *MockCapabilityJobsRepositoryMockRecorder) CreateJobVersioned(ctx, name, schemaVersion, payload, availableAt any) *gomock.Call {
+func (mr *MockJobsRepositoryMockRecorder) CreateJobVersioned(ctx, name, schemaVersion, payload, availableAt any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateJobVersioned", reflect.TypeOf((*MockCapabilityJobsRepository)(nil).CreateJobVersioned), ctx, name, schemaVersion, payload, availableAt)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateJobVersioned", reflect.TypeOf((*MockJobsRepository)(nil).CreateJobVersioned), ctx, name, schemaVersion, payload, availableAt)
 }
 
 // DeleteJobWithLease mocks base method.
-func (m *MockCapabilityJobsRepository) DeleteJobWithLease(ctx context.Context, jobID types.JobID, leaseToken outbox.LeaseToken, now time.Time) (int64, error) {
+func (m *MockJobsRepository) DeleteJobWithLease(ctx context.Context, jobID types.JobID, leaseToken outbox.LeaseToken, now time.Time) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteJobWithLease", ctx, jobID, leaseToken, now)
 	ret0, _ := ret[0].(int64)
@@ -334,67 +265,72 @@ func (m *MockCapabilityJobsRepository) DeleteJobWithLease(ctx context.Context, j
 }
 
 // DeleteJobWithLease indicates an expected call of DeleteJobWithLease.
-func (mr *MockCapabilityJobsRepositoryMockRecorder) DeleteJobWithLease(ctx, jobID, leaseToken, now any) *gomock.Call {
+func (mr *MockJobsRepositoryMockRecorder) DeleteJobWithLease(ctx, jobID, leaseToken, now any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteJobWithLease", reflect.TypeOf((*MockCapabilityJobsRepository)(nil).DeleteJobWithLease), ctx, jobID, leaseToken, now)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteJobWithLease", reflect.TypeOf((*MockJobsRepository)(nil).DeleteJobWithLease), ctx, jobID, leaseToken, now)
 }
 
-// ExtendJobLease mocks base method.
-func (m *MockCapabilityJobsRepository) ExtendJobLease(ctx context.Context, jobID types.JobID, leaseToken outbox.LeaseToken, now, until time.Time) (int64, error) {
+// ExtendJobLeases mocks base method.
+func (m *MockJobsRepository) ExtendJobLeases(ctx context.Context, jobIDs []types.JobID, leaseToken outbox.LeaseToken, now, until time.Time) (int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExtendJobLease", ctx, jobID, leaseToken, now, until)
+	ret := m.ctrl.Call(m, "ExtendJobLeases", ctx, jobIDs, leaseToken, now, until)
 	ret0, _ := ret[0].(int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ExtendJobLease indicates an expected call of ExtendJobLease.
-func (mr *MockCapabilityJobsRepositoryMockRecorder) ExtendJobLease(ctx, jobID, leaseToken, now, until any) *gomock.Call {
+// ExtendJobLeases indicates an expected call of ExtendJobLeases.
+func (mr *MockJobsRepositoryMockRecorder) ExtendJobLeases(ctx, jobIDs, leaseToken, now, until any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExtendJobLease", reflect.TypeOf((*MockCapabilityJobsRepository)(nil).ExtendJobLease), ctx, jobID, leaseToken, now, until)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExtendJobLeases", reflect.TypeOf((*MockJobsRepository)(nil).ExtendJobLeases), ctx, jobIDs, leaseToken, now, until)
 }
 
-// FindAndReserveJobForCapabilities mocks base method.
-func (m *MockCapabilityJobsRepository) FindAndReserveJobForCapabilities(ctx context.Context, now, until time.Time, leaseToken outbox.LeaseToken, capabilities []outbox.JobCapability) (models.Job, error) {
+// FindAndReserveJobsForCapabilities mocks base method.
+func (m *MockJobsRepository) FindAndReserveJobsForCapabilities(ctx context.Context, now, until time.Time, leaseToken outbox.LeaseToken, capabilities []outbox.JobCapability, limit int) ([]models.Job, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindAndReserveJobForCapabilities", ctx, now, until, leaseToken, capabilities)
-	ret0, _ := ret[0].(models.Job)
+	ret := m.ctrl.Call(m, "FindAndReserveJobsForCapabilities", ctx, now, until, leaseToken, capabilities, limit)
+	ret0, _ := ret[0].([]models.Job)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// FindAndReserveJobForCapabilities indicates an expected call of FindAndReserveJobForCapabilities.
-func (mr *MockCapabilityJobsRepositoryMockRecorder) FindAndReserveJobForCapabilities(ctx, now, until, leaseToken, capabilities any) *gomock.Call {
+// FindAndReserveJobsForCapabilities indicates an expected call of FindAndReserveJobsForCapabilities.
+func (mr *MockJobsRepositoryMockRecorder) FindAndReserveJobsForCapabilities(ctx, now, until, leaseToken, capabilities, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAndReserveJobForCapabilities", reflect.TypeOf((*MockCapabilityJobsRepository)(nil).FindAndReserveJobForCapabilities), ctx, now, until, leaseToken, capabilities)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAndReserveJobsForCapabilities", reflect.TypeOf((*MockJobsRepository)(nil).FindAndReserveJobsForCapabilities), ctx, now, until, leaseToken, capabilities, limit)
 }
 
-// MockReschedulableJobsRepository is a mock of ReschedulableJobsRepository interface.
-type MockReschedulableJobsRepository struct {
-	ctrl     *gomock.Controller
-	recorder *MockReschedulableJobsRepositoryMockRecorder
-	isgomock struct{}
+// MaxReservationBatchSize mocks base method.
+func (m *MockJobsRepository) MaxReservationBatchSize() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MaxReservationBatchSize")
+	ret0, _ := ret[0].(int)
+	return ret0
 }
 
-// MockReschedulableJobsRepositoryMockRecorder is the mock recorder for MockReschedulableJobsRepository.
-type MockReschedulableJobsRepositoryMockRecorder struct {
-	mock *MockReschedulableJobsRepository
+// MaxReservationBatchSize indicates an expected call of MaxReservationBatchSize.
+func (mr *MockJobsRepositoryMockRecorder) MaxReservationBatchSize() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MaxReservationBatchSize", reflect.TypeOf((*MockJobsRepository)(nil).MaxReservationBatchSize))
 }
 
-// NewMockReschedulableJobsRepository creates a new mock instance.
-func NewMockReschedulableJobsRepository(ctrl *gomock.Controller) *MockReschedulableJobsRepository {
-	mock := &MockReschedulableJobsRepository{ctrl: ctrl}
-	mock.recorder = &MockReschedulableJobsRepositoryMockRecorder{mock}
-	return mock
+// ReleaseUnstartedJobsWithLease mocks base method.
+func (m *MockJobsRepository) ReleaseUnstartedJobsWithLease(ctx context.Context, jobIDs []types.JobID, leaseToken outbox.LeaseToken, now time.Time) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReleaseUnstartedJobsWithLease", ctx, jobIDs, leaseToken, now)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockReschedulableJobsRepository) EXPECT() *MockReschedulableJobsRepositoryMockRecorder {
-	return m.recorder
+// ReleaseUnstartedJobsWithLease indicates an expected call of ReleaseUnstartedJobsWithLease.
+func (mr *MockJobsRepositoryMockRecorder) ReleaseUnstartedJobsWithLease(ctx, jobIDs, leaseToken, now any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReleaseUnstartedJobsWithLease", reflect.TypeOf((*MockJobsRepository)(nil).ReleaseUnstartedJobsWithLease), ctx, jobIDs, leaseToken, now)
 }
 
 // RescheduleJobWithLease mocks base method.
-func (m *MockReschedulableJobsRepository) RescheduleJobWithLease(ctx context.Context, jobID types.JobID, leaseToken outbox.LeaseToken, now, availableAt time.Time) (int64, error) {
+func (m *MockJobsRepository) RescheduleJobWithLease(ctx context.Context, jobID types.JobID, leaseToken outbox.LeaseToken, now, availableAt time.Time) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "RescheduleJobWithLease", ctx, jobID, leaseToken, now, availableAt)
 	ret0, _ := ret[0].(int64)
@@ -403,9 +339,9 @@ func (m *MockReschedulableJobsRepository) RescheduleJobWithLease(ctx context.Con
 }
 
 // RescheduleJobWithLease indicates an expected call of RescheduleJobWithLease.
-func (mr *MockReschedulableJobsRepositoryMockRecorder) RescheduleJobWithLease(ctx, jobID, leaseToken, now, availableAt any) *gomock.Call {
+func (mr *MockJobsRepositoryMockRecorder) RescheduleJobWithLease(ctx, jobID, leaseToken, now, availableAt any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RescheduleJobWithLease", reflect.TypeOf((*MockReschedulableJobsRepository)(nil).RescheduleJobWithLease), ctx, jobID, leaseToken, now, availableAt)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RescheduleJobWithLease", reflect.TypeOf((*MockJobsRepository)(nil).RescheduleJobWithLease), ctx, jobID, leaseToken, now, availableAt)
 }
 
 // MockFanoutJobsRepository is a mock of FanoutJobsRepository interface.
@@ -549,49 +485,19 @@ func (m *MockJobsStatRepository) EXPECT() *MockJobsStatRepositoryMockRecorder {
 	return m.recorder
 }
 
-// CountAvailable mocks base method.
-func (m *MockJobsStatRepository) CountAvailable(ctx context.Context, now time.Time) (int64, error) {
+// GetQueueStats mocks base method.
+func (m *MockJobsStatRepository) GetQueueStats(ctx context.Context, observedAt time.Time) (outbox.QueueStats, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CountAvailable", ctx, now)
-	ret0, _ := ret[0].(int64)
+	ret := m.ctrl.Call(m, "GetQueueStats", ctx, observedAt)
+	ret0, _ := ret[0].(outbox.QueueStats)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// CountAvailable indicates an expected call of CountAvailable.
-func (mr *MockJobsStatRepositoryMockRecorder) CountAvailable(ctx, now any) *gomock.Call {
+// GetQueueStats indicates an expected call of GetQueueStats.
+func (mr *MockJobsStatRepositoryMockRecorder) GetQueueStats(ctx, observedAt any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountAvailable", reflect.TypeOf((*MockJobsStatRepository)(nil).CountAvailable), ctx, now)
-}
-
-// CountExact mocks base method.
-func (m *MockJobsStatRepository) CountExact(ctx context.Context) (int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CountExact", ctx)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CountExact indicates an expected call of CountExact.
-func (mr *MockJobsStatRepositoryMockRecorder) CountExact(ctx any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountExact", reflect.TypeOf((*MockJobsStatRepository)(nil).CountExact), ctx)
-}
-
-// CountReserved mocks base method.
-func (m *MockJobsStatRepository) CountReserved(ctx context.Context, now time.Time) (int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CountReserved", ctx, now)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CountReserved indicates an expected call of CountReserved.
-func (mr *MockJobsStatRepositoryMockRecorder) CountReserved(ctx, now any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountReserved", reflect.TypeOf((*MockJobsStatRepository)(nil).CountReserved), ctx, now)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetQueueStats", reflect.TypeOf((*MockJobsStatRepository)(nil).GetQueueStats), ctx, observedAt)
 }
 
 // MockJobsFailedRepository is a mock of JobsFailedRepository interface.
@@ -618,47 +524,8 @@ func (m *MockJobsFailedRepository) EXPECT() *MockJobsFailedRepositoryMockRecorde
 	return m.recorder
 }
 
-// CreateFailedJob mocks base method.
-func (m *MockJobsFailedRepository) CreateFailedJob(ctx context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateFailedJob", ctx, jobID, name, payload, reason)
-	ret0, _ := ret[0].(types.JobID)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CreateFailedJob indicates an expected call of CreateFailedJob.
-func (mr *MockJobsFailedRepositoryMockRecorder) CreateFailedJob(ctx, jobID, name, payload, reason any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateFailedJob", reflect.TypeOf((*MockJobsFailedRepository)(nil).CreateFailedJob), ctx, jobID, name, payload, reason)
-}
-
-// MockCapabilityJobsFailedRepository is a mock of CapabilityJobsFailedRepository interface.
-type MockCapabilityJobsFailedRepository struct {
-	ctrl     *gomock.Controller
-	recorder *MockCapabilityJobsFailedRepositoryMockRecorder
-	isgomock struct{}
-}
-
-// MockCapabilityJobsFailedRepositoryMockRecorder is the mock recorder for MockCapabilityJobsFailedRepository.
-type MockCapabilityJobsFailedRepositoryMockRecorder struct {
-	mock *MockCapabilityJobsFailedRepository
-}
-
-// NewMockCapabilityJobsFailedRepository creates a new mock instance.
-func NewMockCapabilityJobsFailedRepository(ctrl *gomock.Controller) *MockCapabilityJobsFailedRepository {
-	mock := &MockCapabilityJobsFailedRepository{ctrl: ctrl}
-	mock.recorder = &MockCapabilityJobsFailedRepositoryMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockCapabilityJobsFailedRepository) EXPECT() *MockCapabilityJobsFailedRepositoryMockRecorder {
-	return m.recorder
-}
-
 // CreateFailedJobVersioned mocks base method.
-func (m *MockCapabilityJobsFailedRepository) CreateFailedJobVersioned(ctx context.Context, jobID types.JobID, name string, schemaVersion outbox.SchemaVersion, payload, reason string) (types.JobID, error) {
+func (m *MockJobsFailedRepository) CreateFailedJobVersioned(ctx context.Context, jobID types.JobID, name string, schemaVersion outbox.SchemaVersion, payload, reason string) (types.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateFailedJobVersioned", ctx, jobID, name, schemaVersion, payload, reason)
 	ret0, _ := ret[0].(types.JobID)
@@ -667,9 +534,9 @@ func (m *MockCapabilityJobsFailedRepository) CreateFailedJobVersioned(ctx contex
 }
 
 // CreateFailedJobVersioned indicates an expected call of CreateFailedJobVersioned.
-func (mr *MockCapabilityJobsFailedRepositoryMockRecorder) CreateFailedJobVersioned(ctx, jobID, name, schemaVersion, payload, reason any) *gomock.Call {
+func (mr *MockJobsFailedRepositoryMockRecorder) CreateFailedJobVersioned(ctx, jobID, name, schemaVersion, payload, reason any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateFailedJobVersioned", reflect.TypeOf((*MockCapabilityJobsFailedRepository)(nil).CreateFailedJobVersioned), ctx, jobID, name, schemaVersion, payload, reason)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateFailedJobVersioned", reflect.TypeOf((*MockJobsFailedRepository)(nil).CreateFailedJobVersioned), ctx, jobID, name, schemaVersion, payload, reason)
 }
 
 // MockTransactor is a mock of Transactor interface.

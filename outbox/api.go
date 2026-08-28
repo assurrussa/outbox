@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/assurrussa/outbox/shared/sharederrors"
@@ -11,16 +12,7 @@ import (
 )
 
 func (s *Service) Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
-	if s.capabilityJobsRepo != nil {
-		return s.PutVersioned(ctx, name, DefaultSchemaVersion, payload, availableAt)
-	}
-
-	jobID, err := s.jobsRepo.CreateJob(ctx, name, payload, availableAt)
-	if err != nil {
-		return types.JobIDNil, fmt.Errorf("create job: %w", err)
-	}
-
-	return jobID, nil
+	return s.PutVersioned(ctx, name, DefaultSchemaVersion, payload, availableAt)
 }
 
 func (s *Service) PutVersioned(
@@ -30,16 +22,12 @@ func (s *Service) PutVersioned(
 	payload string,
 	availableAt time.Time,
 ) (types.JobID, error) {
-	if s.capabilityJobsRepo == nil {
-		return types.JobIDNil, ErrCapabilityRepositoryNotConfigured
-	}
-
 	capability := JobCapability{Name: name, SchemaVersion: schemaVersion}
 	if err := capability.Validate(); err != nil {
 		return types.JobIDNil, err
 	}
 
-	jobID, err := s.capabilityJobsRepo.CreateJobVersioned(
+	jobID, err := s.jobsRepo.CreateJobVersioned(
 		ctx,
 		name,
 		schemaVersion,
@@ -98,24 +86,23 @@ func (s *Service) GetQueueStats(ctx context.Context) (QueueStats, error) {
 		return QueueStats{}, sharederrors.ErrJobStatNotInit
 	}
 
-	total, err := s.jobsStatRepo.CountExact(ctx)
+	observedAt := time.Now().UTC()
+	stats, err := s.jobsStatRepo.GetQueueStats(ctx, observedAt)
 	if err != nil {
-		return QueueStats{}, fmt.Errorf("count exact: %w", err)
+		return QueueStats{}, fmt.Errorf("get queue stats: %w", err)
 	}
-
-	available, err := s.jobsStatRepo.CountAvailable(ctx, time.Now())
-	if err != nil {
-		return QueueStats{}, fmt.Errorf("count available: %w", err)
+	stats.ObservedAt = observedAt
+	for index := range stats.ByCapability {
+		if !stats.ByCapability[index].OldestAvailableAt.IsZero() {
+			stats.ByCapability[index].OldestAvailableAt = stats.ByCapability[index].OldestAvailableAt.UTC()
+		}
 	}
+	sort.Slice(stats.ByCapability, func(i, j int) bool {
+		if stats.ByCapability[i].Name == stats.ByCapability[j].Name {
+			return stats.ByCapability[i].SchemaVersion < stats.ByCapability[j].SchemaVersion
+		}
+		return stats.ByCapability[i].Name < stats.ByCapability[j].Name
+	})
 
-	reserved, err := s.jobsStatRepo.CountReserved(ctx, time.Now())
-	if err != nil {
-		return QueueStats{}, fmt.Errorf("count reserved: %w", err)
-	}
-
-	return QueueStats{
-		Total:      total,
-		Available:  available,
-		Processing: reserved,
-	}, nil
+	return stats, nil
 }

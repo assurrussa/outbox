@@ -54,25 +54,34 @@ type FanoutPutter interface {
 }
 
 type QueueStats struct {
-	Total      int64
-	Available  int64
-	Processing int64
+	ObservedAt   time.Time
+	Total        int64
+	Available    int64
+	Processing   int64
+	ByCapability []CapabilityQueueStats
+}
+
+// CapabilityQueueStats describes one exact active-queue group. OldestAvailableAt
+// is zero when the group has no currently available jobs.
+type CapabilityQueueStats struct {
+	Name              string
+	SchemaVersion     SchemaVersion
+	Total             int64
+	Available         int64
+	Processing        int64
+	OldestAvailableAt time.Time
 }
 
 type Stats interface {
 	QueueStats(ctx context.Context) (QueueStats, error)
 }
 
-// JobsRepository provides access to the outbox jobs store.
+// JobsRepository owns the version-aware, fenced lifecycle of active jobs.
+// Unsupported capabilities must remain unclaimed. A successful claim returns
+// between one and limit jobs carrying the supplied non-zero lease token. When
+// no jobs are available, return ErrNoJobs instead of an empty successful
+// result; the latter is rejected as ErrEmptyReservationBatch.
 type JobsRepository interface {
-	CreateJob(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error)
-	FindAndReserveJob(ctx context.Context, now time.Time, until time.Time) (models.Job, error)
-	DeleteJob(ctx context.Context, jobID types.JobID) (int64, error)
-}
-
-// CapabilityJobsRepository is an opt-in storage contract for version-aware claims
-// and fenced lease ownership. Unsupported capabilities must remain unclaimed.
-type CapabilityJobsRepository interface {
 	CreateJobVersioned(
 		ctx context.Context,
 		name string,
@@ -80,19 +89,26 @@ type CapabilityJobsRepository interface {
 		payload string,
 		availableAt time.Time,
 	) (types.JobID, error)
-	FindAndReserveJobForCapabilities(
+	FindAndReserveJobsForCapabilities(
 		ctx context.Context,
 		now time.Time,
 		until time.Time,
 		leaseToken LeaseToken,
 		capabilities []JobCapability,
-	) (models.Job, error)
-	ExtendJobLease(
+		limit int,
+	) ([]models.Job, error)
+	ExtendJobLeases(
 		ctx context.Context,
-		jobID types.JobID,
+		jobIDs []types.JobID,
 		leaseToken LeaseToken,
 		now time.Time,
 		until time.Time,
+	) (int64, error)
+	ReleaseUnstartedJobsWithLease(
+		ctx context.Context,
+		jobIDs []types.JobID,
+		leaseToken LeaseToken,
+		now time.Time,
 	) (int64, error)
 	DeleteJobWithLease(
 		ctx context.Context,
@@ -100,12 +116,6 @@ type CapabilityJobsRepository interface {
 		leaseToken LeaseToken,
 		now time.Time,
 	) (int64, error)
-}
-
-// ReschedulableJobsRepository atomically releases an owned lease and moves the
-// job's next availability. Implementations must fence the update by job ID,
-// lease token, and an unexpired lease.
-type ReschedulableJobsRepository interface {
 	RescheduleJobWithLease(
 		ctx context.Context,
 		jobID types.JobID,
@@ -113,6 +123,7 @@ type ReschedulableJobsRepository interface {
 		now time.Time,
 		availableAt time.Time,
 	) (int64, error)
+	MaxReservationBatchSize() int
 }
 
 // FanoutJobsRepository creates jobs under an immutable idempotency key.
@@ -153,18 +164,11 @@ type FanoutMaintenanceRepository interface {
 // this repository is required only when calling Service.GetQueueStats.
 // The worker flow (Put/Run processing) works without it.
 type JobsStatRepository interface {
-	CountExact(ctx context.Context) (int64, error)
-	CountAvailable(ctx context.Context, now time.Time) (int64, error)
-	CountReserved(ctx context.Context, now time.Time) (int64, error)
+	GetQueueStats(ctx context.Context, observedAt time.Time) (QueueStats, error)
 }
 
-// JobsFailedRepository persists failed jobs for DLQ.
+// JobsFailedRepository persists versioned failed jobs for DLQ.
 type JobsFailedRepository interface {
-	CreateFailedJob(ctx context.Context, jobID types.JobID, name, payload, reason string) (types.JobID, error)
-}
-
-// CapabilityJobsFailedRepository preserves the payload schema version in DLQ.
-type CapabilityJobsFailedRepository interface {
 	CreateFailedJobVersioned(
 		ctx context.Context,
 		jobID types.JobID,

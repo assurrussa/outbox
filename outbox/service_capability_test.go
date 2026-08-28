@@ -17,12 +17,14 @@ import (
 	"github.com/assurrussa/outbox/shared/types"
 )
 
-func TestCapabilityModeLeavesUnsupportedSchemaPending(t *testing.T) {
+func TestUnsupportedCapabilitiesRemainPendingWithoutAttempts(t *testing.T) {
 	repo := newCapabilityRepo()
 	svc := newCapabilityService(t, repo)
 	svc.MustRegisterJob(capabilityJob{name: "publish", version: 1})
 
 	_, err := svc.PutVersioned(context.Background(), "publish", 2, `{"revision":2}`, time.Now().UTC())
+	require.NoError(t, err)
+	_, err = svc.PutVersioned(context.Background(), "unknown", 1, `{}`, time.Now().UTC())
 	require.NoError(t, err)
 	_, err = svc.PutVersioned(context.Background(), "publish", 1, `{"revision":1}`, time.Now().UTC())
 	require.NoError(t, err)
@@ -32,9 +34,10 @@ func TestCapabilityModeLeavesUnsupportedSchemaPending(t *testing.T) {
 	require.NoError(t, svc.Run(ctx))
 
 	jobs := repo.Jobs()
-	require.Len(t, jobs, 1)
-	require.Equal(t, outbox.SchemaVersion(2), jobs[0].SchemaVersion)
-	require.Zero(t, jobs[0].Attempts)
+	require.Len(t, jobs, 2)
+	for _, job := range jobs {
+		require.Zero(t, job.Attempts)
+	}
 	require.Empty(t, repo.Failed())
 }
 
@@ -75,7 +78,7 @@ func TestCapabilityModeExtendsLeaseWhileHandlerRuns(t *testing.T) {
 	repo := newCapabilityRepo()
 	svc := newCapabilityService(t, repo)
 	svc.MustRegisterJob(capabilityJob{
-		name:    "slow",
+		name:    testValueSlow,
 		version: 1,
 		handle: func(ctx context.Context, _ string) error {
 			select {
@@ -88,7 +91,7 @@ func TestCapabilityModeExtendsLeaseWhileHandlerRuns(t *testing.T) {
 		timeout: 2 * time.Second,
 	})
 
-	_, err := svc.PutVersioned(context.Background(), "slow", 1, `{}`, time.Now().UTC())
+	_, err := svc.PutVersioned(context.Background(), testValueSlow, 1, `{}`, time.Now().UTC())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -267,7 +270,7 @@ func TestCapabilityModeDLQPreservesSchemaVersion(t *testing.T) {
 	repo := newCapabilityRepo()
 	svc := newCapabilityService(t, repo)
 	svc.MustRegisterJob(capabilityJob{
-		name:        "fail",
+		name:        testValueFail,
 		version:     2,
 		maxAttempts: 1,
 		handle: func(context.Context, string) error {
@@ -275,7 +278,7 @@ func TestCapabilityModeDLQPreservesSchemaVersion(t *testing.T) {
 		},
 	})
 
-	_, err := svc.PutVersioned(context.Background(), "fail", 2, `{}`, time.Now().UTC())
+	_, err := svc.PutVersioned(context.Background(), testValueFail, 2, `{}`, time.Now().UTC())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
@@ -314,39 +317,18 @@ func TestPutVersionedUniqueReportsCreatedAndReplay(t *testing.T) {
 	require.ErrorIs(t, err, outbox.ErrIdempotencyConflict)
 }
 
-func TestUniqueAndReschedulableRepositoriesRequireCapabilityMode(t *testing.T) {
-	t.Parallel()
-
-	for name, option := range map[string]outbox.OptOptionsSetter{
-		"unique":        outbox.WithUniqueJobsRepo(newCapabilityRepo()),
-		"reschedulable": outbox.WithReschedulableJobsRepo(newCapabilityRepo()),
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			repo := newCapabilityRepo()
-			_, err := outbox.New(
-				outbox.WithJobsRepo(repo),
-				outbox.WithJobsFailedRepo(repo),
-				outbox.WithTransactor(repo),
-				option,
-			)
-			require.ErrorContains(t, err, "requires capabilityJobsRepo")
-		})
-	}
-}
-
 func TestCapabilityModePermanentFailureMovesDirectlyToDLQ(t *testing.T) {
 	repo := newCapabilityRepo()
 	svc := newCapabilityService(t, repo)
 	svc.MustRegisterJob(capabilityJob{
-		name:        "permanent",
+		name:        testValuePermanent,
 		version:     1,
 		maxAttempts: 10,
 		handle: func(context.Context, string) error {
 			return outbox.Permanent(errors.New("invalid payload"))
 		},
 	})
-	_, err := svc.PutVersioned(context.Background(), "permanent", 1, `{}`, time.Now().UTC())
+	_, err := svc.PutVersioned(context.Background(), testValuePermanent, 1, `{}`, time.Now().UTC())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
@@ -413,7 +395,7 @@ func TestCapabilityModeRetryAtFailsClosedAfterFenceLoss(t *testing.T) {
 		name:    "lost-reschedule",
 		version: 1,
 		handle: func(context.Context, string) error {
-			return outbox.RetryAt(errors.New("retry"), time.Now().UTC().Add(time.Hour))
+			return outbox.RetryAt(errors.New(testValueRetry), time.Now().UTC().Add(time.Hour))
 		},
 	})
 	_, err := svc.PutVersioned(context.Background(), "lost-reschedule", 1, `{}`, time.Now().UTC())
@@ -426,17 +408,19 @@ func TestCapabilityModeRetryAtFailsClosedAfterFenceLoss(t *testing.T) {
 	require.Len(t, repo.Jobs(), 1)
 }
 
-func TestVersionedCapabilityRequiresCapabilityRepositories(t *testing.T) {
-	repo := newRuntimeRepo()
-	svc := newRuntimeService(t, repo)
+func TestPutUsesSchemaV1AndPutVersionedPreservesVersion(t *testing.T) {
+	repo := newCapabilityRepo()
+	svc := newCapabilityService(t, repo)
 
-	_, err := svc.PutVersioned(context.Background(), "publish", 2, `{}`, time.Now().UTC())
-	require.ErrorIs(t, err, outbox.ErrCapabilityRepositoryNotConfigured)
-	require.ErrorIs(
-		t,
-		svc.RegisterJob(capabilityJob{name: "publish", version: 2}),
-		outbox.ErrCapabilityRepositoryNotConfigured,
-	)
+	_, err := svc.Put(context.Background(), "publish", `{"revision":1}`, time.Now().UTC())
+	require.NoError(t, err)
+	_, err = svc.PutVersioned(context.Background(), "publish", 2, `{"revision":2}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	jobs := repo.Jobs()
+	require.Len(t, jobs, 2)
+	require.Equal(t, outbox.DefaultSchemaVersion, jobs[0].SchemaVersion)
+	require.Equal(t, outbox.SchemaVersion(2), jobs[1].SchemaVersion)
 }
 
 func TestRegisterJobsIsAtomicOnExistingOrBatchDuplicate(t *testing.T) {
@@ -499,6 +483,7 @@ type capabilityRepo struct {
 	idempotencyJobs map[string]idempotencyJob
 
 	extendCount           int
+	claimLimits           []int
 	loseLeaseOnExtend     bool
 	loseLeaseOnDelete     bool
 	loseLeaseOnReschedule bool
@@ -514,15 +499,6 @@ type idempotencyJob struct {
 	schemaVersion outbox.SchemaVersion
 	payload       string
 	availableAt   time.Time
-}
-
-func (r *capabilityRepo) CreateJob(
-	ctx context.Context,
-	name string,
-	payload string,
-	availableAt time.Time,
-) (types.JobID, error) {
-	return r.CreateJobVersioned(ctx, name, outbox.DefaultSchemaVersion, payload, availableAt)
 }
 
 func (r *capabilityRepo) CreateJobVersioned(
@@ -606,40 +582,44 @@ func (r *capabilityRepo) CreateJobVersionedUniqueResult(
 	return outbox.UniquePutResult{JobID: id, Created: true}, nil
 }
 
-func (r *capabilityRepo) FindAndReserveJob(
-	ctx context.Context,
-	now time.Time,
-	until time.Time,
-) (models.Job, error) {
-	return r.FindAndReserveJobForCapabilities(
-		ctx,
-		now,
-		until,
-		types.NewLeaseToken(),
-		[]outbox.JobCapability{{Name: "", SchemaVersion: outbox.DefaultSchemaVersion}},
-	)
-}
-
-func (r *capabilityRepo) FindAndReserveJobForCapabilities(
+func (r *capabilityRepo) FindAndReserveJobsForCapabilities(
 	_ context.Context,
 	now time.Time,
 	until time.Time,
 	leaseToken outbox.LeaseToken,
 	capabilities []outbox.JobCapability,
-) (models.Job, error) {
+	limit int,
+) ([]models.Job, error) {
+	return r.findAndReserveJobs(now, until, leaseToken, capabilities, limit)
+}
+
+func (r *capabilityRepo) findAndReserveJobs(
+	now time.Time,
+	until time.Time,
+	leaseToken outbox.LeaseToken,
+	capabilities []outbox.JobCapability,
+	limit int,
+) ([]models.Job, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.claimLimits = append(r.claimLimits, limit)
 
-	supported := make(map[outbox.JobCapability]struct{}, len(capabilities))
-	for _, capability := range capabilities {
-		supported[capability] = struct{}{}
+	var supported map[outbox.JobCapability]struct{}
+	if capabilities != nil {
+		supported = make(map[outbox.JobCapability]struct{}, len(capabilities))
+		for _, capability := range capabilities {
+			supported[capability] = struct{}{}
+		}
 	}
 
-	for i := range r.jobs {
-		job := r.jobs[i]
-		capability := outbox.JobCapability{Name: job.Name, SchemaVersion: job.SchemaVersion}
-		if _, ok := supported[capability]; !ok {
-			continue
+	jobs := make([]models.Job, 0, limit)
+	for index := range r.jobs {
+		job := r.jobs[index]
+		if supported != nil {
+			capability := outbox.JobCapability{Name: job.Name, SchemaVersion: job.SchemaVersion}
+			if _, ok := supported[capability]; !ok {
+				continue
+			}
 		}
 		if job.AvailableAt.After(now) || job.ReservedAt.Time.After(now) {
 			continue
@@ -648,17 +628,22 @@ func (r *capabilityRepo) FindAndReserveJobForCapabilities(
 		job.Attempts++
 		job.ReservedAt = sql.NullTime{Time: until, Valid: true}
 		job.LeaseToken = leaseToken
-		r.jobs[i] = job
-
-		return job, nil
+		r.jobs[index] = job
+		jobs = append(jobs, job)
+		if len(jobs) == limit {
+			break
+		}
+	}
+	if len(jobs) == 0 {
+		return nil, sharederrors.ErrNoJobs
 	}
 
-	return models.Job{}, sharederrors.ErrNoJobs
+	return jobs, nil
 }
 
-func (r *capabilityRepo) ExtendJobLease(
+func (r *capabilityRepo) ExtendJobLeases(
 	_ context.Context,
-	jobID types.JobID,
+	jobIDs []types.JobID,
 	leaseToken outbox.LeaseToken,
 	now time.Time,
 	until time.Time,
@@ -671,25 +656,53 @@ func (r *capabilityRepo) ExtendJobLease(
 		return 0, nil
 	}
 
-	for i := range r.jobs {
-		job := r.jobs[i]
-		if job.ID != jobID || job.LeaseToken != leaseToken || !job.ReservedAt.Time.After(now) {
+	requested := make(map[types.JobID]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		requested[jobID] = struct{}{}
+	}
+	var affected int64
+	for index := range r.jobs {
+		job := r.jobs[index]
+		if _, ok := requested[job.ID]; !ok || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Time.After(now) {
 			continue
 		}
-
 		job.ReservedAt = sql.NullTime{Time: until, Valid: true}
-		r.jobs[i] = job
-		return 1, nil
+		r.jobs[index] = job
+		affected++
 	}
 
-	return 0, nil
+	return affected, nil
 }
 
-func (r *capabilityRepo) DeleteJob(_ context.Context, jobID types.JobID) (int64, error) {
+func (r *capabilityRepo) ReleaseUnstartedJobsWithLease(
+	_ context.Context,
+	jobIDs []types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.deleteJob(jobID, types.LeaseTokenNil, time.Time{}, false), nil
+	requested := make(map[types.JobID]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		requested[jobID] = struct{}{}
+	}
+	var affected int64
+	for index := range r.jobs {
+		job := r.jobs[index]
+		if _, ok := requested[job.ID]; !ok || job.LeaseToken != leaseToken ||
+			!job.ReservedAt.Time.After(now) {
+			continue
+		}
+		job.Attempts--
+		job.ReservedAt = sql.NullTime{}
+		job.LeaseToken = types.LeaseTokenNil
+		r.jobs[index] = job
+		affected++
+	}
+
+	return affected, nil
 }
 
 func (r *capabilityRepo) DeleteJobWithLease(
@@ -705,7 +718,7 @@ func (r *capabilityRepo) DeleteJobWithLease(
 		return 0, nil
 	}
 
-	return r.deleteJob(jobID, leaseToken, now, true), nil
+	return r.deleteJob(jobID, leaseToken, now), nil
 }
 
 func (r *capabilityRepo) RescheduleJobWithLease(
@@ -739,14 +752,13 @@ func (r *capabilityRepo) deleteJob(
 	jobID types.JobID,
 	leaseToken outbox.LeaseToken,
 	now time.Time,
-	checkLease bool,
 ) int64 {
 	for i := range r.jobs {
 		job := r.jobs[i]
 		if job.ID != jobID {
 			continue
 		}
-		if checkLease && (job.LeaseToken != leaseToken || !job.ReservedAt.Time.After(now)) {
+		if job.LeaseToken != leaseToken || !job.ReservedAt.Time.After(now) {
 			return 0
 		}
 
@@ -755,23 +767,6 @@ func (r *capabilityRepo) deleteJob(
 	}
 
 	return 0
-}
-
-func (r *capabilityRepo) CreateFailedJob(
-	ctx context.Context,
-	jobID types.JobID,
-	name string,
-	payload string,
-	reason string,
-) (types.JobID, error) {
-	return r.CreateFailedJobVersioned(
-		ctx,
-		jobID,
-		name,
-		outbox.DefaultSchemaVersion,
-		payload,
-		reason,
-	)
 }
 
 func (r *capabilityRepo) CreateFailedJobVersioned(
@@ -826,6 +821,17 @@ func (r *capabilityRepo) ExtendCount() int {
 	return r.extendCount
 }
 
+func (r *capabilityRepo) ClaimLimits() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]int(nil), r.claimLimits...)
+}
+
+func (*capabilityRepo) MaxReservationBatchSize() int {
+	return outbox.MaxReservationBatchSize
+}
+
 func newCapabilityService(t *testing.T, repo *capabilityRepo) *outbox.Service {
 	t.Helper()
 
@@ -834,9 +840,7 @@ func newCapabilityService(t *testing.T, repo *capabilityRepo) *outbox.Service {
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(repo),
-		outbox.WithCapabilityJobsRepo(repo),
 		outbox.WithJobsFailedRepo(repo),
-		outbox.WithCapabilityJobsFailedRepo(repo),
 		outbox.WithTransactor(repo),
 		outbox.WithLogger(logger.Discard()),
 	)
@@ -846,14 +850,11 @@ func newCapabilityService(t *testing.T, repo *capabilityRepo) *outbox.Service {
 }
 
 var (
-	_ outbox.Job                            = capabilityJob{}
-	_ outbox.VersionedJob                   = capabilityJob{}
-	_ outbox.JobsRepository                 = (*capabilityRepo)(nil)
-	_ outbox.CapabilityJobsRepository       = (*capabilityRepo)(nil)
-	_ outbox.FanoutJobsRepository           = (*capabilityRepo)(nil)
-	_ outbox.UniqueJobsRepository           = (*capabilityRepo)(nil)
-	_ outbox.ReschedulableJobsRepository    = (*capabilityRepo)(nil)
-	_ outbox.JobsFailedRepository           = (*capabilityRepo)(nil)
-	_ outbox.CapabilityJobsFailedRepository = (*capabilityRepo)(nil)
-	_ outbox.Transactor                     = (*capabilityRepo)(nil)
+	_ outbox.Job                  = capabilityJob{}
+	_ outbox.VersionedJob         = capabilityJob{}
+	_ outbox.JobsRepository       = (*capabilityRepo)(nil)
+	_ outbox.FanoutJobsRepository = (*capabilityRepo)(nil)
+	_ outbox.UniqueJobsRepository = (*capabilityRepo)(nil)
+	_ outbox.JobsFailedRepository = (*capabilityRepo)(nil)
+	_ outbox.Transactor           = (*capabilityRepo)(nil)
 )

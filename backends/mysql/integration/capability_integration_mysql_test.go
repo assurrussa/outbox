@@ -29,9 +29,10 @@ func TestMySQLCapabilityClaimLeavesUnsupportedSchemaPending(t *testing.T) {
 
 	jobID, err := ts.jobsRepo.CreateJobVersioned(ctx, "versioned", 2, `{}`, time.Now().UTC())
 	require.NoError(t, err)
-	_, err = ts.jobsRepo.FindAndReserveJobForCapabilities(
+	_, err = ts.jobsRepo.FindAndReserveJobsForCapabilities(
 		ctx, time.Now().UTC(), time.Now().UTC().Add(time.Second), types.NewLeaseToken(),
 		[]outbox.JobCapability{{Name: "versioned", SchemaVersion: 1}},
+		1,
 	)
 	require.ErrorIs(t, err, sharederrors.ErrNoJobs)
 	job, err := ts.jobsRepo.GetByID(ctx, jobID)
@@ -48,19 +49,22 @@ func TestMySQLCapabilityLeaseRejectsStaleOwner(t *testing.T) {
 	require.NoError(t, err)
 	now := time.Now().UTC()
 	token := types.NewLeaseToken()
-	job, err := ts.jobsRepo.FindAndReserveJobForCapabilities(
+	job, err := claimMySQLOne(
 		ctx, now, now.Add(time.Second), token,
+		ts.jobsRepo,
 		[]outbox.JobCapability{{Name: "versioned", SchemaVersion: 2}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, token, job.LeaseToken)
 
-	affected, err := ts.jobsRepo.ExtendJobLease(
-		ctx, job.ID, types.NewLeaseToken(), now, now.Add(2*time.Second),
+	affected, err := ts.jobsRepo.ExtendJobLeases(
+		ctx, []types.JobID{job.ID}, types.NewLeaseToken(), now, now.Add(2*time.Second),
 	)
 	require.NoError(t, err)
 	require.Zero(t, affected)
-	affected, err = ts.jobsRepo.ExtendJobLease(ctx, job.ID, token, now, now.Add(2*time.Second))
+	affected, err = ts.jobsRepo.ExtendJobLeases(
+		ctx, []types.JobID{job.ID}, token, now, now.Add(2*time.Second),
+	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), affected)
 	affected, err = ts.jobsRepo.DeleteJobWithLease(ctx, job.ID, types.NewLeaseToken(), now)
@@ -79,8 +83,9 @@ func TestMySQLCapabilityRescheduleIsFencedAndReleasesLease(t *testing.T) {
 	jobID, err := ts.jobsRepo.CreateJobVersioned(ctx, "versioned", 2, `{}`, now)
 	require.NoError(t, err)
 	token := types.NewLeaseToken()
-	job, err := ts.jobsRepo.FindAndReserveJobForCapabilities(
+	job, err := claimMySQLOne(
 		ctx, now, now.Add(time.Minute), token,
+		ts.jobsRepo,
 		[]outbox.JobCapability{{Name: "versioned", SchemaVersion: 2}},
 	)
 	require.NoError(t, err)
@@ -140,7 +145,17 @@ func TestMySQLIdempotencyTombstoneSurvivesAckUntilPruned(t *testing.T) {
 		ctx, "delivery:event:target", "fanout.webhook.topic", 2, `{}`, availableAt,
 	)
 	require.NoError(t, err)
-	deleted, err := ts.jobsRepo.DeleteJob(ctx, jobID)
+	leaseToken := types.NewLeaseToken()
+	job, err := claimMySQLOne(
+		ctx,
+		time.Now().UTC(),
+		time.Now().UTC().Add(time.Minute),
+		leaseToken,
+		ts.jobsRepo,
+		[]outbox.JobCapability{{Name: "fanout.webhook.topic", SchemaVersion: 2}},
+	)
+	require.NoError(t, err)
+	deleted, err := ts.jobsRepo.DeleteJobWithLease(ctx, job.ID, leaseToken, time.Now().UTC())
 	require.NoError(t, err)
 	require.Equal(t, int64(1), deleted)
 
@@ -221,23 +236,19 @@ func TestMySQLFanoutLostAckDoesNotDuplicateDeliveries(t *testing.T) {
 
 func newMySQLFanoutService(
 	t *testing.T,
-	capabilityRepo outbox.CapabilityJobsRepository,
+	jobsRepo outbox.JobsRepository,
 	fanoutRepo outbox.FanoutJobsRepository,
 	failedRepo *jobsfailedrepo.Repo,
 	txManager outbox.Transactor,
 ) *outbox.Service {
 	t.Helper()
-	legacyRepo, ok := capabilityRepo.(outbox.JobsRepository)
-	require.True(t, ok)
 	svc, err := outbox.New(
 		outbox.WithWorkers(1),
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
-		outbox.WithJobsRepo(legacyRepo),
-		outbox.WithCapabilityJobsRepo(capabilityRepo),
+		outbox.WithJobsRepo(jobsRepo),
 		outbox.WithFanoutJobsRepo(fanoutRepo),
 		outbox.WithJobsFailedRepo(failedRepo),
-		outbox.WithCapabilityJobsFailedRepo(failedRepo),
 		outbox.WithTransactor(txManager),
 		outbox.WithLogger(logger.Discard()),
 	)
@@ -276,6 +287,26 @@ func runMySQLServiceFor(ctx context.Context, svc *outbox.Service, duration time.
 	runCtx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 	return svc.Run(runCtx)
+}
+
+func claimMySQLOne(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken outbox.LeaseToken,
+	repo outbox.JobsRepository,
+	capabilities []outbox.JobCapability,
+) (models.Job, error) {
+	jobs, err := repo.FindAndReserveJobsForCapabilities(
+		ctx, now, until, leaseToken, capabilities, 1,
+	)
+	if err != nil {
+		return models.Job{}, err
+	}
+	if len(jobs) != 1 {
+		return models.Job{}, errors.New("claim returned an unexpected batch size")
+	}
+	return jobs[0], nil
 }
 
 type mysqlLoseFirstAckRepo struct {

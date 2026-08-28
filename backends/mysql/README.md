@@ -42,31 +42,43 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 
 	return outbox.New(
 		outbox.WithWorkers(1),
+		outbox.WithReservationBatchSize(32),
 		outbox.WithIdleTime(100*time.Millisecond),
 		outbox.WithReserveFor(time.Second),
 		outbox.WithJobsRepo(jobs),
-		outbox.WithCapabilityJobsRepo(jobs),
 		outbox.WithFanoutJobsRepo(jobs),
-		// Optional: only if you call svc.GetQueueStats(...)
-		outbox.WithJobsStatRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
-		outbox.WithCapabilityJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
 		outbox.WithLogger(lg),
 	)
 }
 ```
 
-`JobsStatRepository` is optional.  
-Keep `WithJobsStatRepo(...)` only when queue stats are needed.
+The jobs repository is auto-detected for exact grouped queue stats and unique
+puts. Fan-out remains the explicit opt-in shown above.
 
-The backend implements the complete capability, fenced-lease, schema-preserving
-DLQ, and durable fan-out contracts. For standard worker composition, prefer
+The backend implements the complete version-aware fenced batch,
+schema-preserving DLQ, and durable fan-out contracts. Unsupported exact
+capabilities remain pending. For standard worker composition, prefer
 `runtime.Open(ctx, runtime.Config{DSN: dsn})` after the migrate role has applied
 the embedded migrations. The runtime does not migrate automatically. The
-capability claim implementation targets MySQL 8.0 and uses
-`SELECT ... FOR UPDATE SKIP LOCKED`; the canonical integration image is
-`mysql:8.0`.
+capability claim implementation targets MySQL 8.0; the canonical integration
+image is `mysql:8.0`.
+
+For the standard facade, set
+`runtime.Config.ReservationBatchSize` (`0` keeps the default `1`). Batch claims
+first select at most the requested limit per exact capability through
+`jobs_capability_claim_index`, merge those bounded candidates in queue order,
+then conditionally reserve and reload the winners in a short read-committed
+transaction. A worker that loses the candidate race selects again; unsupported
+backlog is not scanned through the availability-only index. Migration
+`00005_add_batch_claim_index.sql` extends the capability index with the complete
+batch ordering. Claims remain functional with the original index from `00003`,
+but `00005` avoids a filesort over the supported backlog and should be applied
+before enabling workers from this release.
+
+`GetQueueStats` uses one exact grouped scan of the active queue. The host owns
+its polling frequency; the backend adds no cache or projection table.
 
 ## Migrations
 

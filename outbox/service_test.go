@@ -17,6 +17,7 @@ func TestCreate_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	mockTransactor := outboxmocks.NewMockTransactor(ctrl)
 	mockJobsRepo := outboxmocks.NewMockJobsRepository(ctrl)
+	mockJobsRepo.EXPECT().MaxReservationBatchSize().Return(outbox.MaxReservationBatchSize)
 	mockJobsStatRepo := outboxmocks.NewMockJobsStatRepository(ctrl)
 	mockJobsFailedRepo := outboxmocks.NewMockJobsFailedRepository(ctrl)
 
@@ -47,4 +48,42 @@ func TestCreate_Error(t *testing.T) {
 	)
 	require.ErrorIs(t, err, outbox.ErrOption)
 	assert.Nil(t, srv)
+}
+
+func TestCreate_WorkerCount(t *testing.T) {
+	tests := []struct {
+		name    string
+		workers int
+		wantErr bool
+	}{
+		{name: "negative", workers: -1, wantErr: true},
+		{name: "zero", workers: 0, wantErr: true},
+		{name: testValueOne, workers: 1},
+		{name: "host defined above former limit", workers: 64},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			jobsRepo := outboxmocks.NewMockJobsRepository(ctrl)
+			if tt.workers > 0 {
+				jobsRepo.EXPECT().MaxReservationBatchSize().Return(outbox.MaxReservationBatchSize)
+			}
+			srv, err := outbox.New(
+				outbox.WithWorkers(tt.workers),
+				outbox.WithLogger(logger.Discard()),
+				outbox.WithTransactor(outboxmocks.NewMockTransactor(ctrl)),
+				outbox.WithJobsRepo(jobsRepo),
+				outbox.WithJobsFailedRepo(outboxmocks.NewMockJobsFailedRepository(ctrl)),
+			)
+
+			if tt.wantErr {
+				require.ErrorContains(t, err, "invalid number of workers")
+				assert.Nil(t, srv)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotNil(t, srv)
+		})
+	}
 }
