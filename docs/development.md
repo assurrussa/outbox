@@ -114,7 +114,7 @@ the backend-specific example README files for exact env and DSN behavior.
 Pin all backend modules to a published core version and refresh their sums:
 
 ```sh
-make release-ready-backends CORE_VERSION=v0.11.0
+make release-ready-backends CORE_VERSION=v0.12.0
 ```
 
 This is the only mutating backend release-preparation command. It updates all
@@ -134,7 +134,7 @@ For a non-mutating pre-tag gate that also proves every backend resolves the
 exact core tag:
 
 ```sh
-make release-readiness-backends CORE_VERSION=v0.11.0
+make release-readiness-backends CORE_VERSION=v0.12.0
 ```
 
 ## Sandbox Note

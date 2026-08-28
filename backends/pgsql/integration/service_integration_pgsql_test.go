@@ -404,7 +404,27 @@ func TestIfNoJobsThenWorkersSleepForIdleTime(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 	// Arrange.
-	const jobName = "TestIfNoJobsThenWorkersSleepForIdleTime"
+	const (
+		jobName      = "TestIfNoJobsThenWorkersSleepForIdleTime"
+		testIdleTime = 2 * time.Second
+	)
+
+	observedRepo := &firstEmptyClaimRepo{
+		Repo:       ts.jobsRepo,
+		firstEmpty: make(chan struct{}),
+	}
+	outboxSvc, err := outbox.New(
+		outbox.WithWorkers(1),
+		outbox.WithIdleTime(testIdleTime),
+		outbox.WithReserveFor(reserveFor),
+		outbox.WithJobsRepo(observedRepo),
+		outbox.WithJobsStatRepo(ts.jobsRepo),
+		outbox.WithJobsFailedRepo(ts.jobsFailedRepo),
+		outbox.WithTransactor(transaction.New(ts.db.DB())),
+		outbox.WithLogger(logger.Discard()),
+	)
+	ts.Require().NoError(err)
+	ts.outboxSvc = outboxSvc
 
 	job := newJobMock(jobName, nop, time.Second, 1)
 	ts.outboxSvc.MustRegisterJob(job)
@@ -414,7 +434,11 @@ func TestIfNoJobsThenWorkersSleepForIdleTime(t *testing.T) {
 	defer cancel()
 
 	// Assert.
-	time.Sleep(idleTime / 25)
+	select {
+	case <-observedRepo.firstEmpty:
+	case <-time.After(5 * time.Second):
+		ts.FailNow("worker did not complete its initial empty claim")
+	}
 
 	const jobsCount = 3
 	for i := 0; i < jobsCount; i++ {
@@ -427,11 +451,10 @@ func TestIfNoJobsThenWorkersSleepForIdleTime(t *testing.T) {
 	ts.Require().Equal(int64(jobsCount), count) // Workers fell asleep before the jobsrepo appearing.
 	ts.Equal(0, job.ExecutedTimes())
 
-	time.Sleep(2 * idleTime)
-
-	count, err = activeJobsCount(ctx, ts.jobsRepo)
-	ts.Require().NoError(err)
-	ts.Require().Equal(int64(0), count) // Workers woke up and processed the jobsrepo.
+	ts.Require().Eventually(func() bool {
+		count, countErr := activeJobsCount(ctx, ts.jobsRepo)
+		return countErr == nil && count == 0 && job.ExecutedTimes() == jobsCount
+	}, 3*testIdleTime, 10*time.Millisecond) // Worker woke up and processed the jobsrepo.
 	count, err = ts.jobsFailedRepo.CountExact(ctx)
 	ts.Require().NoError(err)
 	ts.Require().Equal(int64(0), count)
@@ -439,6 +462,35 @@ func TestIfNoJobsThenWorkersSleepForIdleTime(t *testing.T) {
 
 	cancel()
 	ts.NoError(<-errCh)
+}
+
+type firstEmptyClaimRepo struct {
+	*jobsrepo.Repo
+	firstEmpty chan struct{}
+	once       sync.Once
+}
+
+func (r *firstEmptyClaimRepo) FindAndReserveJobsForCapabilities(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken outbox.LeaseToken,
+	capabilities []outbox.JobCapability,
+	limit int,
+) ([]outboxmodels.Job, error) {
+	jobs, err := r.Repo.FindAndReserveJobsForCapabilities(
+		ctx,
+		now,
+		until,
+		leaseToken,
+		capabilities,
+		limit,
+	)
+	if errors.Is(err, outbox.ErrNoJobs) {
+		r.once.Do(func() { close(r.firstEmpty) })
+	}
+
+	return jobs, err
 }
 
 func TestQueueStats_ReservedJobIsNotAvailable(t *testing.T) {
