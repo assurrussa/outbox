@@ -32,6 +32,11 @@
   corrected path performs one bounded candidate lookup per unique capability
   through the index introduced by `00003`, then conditionally reserves and
   reloads only the winning IDs. A lost concurrent race repeats selection.
+- Follow-up review found a check-to-call race between batch cancellation and
+  the next handler. Heartbeat failure publication and handler admission now
+  share the lease-manager mutex: a failed heartbeat closes admission before
+  releasing the mutex, while an admitted job is treated as the active job and
+  receives the resulting cancellation.
 - Migration `00005` now extends the existing capability index with the full
   `(available_at, created_at, id)` ordering instead of introducing a runtime
   dependency on a separate availability-first index. Pre-`00005` schemas remain
