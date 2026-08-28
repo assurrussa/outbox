@@ -71,8 +71,6 @@ func (m *batchLeaseManager) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := m.extend(ctx); err != nil {
-				m.setError(err)
-				m.cancelBatch(err)
 				return
 			}
 		}
@@ -97,18 +95,34 @@ func (m *batchLeaseManager) extend(ctx context.Context) error {
 		now.Add(m.reserveFor),
 	)
 	if err != nil {
-		return errors.Join(ErrLeaseLost, fmt.Errorf("extend reservation batch leases: %w", err))
+		return m.failLeaseLocked(
+			errors.Join(ErrLeaseLost, fmt.Errorf("extend reservation batch leases: %w", err)),
+		)
 	}
 	if affected != int64(len(jobIDs)) {
-		return fmt.Errorf(
+		return m.failLeaseLocked(fmt.Errorf(
 			"%w: extended %d of %d reservation batch leases",
 			ErrLeaseLost,
 			affected,
 			len(jobIDs),
-		)
+		))
 	}
 
 	return nil
+}
+
+func (m *batchLeaseManager) failLeaseLocked(err error) error {
+	m.setError(err)
+	m.cancelBatch(err)
+
+	return err
+}
+
+func (m *batchLeaseManager) admit(ctx context.Context, drain <-chan struct{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return batchStartError(ctx, drain)
 }
 
 func (m *batchLeaseManager) finalize(jobID types.JobID, finalize func() error) error {
@@ -217,17 +231,6 @@ func (s *Service) findAndProcessBatch(
 	var processErr error
 	for index := range jobs {
 		job := jobs[index]
-		select {
-		case <-ctx.Done():
-			processErr = ctx.Err()
-		case <-s.drain:
-			processErr = ErrServiceDraining
-		default:
-		}
-		if processErr != nil {
-			break
-		}
-
 		started, err := s.processBatchJob(batchCtx, log, manager, job)
 		if err == nil {
 			continue
@@ -253,6 +256,19 @@ func (s *Service) findAndProcessBatch(
 	}
 
 	return errors.Join(processErr, heartbeatErr, releaseErr)
+}
+
+func batchStartError(ctx context.Context, drain <-chan struct{}) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+
+	select {
+	case <-drain:
+		return ErrServiceDraining
+	default:
+		return nil
+	}
 }
 
 func (s *Service) claimBatch(
@@ -326,6 +342,9 @@ func (s *Service) processBatchJob(
 			job.Name,
 			job.SchemaVersion,
 		)
+	}
+	if err := manager.admit(ctx, s.drain); err != nil {
+		return false, err
 	}
 
 	handleErr := s.executeJob(ctx, handler, job)
