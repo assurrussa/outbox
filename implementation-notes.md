@@ -1,5 +1,73 @@
 # Implementation Notes
 
+## 2026-09-02: Harden true-batch ordering and finalization
+
+- The collector now re-sorts the completed batch by the repository's durable
+  `(available_at, created_at, id)` order before calling `HandleBatch`, covering
+  an earlier eligible row that appears between singleton fill claims.
+- Top-level transient handler failures now emit one batch-level error record
+  with capability, batch size, and durable retry time before the rows are
+  deferred.
+- Finalization keeps the five-second base budget and adds 25 milliseconds for
+  every sequential DLQ insert. Before starting the transaction, the lease
+  manager extends every batch row past that deadline so the blocked heartbeat
+  cannot let a large DLQ batch expire mid-commit.
+
+## 2026-09-02: Enforce the true-batch fill deadline
+
+- Supplemental batch claims now use a child context capped by the remaining
+  `MaxWait` window. When that deadline expires while the parent run context is
+  still live, the service flushes the jobs already collected instead of
+  waiting indefinitely or failing the worker; any ambiguous extra claim stays
+  fenced for lease-expiry recovery.
+- A regression test blocks the second repository claim until its context ends
+  and verifies that the first job reaches `HandleBatch` before the parent run
+  context is cancelled.
+
+## 2026-09-01: True handler batches and atomic unique batch staging
+
+- Added `BatchJob`, keyed partial results, zero-value count/byte/wait limits,
+  explicit registration, and optional repository capabilities without widening
+  the established `JobsRepository` interfaces. Reservation batch size remains
+  prefetch for existing single jobs; `MaxMessages=1` exercises the true-batch
+  collector and finalizer.
+- One homogeneous batch retains durable order and one lease heartbeat. The
+  handler is invoked once, all item outcomes are applied in one fenced backend
+  transaction, drain releases an unstarted claimed tail with attempt
+  compensation, and structural result defects fail the service closed.
+- Review hardening puts every fill claim behind the drain claim lock, adds the
+  final handler admission check, and treats Run cancellation after admission
+  as an abandoned lease even when the handler returns a successful result.
+  Per-worker rotation and batch/single alternation prevent capability
+  starvation under a continuously ready queue.
+- Follow-up hardening validates every returned row against the requested exact
+  capability, starts or expands heartbeat ownership before any byte-tail
+  release, treats the handler child-context timeout as a top-level transient
+  failure, and stops the fill window after the first durable row cannot fit.
+- Review fixes keep the service's result key map immutable even if a handler
+  reorders its input slice, leave every admitted row leased after structural or
+  finalization failure, preserve pauses established by concurrent workers, and
+  claim one collector candidate at a time so `MaxBytes` cannot materialize a
+  full `MaxMessages` payload set before selection.
+- Added `DeferAt` to single and batch paths. It compensates the claim attempt
+  and pauses the exact capability until its durable time. Top-level transient
+  batch failures use a separate bounded streak and never consume item attempts;
+  durable commit state resolves ambiguous outcomes on redelivery.
+- PostgreSQL uses set-based `unnest` finalization. MySQL and SQLite use bounded
+  constant-count mixed-outcome statements inside one transaction. DLQ inserts
+  go through the configured failed-job repository in the same outer
+  transaction, and every backend rolls back on a partial fence match. Picodata
+  retains singleton reservation prefetch and `DeferAt`, but does not advertise
+  true handler batches because its client cannot provide that atomic boundary.
+  Existing migrations are sufficient.
+- Added atomic ordered `PutVersionedUniqueBatch` and backend conflict/replay
+  tests, mixed batch outcomes, concurrent claims, service-level invocation
+  tests, drain/heartbeat/result validation, and race-enabled live integration
+  coverage for PostgreSQL, MySQL, and SQLite; Picodata keeps its existing
+  singleton reservation coverage.
+- This checkout work is intentionally unpublished. No commit, push, tag,
+  release, or downstream version pin was performed.
+
 ## 2026-08-28: Unified version-aware fenced execution in v0.12.0
 
 - The v0.12.0 release removes the legacy single/unfiltered path and all split

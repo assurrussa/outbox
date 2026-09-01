@@ -79,6 +79,61 @@ func (s *Service) PutVersionedUnique(
 	return result, nil
 }
 
+// PutVersionedUniqueBatch validates and atomically stages all items. Results
+// preserve input order; no item is staged when validation or repository work
+// fails.
+func (s *Service) PutVersionedUniqueBatch(
+	ctx context.Context,
+	items []UniqueBatchPut,
+) ([]UniquePutResult, error) {
+	if s.uniqueBatchJobsRepo == nil {
+		return nil, ErrUniqueRepositoryNotConfigured
+	}
+	if len(items) == 0 {
+		return nil, errors.New("outbox unique batch is empty")
+	}
+	if len(items) > MaxReservationBatchSize {
+		return nil, fmt.Errorf(
+			"outbox unique batch contains %d items; maximum is %d",
+			len(items),
+			MaxReservationBatchSize,
+		)
+	}
+
+	seen := make(map[string]struct{}, len(items))
+	prepared := make([]UniqueBatchPut, len(items))
+	copy(prepared, items)
+	for index := range prepared {
+		item := &prepared[index]
+		if item.DeduplicationKey == "" {
+			return nil, fmt.Errorf("outbox unique batch item %d has an empty deduplication key", index)
+		}
+		if _, duplicate := seen[item.DeduplicationKey]; duplicate {
+			return nil, fmt.Errorf("outbox unique batch item %d duplicates deduplication key %q", index, item.DeduplicationKey)
+		}
+		seen[item.DeduplicationKey] = struct{}{}
+		if err := (JobCapability{Name: item.Name, SchemaVersion: item.SchemaVersion}).Validate(); err != nil {
+			return nil, fmt.Errorf("outbox unique batch item %d: %w", index, err)
+		}
+		item.AvailableAt = item.AvailableAt.UTC()
+	}
+
+	results, err := s.uniqueBatchJobsRepo.CreateJobVersionedUniqueBatch(ctx, prepared)
+	if err != nil {
+		return nil, fmt.Errorf("create unique versioned job batch: %w", err)
+	}
+	if len(results) != len(prepared) {
+		return nil, fmt.Errorf("unique batch repository returned %d results for %d items", len(results), len(prepared))
+	}
+	for index, result := range results {
+		if result.JobID.IsZero() {
+			return nil, fmt.Errorf("unique batch repository returned an empty JobID at index %d", index)
+		}
+	}
+
+	return results, nil
+}
+
 // GetQueueStats returns queue totals when JobsStatRepository is configured.
 // If stats repo is not set, returns sharederrors.ErrJobStatNotInit.
 func (s *Service) GetQueueStats(ctx context.Context) (QueueStats, error) {

@@ -274,6 +274,40 @@ func (r *Repo) RescheduleJobWithLease(
 	return result.RowsAffected(), nil
 }
 
+func (r *Repo) DeferJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	if err := leaseToken.Validate(); err != nil {
+		return 0, fmt.Errorf("invalid lease token: %w", err)
+	}
+	if err := jobID.Validate(); err != nil {
+		return 0, err
+	}
+	if availableAt.IsZero() {
+		return 0, errors.New("defer availability time is empty")
+	}
+	query := fmt.Sprintf(`UPDATE %s
+		SET attempts = attempts - 1, available_at = $1, reserved_at = NULL, lease_token = $2
+		WHERE id = $3 AND lease_token = $4 AND reserved_at > $5 AND attempts > 0;`, r.tableName)
+	result, err := r.executor(ctx).Exec(
+		ctx,
+		query,
+		availableAt.UTC(),
+		types.LeaseTokenNil,
+		jobID,
+		leaseToken,
+		now.UTC(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 func (r *Repo) GetByID(ctx context.Context, jobID types.JobID) (models.Job, error) {
 	const op = "jobs.repo.GetByID"
 

@@ -59,12 +59,17 @@ same token on every row. An empty queue must return `outbox.ErrNoJobs`;
 `sharederrors.ErrNoJobs` remains the same sentinel for migration compatibility.
 Returning an empty slice with a `nil` error is a contract violation surfaced as
 `ErrEmptyReservationBatch`, so a broken custom adapter cannot silently spin.
-The service also rejects too many rows or a token mismatch.
+The service also rejects too many rows or a token mismatch. The true handler
+batch collector additionally rejects duplicate job IDs and any row outside the
+requested exact capability before handler admission.
 
 One owned heartbeat extends every unfinished row every `reserveFor / 3`. The
-heartbeat goroutine is stopped and joined before tail release or final return.
-A database error or affected-row mismatch is a lost fence: the active handler
-is cancelled, no later handler starts, and the worker returns `ErrLeaseLost`.
+heartbeat goroutine is stopped and joined before releasing manager-owned
+unstarted rows or returning. The true-batch collector reserves one additional
+candidate at a time; a candidate beyond the byte limit is released while the
+heartbeat continues for selected rows. A database error or affected-row
+mismatch is a lost fence: the active handler is cancelled, no later handler
+starts, and the worker returns `ErrLeaseLost`.
 
 Per-job outcomes are fenced:
 
@@ -87,6 +92,69 @@ leaves the claimed attempts intact.
 Delivery remains at-least-once. Fencing prevents a stale worker from deleting a
 row owned by a newer worker; it cannot make an external side effect exactly
 once.
+
+## True Handler Batch Contract
+
+`RegisterBatchJob` is a separate opt-in path. It does not change `Job`,
+`RegisterJob`, or `WithReservationBatchSize`; the latter remains sequential
+prefetch. A single `(name, schemaVersion)` cannot be registered as both a
+single and batch capability.
+
+The zero-value `BatchConfig` resolves to 100 jobs, 4 MiB of payload bytes, and
+25 ms after the first claim. A batch flushes at the first count, byte, or wait
+limit. Accepted payload stays within `MaxBytes`, except that an individually
+oversized first job remains a singleton; only one next candidate is
+materialized while testing that bound. `MaxMessages=1` uses the same collector,
+handler, and atomic outcome path. Negative limits, arithmetic overflow, or a
+maximum above the backend capability fail registration.
+
+`BatchJob.HandleBatch` receives ready jobs in durable queue order. Its
+`BatchResult` may be in any order but must contain exactly one result for every
+input `JobID`. Missing, repeated, or unknown keys, or a non-empty result paired
+with a top-level error, return `ErrInvalidBatchResult` and stop the service
+without finalizing the batch. Because every row was admitted to the handler,
+its leases remain for expiry-based recovery rather than being released as
+unstarted work.
+
+Disposition precedence is `Permanent`, `DeferAt`, `RetryAt`, then ordinary
+error:
+
+- item success deletes the fenced active row;
+- item ordinary or `RetryAt` failure consumes the claimed attempt and persists
+  a bounded or explicit retry time, then reaches DLQ at `MaxAttempts`;
+- item `DeferAt` compensates the claimed attempt and persists the exact time;
+- item `Permanent` or attempt exhaustion creates the failed row and deletes
+  the active row atomically;
+- a transient top-level error, panic, timeout, retry, or defer compensates all
+  claimed attempts and reschedules the batch with a separate bounded
+  capability retry streak;
+- top-level `Permanent` and structural result defects stop the service with no
+  ACK or DLQ.
+
+A defer pauses new claims for that exact capability until its durable time, so
+a broker outage cannot create a tight claim storm. A valid result resets the
+top-level streak without clearing a later pause established by another worker.
+The service creates failed rows through its configured `JobsFailedRepository`
+and applies active-row outcomes inside the same configured `Transactor`. The
+batch repository must roll back every active-row change when any requested
+lease is missing. A commit failure leaves the durable rows replayable, and a
+commit whose result was ambiguous is resolved from stored state on the next
+claim.
+
+Every collector claim shares the `BeginDrain` claim boundary, and handler
+admission is checked after the fill window. Cancellation after admission leaves
+the claimed rows leased for recovery even if `HandleBatch` returns success.
+Workers rotate their starting batch capability and alternate batch and single
+work so a continuously ready capability cannot starve the others.
+
+`BatchJobsRepository`, `DeferJobsRepository`, `UniqueBatchJobsRepository`, and
+`UniqueBatchVersionedPutter` are optional capabilities; existing repository
+interfaces are not widened. Batch registration and batch staging fail closed
+when the configured backend does not implement them. PostgreSQL, MySQL, and
+SQLite support multi-item batch execution and atomic unique staging. Picodata
+implements no-attempt defer but does not provide true handler batches or
+unique batch staging because its client lacks a connection-pinned transaction.
+Existing tables and migrations are reused.
 
 ## Unsupported Capability Policy
 
