@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -95,9 +96,108 @@ func TestExecutionBatchHandlerTimeoutDefersClaimedJobs(t *testing.T) {
 }
 
 func TestExecutionBatchMaxWaitFlushesWhileFillClaimIsBlocked(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		bounded bool
+	}{
+		{name: "singleton fallback"},
+		{name: "bounded repository", bounded: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseRepo := &executionBatchTestRepo{}
+			var findCalls atomic.Int32
+			fillDeadlineObserved := make(chan struct{}, 1)
+			claim := func(ctx context.Context, leaseToken LeaseToken) ([]models.Job, error) {
+				if findCalls.Add(1) == 1 {
+					return []models.Job{executionBatchTestJob(testBatchJobName, leaseToken)}, nil
+				}
+				<-ctx.Done()
+				fillDeadlineObserved <- struct{}{}
+				return nil, ctx.Err()
+			}
+
+			var repo JobsRepository = baseRepo
+			if test.bounded {
+				baseRepo.findBatch = func(
+					context.Context,
+					JobCapability,
+					LeaseToken,
+					int,
+				) ([]models.Job, error) {
+					t.Fatal("bounded repository unexpectedly used singleton fallback")
+					return nil, ErrNoJobs
+				}
+				boundedRepo := &boundedExecutionBatchTestRepo{executionBatchTestRepo: baseRepo}
+				boundedRepo.findBounded = func(
+					ctx context.Context,
+					_ JobCapability,
+					leaseToken LeaseToken,
+					_ BatchClaimLimits,
+				) ([]models.Job, error) {
+					return claim(ctx, leaseToken)
+				}
+				repo = boundedRepo
+			} else {
+				baseRepo.findBatch = func(
+					ctx context.Context,
+					_ JobCapability,
+					leaseToken LeaseToken,
+					_ int,
+				) ([]models.Job, error) {
+					return claim(ctx, leaseToken)
+				}
+			}
+
+			handledItems := make(chan int, 1)
+			handler := &executionBatchTestHandler{
+				name: testBatchJobName,
+				handle: func(_ context.Context, items []BatchJobItem) (BatchResult, error) {
+					handledItems <- len(items)
+					return successfulExecutionBatchResult(items), nil
+				},
+			}
+			service := newExecutionBatchTestService(
+				repo,
+				&executionBatchTestFailedRepo{},
+				&executionBatchTestTransactor{},
+			)
+			service.MustRegisterBatchJob(handler, BatchConfig{
+				MaxMessages: 2,
+				MaxBytes:    1024,
+				MaxWait:     10 * time.Millisecond,
+			})
+
+			runCtx, cancelRun := context.WithTimeout(t.Context(), time.Second)
+			defer cancelRun()
+			processed, err := service.findAndProcessExecutionBatch(
+				runCtx,
+				logger.Discard(),
+				JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
+			)
+			if err != nil || !processed {
+				t.Fatalf("find and process batch = (%v, %v), want a normal MaxWait flush", processed, err)
+			}
+			if cause := context.Cause(runCtx); cause != nil {
+				t.Fatalf("parent context ended before fill flush: %v", cause)
+			}
+			select {
+			case <-fillDeadlineObserved:
+			default:
+				t.Fatal("supplemental claim did not observe the fill deadline")
+			}
+			if handled := <-handledItems; handled != 1 {
+				t.Fatalf("handled items = %d, want the one job collected before MaxWait", handled)
+			}
+			if calls := findCalls.Load(); calls != 2 {
+				t.Fatalf("claim calls = %d, want initial and one deadline-bounded supplemental claim", calls)
+			}
+		})
+	}
+}
+
+func TestExecutionBatchMaxWaitFlushesOnDriverCancellationError(t *testing.T) {
 	repo := &executionBatchTestRepo{}
 	var findCalls atomic.Int32
-	fillDeadlineObserved := make(chan struct{}, 1)
 	repo.findBatch = func(
 		ctx context.Context,
 		_ JobCapability,
@@ -108,8 +208,7 @@ func TestExecutionBatchMaxWaitFlushesWhileFillClaimIsBlocked(t *testing.T) {
 			return []models.Job{executionBatchTestJob(testBatchJobName, leaseToken)}, nil
 		}
 		<-ctx.Done()
-		fillDeadlineObserved <- struct{}{}
-		return nil, ctx.Err()
+		return nil, errors.New("canceling statement due to user request (SQLSTATE 57014)")
 	}
 
 	handledItems := make(chan int, 1)
@@ -120,36 +219,90 @@ func TestExecutionBatchMaxWaitFlushesWhileFillClaimIsBlocked(t *testing.T) {
 			return successfulExecutionBatchResult(items), nil
 		},
 	}
-	service := newExecutionBatchTestService(repo, &executionBatchTestFailedRepo{}, &executionBatchTestTransactor{})
+	service := newExecutionBatchTestService(
+		repo,
+		&executionBatchTestFailedRepo{},
+		&executionBatchTestTransactor{},
+	)
 	service.MustRegisterBatchJob(handler, BatchConfig{
 		MaxMessages: 2,
 		MaxBytes:    1024,
-		MaxWait:     5 * time.Millisecond,
+		MaxWait:     10 * time.Millisecond,
 	})
 
-	runCtx, cancelRun := context.WithTimeout(t.Context(), time.Second)
-	defer cancelRun()
 	processed, err := service.findAndProcessExecutionBatch(
-		runCtx,
+		t.Context(),
 		logger.Discard(),
 		JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
 	)
 	if err != nil || !processed {
 		t.Fatalf("find and process batch = (%v, %v), want a normal MaxWait flush", processed, err)
 	}
-	if cause := context.Cause(runCtx); cause != nil {
-		t.Fatalf("parent context ended before fill flush: %v", cause)
+	if handled := <-handledItems; handled != 1 {
+		t.Fatalf("handled items = %d, want the one job collected before MaxWait", handled)
 	}
-	select {
-	case <-fillDeadlineObserved:
-	default:
-		t.Fatal("supplemental claim did not observe the fill deadline")
+	if calls := findCalls.Load(); calls != 2 {
+		t.Fatalf("claim calls = %d, want initial and one deadline-bounded supplemental claim", calls)
 	}
-	if got := <-handledItems; got != 1 {
-		t.Fatalf("handled items = %d, want the one job collected before MaxWait", got)
+}
+
+func TestExecutionBatchSkipsSupplementalClaimWithoutMinimumBudget(t *testing.T) {
+	baseRepo := &executionBatchTestRepo{}
+	baseRepo.findBatch = func(
+		context.Context,
+		JobCapability,
+		LeaseToken,
+		int,
+	) ([]models.Job, error) {
+		t.Fatal("bounded repository unexpectedly used singleton fallback")
+		return nil, ErrNoJobs
 	}
-	if got := findCalls.Load(); got != 2 {
-		t.Fatalf("fill claims = %d, want initial and one deadline-bounded supplemental claim", got)
+	boundedRepo := &boundedExecutionBatchTestRepo{executionBatchTestRepo: baseRepo}
+	var findCalls atomic.Int32
+	boundedRepo.findBounded = func(
+		_ context.Context,
+		_ JobCapability,
+		leaseToken LeaseToken,
+		_ BatchClaimLimits,
+	) ([]models.Job, error) {
+		if call := findCalls.Add(1); call != 1 {
+			t.Fatalf("bounded claim call = %d, want only the initial claim", call)
+		}
+		return []models.Job{executionBatchTestJob(testBatchJobName, leaseToken)}, nil
+	}
+
+	handledItems := make(chan int, 1)
+	handler := &executionBatchTestHandler{
+		name: testBatchJobName,
+		handle: func(_ context.Context, items []BatchJobItem) (BatchResult, error) {
+			handledItems <- len(items)
+			return successfulExecutionBatchResult(items), nil
+		},
+	}
+	service := newExecutionBatchTestService(
+		boundedRepo,
+		&executionBatchTestFailedRepo{},
+		&executionBatchTestTransactor{},
+	)
+	service.MustRegisterBatchJob(handler, BatchConfig{
+		MaxMessages: 2,
+		MaxBytes:    1024,
+		MaxWait:     batchFillClaimHeadroom / 2,
+	})
+
+	processed, err := service.findAndProcessExecutionBatch(
+		t.Context(),
+		logger.Discard(),
+		JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
+	)
+	if err != nil || !processed {
+		t.Fatalf("find and process batch = (%v, %v), want a normal early flush", processed, err)
+	}
+	if handled := <-handledItems; handled != 1 {
+		t.Fatalf("handled items = %d, want the initial job", handled)
+	}
+	if calls := findCalls.Load(); calls != 1 {
+		t.Fatalf("bounded claim calls = %d, want 1", calls)
 	}
 }
 
@@ -327,6 +480,153 @@ func TestExecutionBatchCollectorClaimsOneCandidateAtATime(t *testing.T) {
 	}
 	if got := repo.releaseCalls.Load(); got != 1 {
 		t.Fatalf("collector released %d byte-tail claims, want 1", got)
+	}
+}
+
+func TestExecutionBatchUsesBoundedInitialClaim(t *testing.T) {
+	baseRepo := &executionBatchTestRepo{}
+	baseRepo.findBatch = func(
+		context.Context,
+		JobCapability,
+		LeaseToken,
+		int,
+	) ([]models.Job, error) {
+		t.Fatal("bounded repository unexpectedly used singleton fallback")
+		return nil, ErrNoJobs
+	}
+	var gotLimits BatchClaimLimits
+	var boundedCalls atomic.Int32
+	boundedRepo := &boundedExecutionBatchTestRepo{executionBatchTestRepo: baseRepo}
+	boundedRepo.findBounded = func(
+		_ context.Context,
+		_ JobCapability,
+		leaseToken LeaseToken,
+		limits BatchClaimLimits,
+	) ([]models.Job, error) {
+		boundedCalls.Add(1)
+		gotLimits = limits
+		jobs := make([]models.Job, 3)
+		for index := range jobs {
+			jobs[index] = executionBatchTestJob(testBatchJobName, leaseToken)
+			jobs[index].Payload = "payload"
+		}
+		return jobs, nil
+	}
+
+	var handled int
+	handler := &executionBatchTestHandler{
+		name: testBatchJobName,
+		handle: func(_ context.Context, items []BatchJobItem) (BatchResult, error) {
+			handled = len(items)
+			return successfulExecutionBatchResult(items), nil
+		},
+	}
+	service := newExecutionBatchTestService(boundedRepo, &executionBatchTestFailedRepo{}, &executionBatchTestTransactor{})
+	service.MustRegisterBatchJob(handler, BatchConfig{MaxMessages: 3, MaxBytes: 64, MaxWait: time.Second})
+
+	processed, err := service.findAndProcessExecutionBatch(
+		t.Context(),
+		logger.Discard(),
+		JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
+	)
+	if err != nil || !processed {
+		t.Fatalf("find and process bounded batch = (%v, %v), want success", processed, err)
+	}
+	if gotLimits != (BatchClaimLimits{MaxMessages: 3, MaxBytes: 64}) {
+		t.Fatalf("initial bounded limits = %#v, want count=3 bytes=64", gotLimits)
+	}
+	if calls := boundedCalls.Load(); calls != 1 {
+		t.Fatalf("bounded claim calls = %d, want 1", calls)
+	}
+	if handled != 3 {
+		t.Fatalf("handled items = %d, want 3", handled)
+	}
+}
+
+func TestExecutionBatchBoundedFillUsesRemainingLimitsAndReleasesOversizedTail(t *testing.T) {
+	baseRepo := &executionBatchTestRepo{}
+	boundedRepo := &boundedExecutionBatchTestRepo{executionBatchTestRepo: baseRepo}
+	limits := make([]BatchClaimLimits, 0, 3)
+	boundedRepo.findBounded = func(
+		_ context.Context,
+		_ JobCapability,
+		leaseToken LeaseToken,
+		claimLimits BatchClaimLimits,
+	) ([]models.Job, error) {
+		limits = append(limits, claimLimits)
+		job := executionBatchTestJob(testBatchJobName, leaseToken)
+		job.AvailableAt = time.Unix(int64(len(limits)), 0).UTC()
+		job.CreatedAt = job.AvailableAt
+		switch len(limits) {
+		case 1:
+			job.Payload = "a"
+		case 2:
+			job.Payload = "bb"
+		case 3:
+			job.Payload = "é"
+		default:
+			return nil, ErrNoJobs
+		}
+		return []models.Job{job}, nil
+	}
+
+	var handled []BatchJobItem
+	handler := &executionBatchTestHandler{
+		name: testBatchJobName,
+		handle: func(_ context.Context, items []BatchJobItem) (BatchResult, error) {
+			handled = append([]BatchJobItem(nil), items...)
+			return successfulExecutionBatchResult(items), nil
+		},
+	}
+	service := newExecutionBatchTestService(boundedRepo, &executionBatchTestFailedRepo{}, &executionBatchTestTransactor{})
+	service.MustRegisterBatchJob(handler, BatchConfig{MaxMessages: 3, MaxBytes: 4, MaxWait: time.Second})
+
+	processed, err := service.findAndProcessExecutionBatch(
+		t.Context(),
+		logger.Discard(),
+		JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
+	)
+	if err != nil || !processed {
+		t.Fatalf("find and process bounded byte batch = (%v, %v), want success", processed, err)
+	}
+	wantLimits := []BatchClaimLimits{
+		{MaxMessages: 3, MaxBytes: 4},
+		{MaxMessages: 2, MaxBytes: 3},
+		{MaxMessages: 1, MaxBytes: 1},
+	}
+	if !slices.Equal(limits, wantLimits) {
+		t.Fatalf("bounded limits = %#v, want %#v", limits, wantLimits)
+	}
+	if len(handled) != 2 || handled[0].Payload != "a" || handled[1].Payload != "bb" {
+		t.Fatalf("handler items = %#v, want payloads a and bb", handled)
+	}
+	if got := baseRepo.releaseCalls.Load(); got != 1 {
+		t.Fatalf("released byte-tail claims = %d, want 1", got)
+	}
+}
+
+func TestValidateBoundedExecutionBatchPayload(t *testing.T) {
+	job := func(payload string) models.Job {
+		return models.Job{ID: types.NewJobID(), Payload: payload}
+	}
+	tests := []struct {
+		name     string
+		jobs     []models.Job
+		maxBytes int
+		wantErr  bool
+	}{
+		{name: "within limit", jobs: []models.Job{job("a"), job("é")}, maxBytes: 3},
+		{name: "oversized singleton", jobs: []models.Job{job("é")}, maxBytes: 1},
+		{name: "job after oversized first", jobs: []models.Job{job("é"), job("a")}, maxBytes: 1, wantErr: true},
+		{name: "cumulative overflow", jobs: []models.Job{job("aa"), job("bb")}, maxBytes: 3, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateBoundedExecutionBatchPayload(test.jobs, test.maxBytes)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validate bounded payload error = %v, wantErr=%v", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -651,11 +951,10 @@ func TestExecutionBatchClaimsShareDrainBoundary(t *testing.T) {
 	token := types.NewLeaseToken()
 	claimDone := make(chan error, 1)
 	go func() {
-		_, err := service.claimExecutionBatchWithToken(
+		_, err := service.claimExecutionBatchSingletonWithToken(
 			t.Context(),
 			repo,
 			JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
-			1,
 			token,
 		)
 		claimDone <- err
@@ -682,11 +981,10 @@ func TestExecutionBatchClaimsShareDrainBoundary(t *testing.T) {
 		t.Fatal("BeginDrain did not finish after the claim boundary was released")
 	}
 
-	_, err := service.claimExecutionBatchWithToken(
+	_, err := service.claimExecutionBatchSingletonWithToken(
 		t.Context(),
 		repo,
 		JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
-		1,
 		types.NewLeaseToken(),
 	)
 	if !errors.Is(err, ErrServiceDraining) {
@@ -871,6 +1169,25 @@ type executionBatchTestRepo struct {
 	applyCalls    atomic.Int32
 	releaseCalls  atomic.Int32
 	deleteCalls   atomic.Int32
+}
+
+type boundedExecutionBatchTestRepo struct {
+	*executionBatchTestRepo
+	findBounded func(context.Context, JobCapability, LeaseToken, BatchClaimLimits) ([]models.Job, error)
+}
+
+func (r *boundedExecutionBatchTestRepo) FindAndReserveJobsForCapabilityBounded(
+	ctx context.Context,
+	_ time.Time,
+	_ time.Time,
+	leaseToken LeaseToken,
+	capability JobCapability,
+	limits BatchClaimLimits,
+) ([]models.Job, error) {
+	if r.findBounded == nil {
+		return nil, ErrNoJobs
+	}
+	return r.findBounded(ctx, capability, leaseToken, limits)
 }
 
 func (*executionBatchTestRepo) CreateJobVersioned(
@@ -1082,7 +1399,7 @@ func (*executionSingleTestHandler) ExecutionTimeout() time.Duration { return tim
 func (*executionSingleTestHandler) MaxAttempts() int { return 3 }
 
 func newExecutionBatchTestService(
-	repo *executionBatchTestRepo,
+	repo JobsRepository,
 	failed JobsFailedRepository,
 	transactor Transactor,
 ) *Service {

@@ -46,6 +46,9 @@ Workspace modules also include runnable examples:
 - `examples/`: runnable consumer wiring for the core and each backend.
 - `tools/toolsmocks/`: local mock generation tool used by `go generate`.
 - `docker/`: local integration test initialization assets.
+- `docs/performance.md`: cross-repository integration capacity evidence and
+  the boundary between a confirmed checkout-workspace result and production
+  acceptance.
 - `MIGRATION.md`: short consumer note for the removed `infrastructure/*`
   import paths.
 

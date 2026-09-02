@@ -1,5 +1,28 @@
 # Implementation Notes
 
+## 2026-09-02: Add byte-bounded claims within the batch fill deadline
+
+- Added the optional `BoundedBatchJobsRepository` capability. PostgreSQL uses
+  one ordered `FOR UPDATE SKIP LOCKED` CTE, while MySQL and SQLite select UTF-8
+  payload byte lengths before reserving only the longest admissible prefix.
+  Existing custom `BatchJobsRepository` implementations remain compatible and
+  retain the singleton collector fallback; Picodata is unchanged.
+- Each supplemental bounded or singleton claim uses a child context capped by
+  the remaining `MaxWait` window. When that deadline expires while the parent
+  Run context is still live, the collector flushes the jobs already gathered.
+- Count/byte, Unicode, oversized singleton, ordering, capability, fencing, tail
+  attempts, and concurrent non-overlap regressions cover the core and all three
+  SQL backends without schema changes.
+
+## 2026-09-02: Add execution-path diagnostic benchmarks
+
+- Added one normalized microbenchmark matrix for the legacy single path,
+  true-batch singleton control, and a 100-job true batch. It reports time,
+  allocations, claim calls, handler calls, and finalization calls per job.
+- Hosted CI runs one smoke iteration only. These in-memory measurements diagnose
+  mechanism regressions but do not replace the checkout-local PostgreSQL/NATS
+  capacity proof maintained by GoMessenger.
+
 ## 2026-09-02: Harden true-batch ordering and finalization
 
 - The collector now re-sorts the completed batch by the repository's durable
@@ -15,14 +38,14 @@
 
 ## 2026-09-02: Enforce the true-batch fill deadline
 
-- Supplemental batch claims now use a child context capped by the remaining
-  `MaxWait` window. When that deadline expires while the parent run context is
+- Supplemental batch claims use a child context capped by the remaining
+  `MaxWait` window. When that deadline expires while the parent Run context is
   still live, the service flushes the jobs already collected instead of
   waiting indefinitely or failing the worker; any ambiguous extra claim stays
   fenced for lease-expiry recovery.
-- A regression test blocks the second repository claim until its context ends
-  and verifies that the first job reaches `HandleBatch` before the parent run
-  context is cancelled.
+- Regressions block the second singleton and bounded repository claims until
+  their contexts end and verify that the first job reaches `HandleBatch` before
+  the parent Run context is cancelled.
 
 ## 2026-09-01: True handler batches and atomic unique batch staging
 

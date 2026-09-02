@@ -61,15 +61,20 @@ Returning an empty slice with a `nil` error is a contract violation surfaced as
 `ErrEmptyReservationBatch`, so a broken custom adapter cannot silently spin.
 The service also rejects too many rows or a token mismatch. The true handler
 batch collector additionally rejects duplicate job IDs and any row outside the
-requested exact capability before handler admission.
+requested exact capability before handler admission. Built-in SQL repositories
+also implement the optional `BoundedBatchJobsRepository` capability and return
+the longest ordered prefix bounded by both message count and UTF-8 payload
+bytes. Custom repositories without it retain the compatible singleton claim
+loop.
 
 One owned heartbeat extends every unfinished row every `reserveFor / 3`. The
 heartbeat goroutine is stopped and joined before releasing manager-owned
-unstarted rows or returning. The true-batch collector reserves one additional
-candidate at a time; a candidate beyond the byte limit is released while the
-heartbeat continues for selected rows. A database error or affected-row
-mismatch is a lost fence: the active handler is cancelled, no later handler
-starts, and the worker returns `ErrLeaseLost`.
+unstarted rows or returning. Built-in bounded claims return only the admissible
+ordered prefix. The singleton fallback may reserve one candidate beyond the
+remaining byte limit; that candidate is released while the heartbeat continues
+for selected rows. A database error or affected-row mismatch is a lost fence:
+the active handler is cancelled, no later handler starts, and the worker
+returns `ErrLeaseLost`.
 
 Per-job outcomes are fenced:
 
@@ -102,11 +107,13 @@ single and batch capability.
 
 The zero-value `BatchConfig` resolves to 100 jobs, 4 MiB of payload bytes, and
 25 ms after the first claim. A batch flushes at the first count, byte, or wait
-limit. Accepted payload stays within `MaxBytes`, except that an individually
-oversized first job remains a singleton; only one next candidate is
-materialized while testing that bound. `MaxMessages=1` uses the same collector,
-handler, and atomic outcome path. Negative limits, arithmetic overflow, or a
-maximum above the backend capability fail registration.
+limit. Every supplemental claim uses a child context capped by the remaining
+`MaxWait` window. If that deadline expires while the parent Run context remains
+live, the collector flushes the jobs already gathered. Accepted payload stays
+within `MaxBytes`, except that an individually oversized first job remains a
+singleton. `MaxMessages=1` uses the same collector, handler, and atomic outcome
+path. Negative limits, arithmetic overflow, or a maximum above the backend
+capability fail registration.
 
 `BatchJob.HandleBatch` receives ready jobs in durable queue order. Its
 `BatchResult` may be in any order but must contain exactly one result for every
@@ -147,14 +154,15 @@ the claimed rows leased for recovery even if `HandleBatch` returns success.
 Workers rotate their starting batch capability and alternate batch and single
 work so a continuously ready capability cannot starve the others.
 
-`BatchJobsRepository`, `DeferJobsRepository`, `UniqueBatchJobsRepository`, and
-`UniqueBatchVersionedPutter` are optional capabilities; existing repository
-interfaces are not widened. Batch registration and batch staging fail closed
-when the configured backend does not implement them. PostgreSQL, MySQL, and
-SQLite support multi-item batch execution and atomic unique staging. Picodata
-implements no-attempt defer but does not provide true handler batches or
-unique batch staging because its client lacks a connection-pinned transaction.
-Existing tables and migrations are reused.
+`BatchJobsRepository`, `BoundedBatchJobsRepository`, `DeferJobsRepository`,
+`UniqueBatchJobsRepository`, and `UniqueBatchVersionedPutter` are optional
+capabilities; existing repository interfaces are not widened. Batch
+registration and batch staging fail closed when the configured backend does
+not implement their required contracts. PostgreSQL, MySQL, and SQLite support
+multi-item batch execution, bounded claims, and atomic unique staging.
+Picodata implements no-attempt defer but does not provide true handler batches,
+bounded claims, or unique batch staging because its client lacks a
+connection-pinned transaction. Existing tables and migrations are reused.
 
 ## Unsupported Capability Policy
 

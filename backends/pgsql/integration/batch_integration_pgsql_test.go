@@ -96,7 +96,51 @@ func TestPostgreSQLBatchClaimFiltersAndFencesLifecycle(t *testing.T) {
 	require.Zero(t, unsupported.Attempts)
 }
 
-func TestPostgreSQLConcurrentBatchClaimsDoNotOverlap(t *testing.T) {
+func TestPostgreSQLBoundedBatchClaimHonorsBytesCapabilityAndOversizedFirst(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	firstID := createPostgreSQLBatchJobWithPayload(t, ctx, ts, "publish", 1, "a", now.Add(-3*time.Second))
+	secondID := createPostgreSQLBatchJobWithPayload(t, ctx, ts, "publish", 1, "é", now.Add(-2*time.Second))
+	tailID := createPostgreSQLBatchJobWithPayload(t, ctx, ts, "publish", 1, "bb", now.Add(-time.Second))
+	unsupportedID := createPostgreSQLBatchJobWithPayload(t, ctx, ts, "publish", 2, "x", now)
+	token := types.NewLeaseToken()
+
+	claimed, err := ts.jobsRepo.FindAndReserveJobsForCapabilityBounded(
+		ctx,
+		now,
+		now.Add(time.Minute),
+		token,
+		outbox.JobCapability{Name: "publish", SchemaVersion: 1},
+		outbox.BatchClaimLimits{MaxMessages: 10, MaxBytes: 3},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []types.JobID{firstID, secondID}, batchJobIDs(claimed))
+	for _, job := range claimed {
+		require.Equal(t, token, job.LeaseToken)
+		require.Equal(t, 1, job.Attempts)
+	}
+	for _, jobID := range []types.JobID{tailID, unsupportedID} {
+		stored, getErr := ts.jobsRepo.GetByID(ctx, jobID)
+		require.NoError(t, getErr)
+		require.Zero(t, stored.Attempts)
+		require.True(t, stored.LeaseToken.IsZero())
+	}
+
+	oversized, err := ts.jobsRepo.FindAndReserveJobsForCapabilityBounded(
+		ctx,
+		now,
+		now.Add(time.Minute),
+		types.NewLeaseToken(),
+		outbox.JobCapability{Name: "publish", SchemaVersion: 1},
+		outbox.BatchClaimLimits{MaxMessages: 1, MaxBytes: 1},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []types.JobID{tailID}, batchJobIDs(oversized))
+}
+
+func TestPostgreSQLConcurrentBoundedBatchClaimsDoNotOverlap(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
 
@@ -114,13 +158,13 @@ func TestPostgreSQLConcurrentBatchClaimsDoNotOverlap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			jobs, err := ts.jobsRepo.FindAndReserveJobsForCapabilities(
+			jobs, err := ts.jobsRepo.FindAndReserveJobsForCapabilityBounded(
 				ctx,
 				now,
 				now.Add(time.Minute),
 				types.NewLeaseToken(),
-				[]outbox.JobCapability{{Name: "publish", SchemaVersion: 1}},
-				10,
+				outbox.JobCapability{Name: "publish", SchemaVersion: 1},
+				outbox.BatchClaimLimits{MaxMessages: 10, MaxBytes: 1024},
 			)
 			if err != nil {
 				errs <- err
@@ -235,7 +279,20 @@ func createPostgreSQLBatchJob(
 	availableAt time.Time,
 ) types.JobID {
 	t.Helper()
-	jobID, err := ts.jobsRepo.CreateJobVersioned(ctx, name, schemaVersion, `{}`, availableAt)
+	return createPostgreSQLBatchJobWithPayload(t, ctx, ts, name, schemaVersion, `{}`, availableAt)
+}
+
+func createPostgreSQLBatchJobWithPayload(
+	t *testing.T,
+	ctx context.Context,
+	ts *TestSuite,
+	name string,
+	schemaVersion outbox.SchemaVersion,
+	payload string,
+	availableAt time.Time,
+) types.JobID {
+	t.Helper()
+	jobID, err := ts.jobsRepo.CreateJobVersioned(ctx, name, schemaVersion, payload, availableAt)
 	require.NoError(t, err)
 	return jobID
 }

@@ -37,6 +37,20 @@ Run `make prepare` for generation, formatting, and lint fixes. Repeated core
 race stress and HTML coverage are explicit `make test-race-core` and
 `make cover-html` diagnostics.
 
+## Benchmarks
+
+```sh
+make bench-all
+```
+
+`BenchmarkExecutionPaths` compares legacy single execution with the true-batch
+singleton control and a 100-item true batch. Besides standard benchmark output,
+it reports `ns/job`, `B/job`, `allocs/job`, claim calls/job, handler calls/job,
+and finalization calls/job. This in-memory benchmark is a fast regression and
+mechanism diagnostic; it does not establish PostgreSQL/NATS capacity or a
+production advantage. The separate repeated PostgreSQL/NATS result and its
+scope are recorded in [performance evidence](performance.md).
+
 ## Integration Services
 
 The Makefile exports safe local integration defaults. Copy the template only
