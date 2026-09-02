@@ -68,7 +68,7 @@ func TestBatchStartError(t *testing.T) {
 func TestProcessBatchJobRejectsCancelledAdmission(t *testing.T) {
 	job := models.Job{
 		ID:            types.NewJobID(),
-		Name:          "batch",
+		Name:          testBatchJobName,
 		SchemaVersion: DefaultSchemaVersion,
 	}
 	handler := &batchAdmissionJob{name: job.Name}

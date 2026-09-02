@@ -56,3 +56,33 @@ func RetryTime(err error) (time.Time, bool) {
 	}
 	return target.at, true
 }
+
+type deferAtError struct {
+	err error
+	at  time.Time
+}
+
+func (e deferAtError) Error() string {
+	return fmt.Sprintf("defer at %s: %v", e.at.UTC().Format(time.RFC3339Nano), e.err)
+}
+
+func (e deferAtError) Unwrap() error { return e.err }
+
+// DeferAt postpones a job without consuming an attempt. A nil error remains
+// nil and the timestamp is normalized to UTC.
+func DeferAt(err error, at time.Time) error {
+	if err == nil {
+		return nil
+	}
+	return deferAtError{err: err, at: at.UTC()}
+}
+
+// DeferTime returns the requested no-attempt defer time when err contains a
+// DeferAt disposition.
+func DeferTime(err error) (time.Time, bool) {
+	var target deferAtError
+	if !errors.As(err, &target) {
+		return time.Time{}, false
+	}
+	return target.at, true
+}

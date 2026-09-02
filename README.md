@@ -121,6 +121,64 @@ svc, err := outbox.New(
 )
 ```
 
+## True handler batches
+
+`RegisterBatchJob` activates one real handler batch independently from
+reservation prefetch. The zero config means 100 jobs, 4 MiB of payload, and a
+25 ms fill window; use `MaxMessages: 1` as a same-path singleton control. The
+collector reserves at most one additional candidate at a time, so the byte
+limit does not first materialize all `MaxMessages` payloads.
+
+```go
+if err := svc.RegisterBatchJob(applicationBatchJob, outbox.BatchConfig{
+	MaxMessages: 100,
+	MaxBytes:    4 << 20,
+	MaxWait:     25 * time.Millisecond,
+}); err != nil {
+	return err
+}
+```
+
+The handler receives one ordered `[]BatchJobItem` and returns one keyed
+`BatchItemResult` for every input `JobID`. The result order is irrelevant, but
+missing, duplicate, or unknown IDs fail the service closed. One backend
+transaction applies mixed success, retry, no-attempt defer, and DLQ outcomes.
+DLQ rows are created through the configured `JobsFailedRepository`, so split
+or custom table composition remains authoritative. Any partial lease mismatch
+rolls back both the failed rows and all active-row changes.
+A transient top-level error reschedules the whole batch without consuming
+attempts; top-level `Permanent` and invalid results stop the service without
+ACK, DLQ, or unstarted-claim compensation. Those admitted leases remain for
+expiry-based recovery.
+
+Workers rotate across registered batch capabilities and alternate true-batch
+and ordinary single-job work when both are present. `BeginDrain` fences every
+collector claim and checks admission again before entering `HandleBatch`.
+Cancelling `Run` after handler admission never acknowledges a late successful
+return; the current lease is left for recovery.
+
+`DeferAt(err, at)` is also supported by ordinary single jobs. It persists an
+exact retry time, compensates the claim attempt, and pauses new claims for the
+same capability until that time. `RetryAt` consumes an attempt; `Permanent`
+takes precedence over both markers. Custom repositories that support
+no-attempt defer implement the optional `DeferJobsRepository` capability.
+
+Atomic producer staging is explicit:
+
+```go
+results, err := svc.PutVersionedUniqueBatch(ctx, []outbox.UniqueBatchPut{
+	{DeduplicationKey: firstKey, Name: "relay", SchemaVersion: 1, Payload: first, AvailableAt: now},
+	{DeduplicationKey: secondKey, Name: "relay", SchemaVersion: 1, Payload: second, AvailableAt: now},
+})
+```
+
+All items commit or roll back together and results preserve input order.
+PostgreSQL, MySQL, and SQLite implement multi-item execution and unique batch
+staging with existing schemas. Picodata supports singleton reservation
+prefetch and no-attempt defer, but does not expose true handler batches or
+unique batch puts because its current client cannot provide the required
+connection-pinned atomic transaction.
+
 ## Version-aware workers
 
 Every worker claim is filtered by the exact registered `(name, schemaVersion)`

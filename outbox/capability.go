@@ -74,6 +74,21 @@ func capabilityForJob(job Job) (JobCapability, error) {
 	return capability, nil
 }
 
+func capabilityForBatchJob(job BatchJob) (JobCapability, error) {
+	capability := JobCapability{
+		Name:          job.Name(),
+		SchemaVersion: DefaultSchemaVersion,
+	}
+	if versioned, ok := job.(VersionedBatchJob); ok {
+		capability.SchemaVersion = versioned.SchemaVersion()
+	}
+	if err := capability.Validate(); err != nil {
+		return JobCapability{}, err
+	}
+
+	return capability, nil
+}
+
 func normalizeSchemaVersion(version SchemaVersion) SchemaVersion {
 	if version <= 0 {
 		return DefaultSchemaVersion
@@ -82,21 +97,35 @@ func normalizeSchemaVersion(version SchemaVersion) SchemaVersion {
 	return version
 }
 
-func (s *Service) registeredCapabilities() []JobCapability {
+func (s *Service) registeredSingleCapabilities() []JobCapability {
 	s.mu.RLock()
 	capabilities := make([]JobCapability, 0, len(s.jobs))
 	for capability := range s.jobs {
 		capabilities = append(capabilities, capability)
 	}
 	s.mu.RUnlock()
+	sortCapabilities(capabilities)
 
+	return capabilities
+}
+
+func (s *Service) registeredBatchCapabilities() []JobCapability {
+	s.mu.RLock()
+	capabilities := make([]JobCapability, 0, len(s.batchJobs))
+	for capability := range s.batchJobs {
+		capabilities = append(capabilities, capability)
+	}
+	s.mu.RUnlock()
+	sortCapabilities(capabilities)
+
+	return capabilities
+}
+
+func sortCapabilities(capabilities []JobCapability) {
 	sort.Slice(capabilities, func(i, j int) bool {
 		if capabilities[i].Name == capabilities[j].Name {
 			return capabilities[i].SchemaVersion < capabilities[j].SchemaVersion
 		}
-
 		return capabilities[i].Name < capabilities[j].Name
 	})
-
-	return capabilities
 }

@@ -140,9 +140,71 @@ func (m *batchLeaseManager) finalize(jobID types.JobID, finalize func() error) e
 	return nil
 }
 
+func (m *batchLeaseManager) add(jobs []models.Job) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, job := range jobs {
+		if job.LeaseToken != m.leaseToken {
+			return fmt.Errorf("%w: invalid lease token for job %s", ErrLeaseLost, job.ID)
+		}
+		if _, duplicate := m.outstanding[job.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate claimed job %s", ErrLeaseLost, job.ID)
+		}
+		m.orderedIDs = append(m.orderedIDs, job.ID)
+		m.outstanding[job.ID] = struct{}{}
+	}
+	return nil
+}
+
+func (m *batchLeaseManager) finalizeAll(
+	ctx context.Context,
+	leaseUntil time.Time,
+	finalize func() error,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	jobIDs := m.outstandingIDsLocked()
+	if len(jobIDs) == 0 {
+		return ErrLeaseLost
+	}
+
+	now := time.Now().UTC()
+	affected, err := m.repo.ExtendJobLeases(
+		ctx,
+		jobIDs,
+		m.leaseToken,
+		now,
+		leaseUntil,
+	)
+	if err != nil {
+		return m.failLeaseLocked(
+			errors.Join(ErrLeaseLost, fmt.Errorf("extend batch finalization leases: %w", err)),
+		)
+	}
+	if affected != int64(len(jobIDs)) {
+		return m.failLeaseLocked(fmt.Errorf(
+			"%w: extended %d of %d batch finalization leases",
+			ErrLeaseLost,
+			affected,
+			len(jobIDs),
+		))
+	}
+	if err := finalize(); err != nil {
+		return err
+	}
+	clear(m.outstanding)
+	return nil
+}
+
 func (m *batchLeaseManager) forget(jobID types.JobID) {
 	m.mu.Lock()
 	delete(m.outstanding, jobID)
+	m.mu.Unlock()
+}
+
+func (m *batchLeaseManager) forgetAll() {
+	m.mu.Lock()
+	clear(m.outstanding)
 	m.mu.Unlock()
 }
 
@@ -280,6 +342,15 @@ func (s *Service) claimBatch(
 	}
 
 	now := time.Now().UTC()
+	eligible := make([]JobCapability, 0, len(capabilities))
+	for _, capability := range capabilities {
+		if !s.batchCapabilityPaused(capability, now) {
+			eligible = append(eligible, capability)
+		}
+	}
+	if len(eligible) == 0 {
+		return nil, LeaseToken{}, ErrNoJobs
+	}
 	leaseToken := types.NewLeaseToken()
 
 	s.claimMu.RLock()
@@ -293,7 +364,7 @@ func (s *Service) claimBatch(
 		now,
 		now.Add(s.reserveFor),
 		leaseToken,
-		capabilities,
+		eligible,
 		s.reservationBatchSize,
 	)
 	if err != nil {
@@ -365,6 +436,11 @@ func (s *Service) processBatchJob(
 			return true, manager.finalize(job.ID, func() error {
 				return s.dlqBatch(ctx, manager.repo, job, fmt.Sprintf("permanent failure: %v", handleErr))
 			})
+		case hasDeferTime(handleErr):
+			availableAt, _ := DeferTime(handleErr)
+			return true, manager.finalize(job.ID, func() error {
+				return s.deferLeased(ctx, job, availableAt)
+			})
 		case job.Attempts >= handler.MaxAttempts():
 			return true, manager.finalize(job.ID, func() error {
 				return s.dlqBatch(ctx, manager.repo, job, fmt.Sprintf("max attempts exceeded: %v", handleErr))
@@ -384,6 +460,35 @@ func (s *Service) processBatchJob(
 	return true, manager.finalize(job.ID, func() error {
 		return s.ackBatch(ctx, manager.repo, job)
 	})
+}
+
+func (s *Service) deferLeased(ctx context.Context, job models.Job, availableAt time.Time) error {
+	repo, ok := s.jobsRepo.(DeferJobsRepository)
+	if !ok {
+		return ErrBatchRepositoryNotConfigured
+	}
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseFinalizationTimeout)
+	defer cancel()
+	now := time.Now().UTC()
+	if availableAt.Before(now) {
+		availableAt = now
+	}
+	affected, err := repo.DeferJobWithLease(
+		finalizeCtx,
+		job.ID,
+		job.LeaseToken,
+		now,
+		availableAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("defer leased job: %w", err)
+	}
+	if affected != 1 {
+		return ErrLeaseLost
+	}
+
+	s.pauseBatchCapability(JobCapability{Name: job.Name, SchemaVersion: job.SchemaVersion}, availableAt)
+	return nil
 }
 
 func (s *Service) ackBatch(

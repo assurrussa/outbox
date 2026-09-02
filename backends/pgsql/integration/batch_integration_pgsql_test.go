@@ -149,6 +149,83 @@ func TestPostgreSQLConcurrentBatchClaimsDoNotOverlap(t *testing.T) {
 	require.Len(t, seen, 20)
 }
 
+func TestPostgreSQLUniqueBatchPutIsOrderedIdempotentAndAtomic(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	items := []outbox.UniqueBatchPut{
+		{DeduplicationKey: "pgsql-batch-key-1", Name: "publish", SchemaVersion: 1, Payload: `{"id":1}`, AvailableAt: now},
+		{DeduplicationKey: "pgsql-batch-key-2", Name: "publish", SchemaVersion: 1, Payload: `{"id":2}`, AvailableAt: now},
+	}
+	created, err := ts.jobsRepo.CreateJobVersionedUniqueBatch(ctx, items)
+	require.NoError(t, err)
+	require.Len(t, created, 2)
+	require.True(t, created[0].Created)
+	require.True(t, created[1].Created)
+
+	replayed, err := ts.jobsRepo.CreateJobVersionedUniqueBatch(ctx, items)
+	require.NoError(t, err)
+	require.Equal(t, created[0].JobID, replayed[0].JobID)
+	require.Equal(t, created[1].JobID, replayed[1].JobID)
+	require.False(t, replayed[0].Created)
+	require.False(t, replayed[1].Created)
+
+	before, err := activeJobsCount(ctx, ts.jobsRepo)
+	require.NoError(t, err)
+	_, err = ts.jobsRepo.CreateJobVersionedUniqueBatch(ctx, []outbox.UniqueBatchPut{
+		{DeduplicationKey: "pgsql-created-before-conflict", Name: "publish", SchemaVersion: 1, Payload: `{}`, AvailableAt: now},
+		{DeduplicationKey: "pgsql-batch-key-1", Name: "publish", SchemaVersion: 1, Payload: `{"changed":true}`, AvailableAt: now},
+	})
+	require.ErrorIs(t, err, outbox.ErrIdempotencyConflict)
+	after, err := activeJobsCount(ctx, ts.jobsRepo)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
+func TestPostgreSQLBatchOutcomesAreAtomicAndAttemptAware(t *testing.T) {
+	ctx, _, ts := NewTestRepoSuite(t)
+	defer ts.cleanUp(ctx)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	created := make([]types.JobID, 4)
+	for index := range created {
+		created[index] = createPostgreSQLBatchJob(t, ctx, ts, "publish", 1, now)
+	}
+	token := types.NewLeaseToken()
+	claimed, err := ts.jobsRepo.FindAndReserveJobsForCapability(
+		ctx, now, now.Add(time.Minute), token,
+		outbox.JobCapability{Name: "publish", SchemaVersion: 1}, len(created),
+	)
+	require.NoError(t, err)
+	require.ElementsMatch(t, created, batchJobIDs(claimed))
+	ids := batchJobIDs(claimed)
+
+	retryAt := now.Add(time.Minute)
+	deferAt := now.Add(2 * time.Minute)
+	affected, err := ts.jobsRepo.ApplyBatchJobOutcomes(ctx, token, now, []outbox.BatchJobOutcome{
+		{JobID: ids[0], Kind: outbox.BatchJobOutcomeSuccess},
+		{JobID: ids[1], Kind: outbox.BatchJobOutcomeRetry, AvailableAt: retryAt},
+		{JobID: ids[2], Kind: outbox.BatchJobOutcomeDefer, AvailableAt: deferAt},
+		{JobID: ids[3], Kind: outbox.BatchJobOutcomeDLQ, Reason: "permanent"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(4), affected)
+
+	_, err = ts.jobsRepo.GetByID(ctx, ids[0])
+	require.ErrorIs(t, err, sharederrors.ErrNoJobs)
+	retryJob, err := ts.jobsRepo.GetByID(ctx, ids[1])
+	require.NoError(t, err)
+	require.Equal(t, 1, retryJob.Attempts)
+	require.Equal(t, retryAt.UnixMicro(), retryJob.AvailableAt.UnixMicro())
+	deferredJob, err := ts.jobsRepo.GetByID(ctx, ids[2])
+	require.NoError(t, err)
+	require.Zero(t, deferredJob.Attempts)
+	require.Equal(t, deferAt.UnixMicro(), deferredJob.AvailableAt.UnixMicro())
+	_, err = ts.jobsRepo.GetByID(ctx, ids[3])
+	require.ErrorIs(t, err, sharederrors.ErrNoJobs)
+}
+
 func createPostgreSQLBatchJob(
 	t *testing.T,
 	ctx context.Context,

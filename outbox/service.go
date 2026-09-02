@@ -25,13 +25,28 @@ var (
 
 type Service struct {
 	Options
-	jobs    map[JobCapability]Job
-	mu      sync.RWMutex
-	running atomic.Bool
-	ready   atomic.Bool
-	claimMu sync.RWMutex
-	drain   chan struct{}
-	drainDo sync.Once
+	jobs      map[JobCapability]Job
+	batchJobs map[JobCapability]batchJobRegistration
+	mu        sync.RWMutex
+	running   atomic.Bool
+	ready     atomic.Bool
+	claimMu   sync.RWMutex
+	drain     chan struct{}
+	drainDo   sync.Once
+
+	batchStateMu sync.Mutex
+	batchPaused  map[JobCapability]time.Time
+	batchStreak  map[JobCapability]int
+}
+
+type batchJobRegistration struct {
+	job    BatchJob
+	config normalizedBatchConfig
+}
+
+type workerSchedule struct {
+	batchCursor int
+	preferBatch bool
 }
 
 func New(options ...OptOptionsSetter) (*Service, error) {
@@ -41,9 +56,12 @@ func New(options ...OptOptionsSetter) (*Service, error) {
 	}
 
 	service := &Service{
-		Options: opts,
-		jobs:    make(map[JobCapability]Job),
-		drain:   make(chan struct{}),
+		Options:     opts,
+		jobs:        make(map[JobCapability]Job),
+		batchJobs:   make(map[JobCapability]batchJobRegistration),
+		drain:       make(chan struct{}),
+		batchPaused: make(map[JobCapability]time.Time),
+		batchStreak: make(map[JobCapability]int),
 	}
 
 	if opts.fanoutJobsRepo != nil {
@@ -97,12 +115,78 @@ func (s *Service) RegisterJobs(jobs ...Job) error {
 				capability.SchemaVersion,
 			)
 		}
+		if _, ok := s.batchJobs[capability]; ok {
+			return fmt.Errorf(
+				"job %q schema version %d already registered as a batch job",
+				capability.Name,
+				capability.SchemaVersion,
+			)
+		}
 	}
 	for capability, job := range capabilities {
 		s.jobs[capability] = job
 	}
 
 	return nil
+}
+
+// RegisterBatchJob validates and registers one real batch handler. It fails
+// closed unless the configured repository implements the complete batch
+// execution capability.
+func (s *Service) RegisterBatchJob(job BatchJob, config BatchConfig) error {
+	if job == nil {
+		return errors.New("batch job is nil")
+	}
+	batchRepo, ok := s.jobsRepo.(BatchJobsRepository)
+	if !ok {
+		return ErrBatchRepositoryNotConfigured
+	}
+	normalized, err := config.normalize()
+	if err != nil {
+		return fmt.Errorf("batch config: %w", err)
+	}
+	if repositoryMax := batchRepo.MaxExecutionBatchSize(); repositoryMax < 1 || normalized.maxMessages > repositoryMax {
+		return fmt.Errorf(
+			"%w: requested %d, repository maximum %d",
+			ErrReservationBatchSizeUnsupported,
+			normalized.maxMessages,
+			repositoryMax,
+		)
+	}
+	capability, err := capabilityForBatchJob(job)
+	if err != nil {
+		return fmt.Errorf("batch job capability: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running.Load() {
+		return ErrServiceRunning
+	}
+	if _, exists := s.jobs[capability]; exists {
+		return fmt.Errorf(
+			"job %q schema version %d already registered as a single job",
+			capability.Name,
+			capability.SchemaVersion,
+		)
+	}
+	if _, exists := s.batchJobs[capability]; exists {
+		return fmt.Errorf(
+			"batch job %q schema version %d already registered",
+			capability.Name,
+			capability.SchemaVersion,
+		)
+	}
+	s.batchJobs[capability] = batchJobRegistration{job: job, config: normalized}
+
+	return nil
+}
+
+// MustRegisterBatchJob registers a real batch handler or panics.
+func (s *Service) MustRegisterBatchJob(job BatchJob, config BatchConfig) {
+	if err := s.RegisterBatchJob(job, config); err != nil {
+		panic(fmt.Errorf("register batch job: %w", err))
+	}
 }
 
 func (s *Service) MustRegisterJob(job Job) {
@@ -126,44 +210,124 @@ func (s *Service) Run(ctx context.Context) error {
 	defer s.ready.Store(false)
 
 	eg, ctx := errgroup.WithContext(ctx)
-	capabilities := s.registeredCapabilities()
+	singleCapabilities := s.registeredSingleCapabilities()
+	batchCapabilities := s.registeredBatchCapabilities()
 
 	for i := 0; i < s.workers; i++ {
 		log := logger.WrapWithAttrs(s.logger, slog.Int("worker", i+1))
-		eg.Go(func() error {
-			defer func() {
-				log.InfoContext(ctx, "finished worker")
-			}()
-			log.InfoContext(ctx, "start worker")
-
-			for {
-				if s.IsDraining() {
-					return nil
-				}
-				// Process all available jobsrepo in one go.
-				if err := s.processAvailableJobs(ctx, log, capabilities); err != nil {
-					if ctx.Err() != nil {
-						return nil
-					}
-					log.WarnContext(ctx, "process jobsrepo error", logger.Error(err))
-					return err
-				}
-
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-s.drain:
-					return nil
-				case <-time.After(s.idleTime):
-				}
-			}
-		})
+		schedule := workerSchedule{
+			batchCursor: i,
+			preferBatch: i%2 == 0,
+		}
+		eg.Go(func() error { return s.runWorker(ctx, log, singleCapabilities, batchCapabilities, schedule) })
 	}
 	if !s.IsDraining() {
 		s.ready.Store(true)
 	}
 
 	return eg.Wait()
+}
+
+func (s *Service) runWorker(
+	ctx context.Context,
+	log logger.Logger,
+	singleCapabilities []JobCapability,
+	batchCapabilities []JobCapability,
+	schedule workerSchedule,
+) error {
+	defer log.InfoContext(ctx, "finished worker")
+	log.InfoContext(ctx, "start worker")
+
+	for !s.IsDraining() {
+		didWork, err := s.processWorkerWork(ctx, log, singleCapabilities, batchCapabilities, &schedule)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.WarnContext(ctx, "process jobsrepo error", logger.Error(err))
+			return err
+		}
+		if didWork {
+			continue
+		}
+		if s.waitForWorker(ctx) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *Service) processWorkerWork(
+	ctx context.Context,
+	log logger.Logger,
+	singleCapabilities []JobCapability,
+	batchCapabilities []JobCapability,
+	schedule *workerSchedule,
+) (bool, error) {
+	if schedule.preferBatch {
+		didWork, err := s.processOneAvailableBatch(ctx, log, batchCapabilities, &schedule.batchCursor)
+		if errors.Is(err, ErrServiceDraining) {
+			return false, nil
+		}
+		if err != nil || didWork {
+			if didWork {
+				schedule.preferBatch = false
+			}
+			return didWork, err
+		}
+	}
+
+	didWork, err := s.processOneAvailableSingle(ctx, log, singleCapabilities)
+	if err != nil || didWork {
+		if didWork {
+			schedule.preferBatch = true
+		}
+		return didWork, err
+	}
+	if schedule.preferBatch {
+		return false, nil
+	}
+
+	didWork, err = s.processOneAvailableBatch(ctx, log, batchCapabilities, &schedule.batchCursor)
+	if errors.Is(err, ErrServiceDraining) {
+		return false, nil
+	}
+	if didWork {
+		schedule.preferBatch = false
+	}
+	return didWork, err
+}
+
+func (s *Service) processOneAvailableSingle(
+	ctx context.Context,
+	log logger.Logger,
+	singleCapabilities []JobCapability,
+) (bool, error) {
+	if len(singleCapabilities) == 0 {
+		return false, nil
+	}
+	err := s.findAndProcessBatch(ctx, log, singleCapabilities)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrNoJobs), errors.Is(err, ErrServiceDraining):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+func (s *Service) waitForWorker(ctx context.Context) bool {
+	timer := time.NewTimer(s.idleTime)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-s.drain:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // Readiness reports only the worker lifecycle state and never reserves a job.
@@ -207,30 +371,6 @@ func (s *Service) IsDraining() bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func (s *Service) processAvailableJobs(
-	ctx context.Context,
-	log logger.Logger,
-	capabilities []JobCapability,
-) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-s.drain:
-			return nil
-		default:
-		}
-
-		if err := s.findAndProcessBatch(ctx, log, capabilities); err != nil {
-			if errors.Is(err, ErrNoJobs) || errors.Is(err, ErrServiceDraining) {
-				log.DebugContext(ctx, "no jobsrepo found to process")
-				return nil
-			}
-			return err
-		}
 	}
 }
 

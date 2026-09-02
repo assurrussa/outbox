@@ -15,6 +15,7 @@ import (
 
 	"github.com/assurrussa/outbox/backends/pgsql/repositories"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
+	pgsqltx "github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
@@ -152,6 +153,119 @@ func (r *Repo) CreateJobVersionedUniqueResult(
 	}, nil
 }
 
+func (r *Repo) CreateJobVersionedUniqueBatch(
+	ctx context.Context,
+	items []coreoutbox.UniqueBatchPut,
+) ([]coreoutbox.UniquePutResult, error) {
+	const op = "jobs.repo.CreateJobVersionedUniqueBatch"
+	if len(items) < 1 || len(items) > coreoutbox.MaxReservationBatchSize {
+		return nil, fmt.Errorf("%s: item count must be between 1 and %d", op, coreoutbox.MaxReservationBatchSize)
+	}
+
+	ordinals := make([]int32, len(items))
+	keys := make([]string, len(items))
+	names := make([]string, len(items))
+	versions := make([]int32, len(items))
+	payloads := make([]string, len(items))
+	available := make([]time.Time, len(items))
+	jobIDs := make([]string, len(items))
+	fingerprints := make([]string, len(items))
+	seen := make(map[string]struct{}, len(items))
+	createdAt := time.Now().UTC()
+	for index, item := range items {
+		if item.DeduplicationKey == "" {
+			return nil, fmt.Errorf("%s: item %d has an empty deduplication key", op, index)
+		}
+		if _, duplicate := seen[item.DeduplicationKey]; duplicate {
+			return nil, fmt.Errorf("%s: duplicate deduplication key %q", op, item.DeduplicationKey)
+		}
+		seen[item.DeduplicationKey] = struct{}{}
+		if err := (coreoutbox.JobCapability{Name: item.Name, SchemaVersion: item.SchemaVersion}).Validate(); err != nil {
+			return nil, fmt.Errorf("%s: item %d: %w", op, index, err)
+		}
+		jobID := types.NewJobID()
+		ordinals[index] = int32(index)
+		keys[index] = item.DeduplicationKey
+		names[index] = item.Name
+		versions[index] = int32(item.SchemaVersion)
+		payloads[index] = item.Payload
+		available[index] = item.AvailableAt.UTC()
+		jobIDs[index] = jobID.String()
+		fingerprints[index] = jobFingerprint(item.Name, item.SchemaVersion, item.Payload, item.AvailableAt)
+	}
+
+	results := make([]coreoutbox.UniquePutResult, 0, len(items))
+	manager := pgsqltx.New(r.pgsql.DB())
+	err := manager.RunInTx(ctx, func(txCtx context.Context) error {
+		query := `
+		with input as (
+			select * from unnest(
+				$1::integer[], $2::text[], $3::text[], $4::integer[],
+				$5::text[], $6::timestamptz[], $7::uuid[], $8::text[]
+			) as value(ord, deduplication_key, name, schema_version, payload, available_at, new_job_id, fingerprint)
+		), key_rows as (
+			insert into outbox_job_idempotency_keys (deduplication_key, job_id, fingerprint, created_at)
+			select deduplication_key, new_job_id, fingerprint, $9
+			from input
+			on conflict (deduplication_key) do update
+			set deduplication_key = excluded.deduplication_key
+			where outbox_job_idempotency_keys.fingerprint = excluded.fingerprint
+			returning deduplication_key, job_id
+		), inserted_jobs as (
+			insert into jobs (
+				id, queue, name, schema_version, payload, attempts, reserved_at,
+				lease_token, deduplication_key, available_at, created_at
+			)
+			select
+				key_rows.job_id, 'queue', input.name, input.schema_version, input.payload,
+				0, null, $10, input.deduplication_key, input.available_at, $9
+			from input
+			join key_rows using (deduplication_key)
+			where key_rows.job_id = input.new_job_id
+			returning id
+		)
+		select key_rows.job_id, key_rows.job_id = input.new_job_id as created
+		from input
+		join key_rows using (deduplication_key)
+		order by input.ord;`
+
+		var rows []struct {
+			JobID   types.JobID `db:"job_id"`
+			Created bool        `db:"created"`
+		}
+		if err := r.pgsql.DB().ScanAll(
+			txCtx,
+			op,
+			&rows,
+			query,
+			ordinals,
+			keys,
+			names,
+			versions,
+			payloads,
+			available,
+			jobIDs,
+			fingerprints,
+			createdAt,
+			types.LeaseTokenNil,
+		); err != nil {
+			return fmt.Errorf("stage unique batch: %w", pgsql.ErrorTransform(err))
+		}
+		if len(rows) != len(items) {
+			return coreoutbox.ErrIdempotencyConflict
+		}
+		results = results[:0]
+		for _, row := range rows {
+			results = append(results, coreoutbox.UniquePutResult{JobID: row.JobID, Created: row.Created})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	return results, nil
+}
+
 func jobFingerprint(
 	name string,
 	schemaVersion coreoutbox.SchemaVersion,
@@ -251,6 +365,19 @@ func (r *Repo) FindAndReserveJobsForCapabilities(
 
 	return r.findAndReserveJobs(ctx, now, until, leaseToken, capabilities, limit)
 }
+
+func (r *Repo) FindAndReserveJobsForCapability(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capability coreoutbox.JobCapability,
+	limit int,
+) ([]models.Job, error) {
+	return r.FindAndReserveJobsForCapabilities(ctx, now, until, leaseToken, []coreoutbox.JobCapability{capability}, limit)
+}
+
+func (r *Repo) MaxExecutionBatchSize() int { return coreoutbox.MaxReservationBatchSize }
 
 func (r *Repo) findAndReserveJobs(
 	ctx context.Context,
@@ -385,6 +512,131 @@ func (r *Repo) ReleaseUnstartedJobsWithLease(
 	}
 
 	return result.RowsAffected(), nil
+}
+
+func (r *Repo) ApplyBatchJobOutcomes(
+	ctx context.Context,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	outcomes []coreoutbox.BatchJobOutcome,
+) (int64, error) {
+	const op = "jobs.repo.ApplyBatchJobOutcomes"
+	if err := leaseToken.Validate(); err != nil {
+		return 0, fmt.Errorf("%s: invalid lease token: %w", op, err)
+	}
+	if len(outcomes) < 1 || len(outcomes) > coreoutbox.MaxReservationBatchSize {
+		return 0, fmt.Errorf("%s: outcome count must be between 1 and %d", op, coreoutbox.MaxReservationBatchSize)
+	}
+
+	ids := make([]string, len(outcomes))
+	kinds := make([]int16, len(outcomes))
+	available := make([]time.Time, len(outcomes))
+	seen := make(map[types.JobID]struct{}, len(outcomes))
+	for index, outcome := range outcomes {
+		if err := outcome.JobID.Validate(); err != nil {
+			return 0, fmt.Errorf("%s: outcome %d: %w", op, index, err)
+		}
+		if _, duplicate := seen[outcome.JobID]; duplicate {
+			return 0, fmt.Errorf("%s: duplicate JobID %s", op, outcome.JobID)
+		}
+		seen[outcome.JobID] = struct{}{}
+		switch outcome.Kind {
+		case coreoutbox.BatchJobOutcomeSuccess:
+		case coreoutbox.BatchJobOutcomeRetry, coreoutbox.BatchJobOutcomeDefer:
+			if outcome.AvailableAt.IsZero() {
+				return 0, fmt.Errorf("%s: outcome %d has an empty availability time", op, index)
+			}
+		case coreoutbox.BatchJobOutcomeDLQ:
+			if outcome.Reason == "" {
+				return 0, fmt.Errorf("%s: outcome %d has an invalid DLQ record", op, index)
+			}
+		default:
+			return 0, fmt.Errorf("%s: outcome %d has unknown kind %d", op, index, outcome.Kind)
+		}
+		ids[index] = outcome.JobID.String()
+		kinds[index] = int16(outcome.Kind)
+		available[index] = outcome.AvailableAt.UTC()
+		if available[index].IsZero() {
+			available[index] = now.UTC()
+		}
+	}
+
+	query := `
+	with input as (
+		select * from unnest(
+			$1::uuid[], $2::smallint[], $3::timestamptz[]
+		) as value(job_id, kind, available_at)
+	), owned as materialized (
+		select j.id, input.kind, input.available_at as next_available_at
+		from jobs as j
+		join input on input.job_id = j.id
+		where j.lease_token = $4 and j.reserved_at > $5
+		for update of j
+	), deleted as (
+		delete from jobs as j
+		using owned
+		where j.id = owned.id and owned.kind in ($6, $7)
+		returning j.id
+	), updated as (
+		update jobs as j
+		set attempts = case when owned.kind = $8 then j.attempts - 1 else j.attempts end,
+			available_at = owned.next_available_at,
+			reserved_at = null,
+			lease_token = $9
+		from owned
+		where j.id = owned.id and owned.kind in ($10, $8) and j.attempts > 0
+		returning j.id
+	)
+	select (select count(*) from deleted) + (select count(*) from updated);`
+
+	var affected int64
+	manager := pgsqltx.New(r.pgsql.DB())
+	if err := manager.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := r.pgsql.DB().ScanOne(
+			txCtx,
+			op,
+			&affected,
+			query,
+			ids,
+			kinds,
+			available,
+			leaseToken,
+			now.UTC(),
+			int16(coreoutbox.BatchJobOutcomeSuccess),
+			int16(coreoutbox.BatchJobOutcomeDLQ),
+			int16(coreoutbox.BatchJobOutcomeDefer),
+			types.LeaseTokenNil,
+			int16(coreoutbox.BatchJobOutcomeRetry),
+		); err != nil {
+			return err
+		}
+		if affected != int64(len(outcomes)) {
+			return fmt.Errorf(
+				"%w: finalized %d of %d batch jobs",
+				coreoutbox.ErrLeaseLost,
+				affected,
+				len(outcomes),
+			)
+		}
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("%s: apply outcomes: %w", op, pgsql.ErrorTransform(err))
+	}
+	return affected, nil
+}
+
+func (r *Repo) DeferJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	return r.ApplyBatchJobOutcomes(ctx, leaseToken, now, []coreoutbox.BatchJobOutcome{{
+		JobID:       jobID,
+		Kind:        coreoutbox.BatchJobOutcomeDefer,
+		AvailableAt: availableAt,
+	}})
 }
 
 func validateBatchRequest(leaseToken coreoutbox.LeaseToken, limit int) error {

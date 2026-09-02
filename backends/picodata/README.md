@@ -69,8 +69,11 @@ The jobs repository is auto-detected for exact grouped queue stats.
 
 `Transactor` in Picodata backend is currently best-effort (no connection-pinned SQL transaction in current client API).
 
-The repository exposes the required version-aware fenced batch contract for
-exactly one job, plus version-preserving failed-job storage. Picodata Go
+The repository exposes the required version-aware fenced reservation contract
+for exactly one job, no-attempt `DeferAt`, and version-preserving failed-job
+storage. It intentionally does not implement `BatchJobsRepository`, so
+`RegisterBatchJob` fails closed with `ErrBatchRepositoryNotConfigured`.
+Picodata Go
 client v1.0.0 has no connection-pinned transaction, so failed-row plus leased
 delete and complete fan-out planning cannot be committed atomically. The
 backend intentionally does not implement `FanoutJobsRepository` or expose a

@@ -124,6 +124,90 @@ func TestSQLiteAllJobsProcessed(t *testing.T) {
 	ts.Equal(int64(0), count)
 }
 
+func TestSQLiteRealBatchUsesOneHandlerInvocationAndOneOutcomeTransaction(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+
+	const jobName = "TestSQLiteRealBatchUsesOneHandlerInvocationAndOneOutcomeTransaction"
+	handler := &sqliteBatchJobMock{name: jobName, handled: make(chan []outbox.BatchJobItem, 1)}
+	ts.outboxSvc.MustRegisterBatchJob(handler, outbox.BatchConfig{
+		MaxMessages: 4,
+		MaxBytes:    1024,
+		// The collector claims one candidate per SQLite transaction. Keep the
+		// fill window well above scheduler and race-detector jitter because this
+		// test verifies count-based flushing, not the MaxWait boundary.
+		MaxWait: 5 * time.Second,
+	})
+	for index := 0; index < 4; index++ {
+		_, err := ts.outboxSvc.Put(ctx, jobName, `{}`, time.Now().UTC())
+		ts.Require().NoError(err)
+	}
+
+	cancel, errCh := runSQLiteOutbox(ctx, ts)
+	select {
+	case items := <-handler.handled:
+		ts.Len(items, 4)
+	case <-time.After(time.Second):
+		t.Fatal("batch handler was not called")
+	}
+	require.Eventually(t, func() bool {
+		count, err := activeJobsCount(ctx, ts.jobsRepo)
+		return err == nil && count == 0
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+	ts.NoError(<-errCh)
+	ts.Equal(int32(1), handler.calls.Load())
+}
+
+func TestSQLiteRealBatchDLQUsesConfiguredFailedTable(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+
+	const failedTable = "batch_jobs_failed_custom"
+	_, err := ts.db.DB().ExecContext(
+		ctx,
+		"CREATE TABLE batch_jobs_failed_custom AS SELECT * FROM jobs_failed WHERE 0",
+	)
+	require.NoError(t, err)
+	customFailedRepo := jobsfailedrepo.Must(ts.db, failedTable)
+	service, err := outbox.New(
+		outbox.WithWorkers(1),
+		outbox.WithIdleTime(100*time.Millisecond),
+		outbox.WithReserveFor(time.Second),
+		outbox.WithJobsRepo(ts.jobsRepo),
+		outbox.WithJobsFailedRepo(customFailedRepo),
+		outbox.WithTransactor(transaction.New(ts.db.DB())),
+		outbox.WithLogger(logger.Discard()),
+	)
+	require.NoError(t, err)
+
+	handler := &sqliteBatchJobMock{
+		name:    "TestSQLiteRealBatchDLQUsesConfiguredFailedTable",
+		handled: make(chan []outbox.BatchJobItem, 1),
+		itemErr: outbox.Permanent(errors.New("invalid payload")),
+	}
+	service.MustRegisterBatchJob(handler, outbox.BatchConfig{MaxMessages: 1})
+	_, err = service.Put(ctx, handler.name, `{"invalid":true}`, time.Now().UTC())
+	require.NoError(t, err)
+
+	runCtx, cancelRun := context.WithCancel(ctx)
+	errCh := make(chan error, 1)
+	go func() { errCh <- service.Run(runCtx) }()
+	require.Eventually(t, func() bool {
+		count, countErr := customFailedRepo.CountExact(ctx)
+		return countErr == nil && count == 1
+	}, time.Second, 10*time.Millisecond)
+	cancelRun()
+	require.NoError(t, <-errCh)
+
+	defaultCount, err := ts.jobsFailedRepo.CountExact(ctx)
+	require.NoError(t, err)
+	require.Zero(t, defaultCount)
+	activeCount, err := activeJobsCount(ctx, ts.jobsRepo)
+	require.NoError(t, err)
+	require.Zero(t, activeCount)
+}
+
 func TestSQLiteUnsupportedNameRemainsPending(t *testing.T) {
 	ctx, _, ts := NewTestSQLiteSuite(t)
 	defer ts.cleanUp(ctx)
@@ -231,6 +315,33 @@ type sqliteJobMock struct {
 	maxAttempts   int
 	executedTimes int32
 }
+
+type sqliteBatchJobMock struct {
+	name    string
+	handled chan []outbox.BatchJobItem
+	itemErr error
+	calls   atomic.Int32
+}
+
+func (j *sqliteBatchJobMock) Name() string { return j.name }
+
+func (j *sqliteBatchJobMock) HandleBatch(
+	_ context.Context,
+	items []outbox.BatchJobItem,
+) (outbox.BatchResult, error) {
+	j.calls.Add(1)
+	copyItems := append([]outbox.BatchJobItem(nil), items...)
+	j.handled <- copyItems
+	result := outbox.BatchResult{Items: make([]outbox.BatchItemResult, len(items))}
+	for index, item := range items {
+		result.Items[index] = outbox.BatchItemResult{JobID: item.JobID, Err: j.itemErr}
+	}
+	return result, nil
+}
+
+func (*sqliteBatchJobMock) ExecutionTimeout() time.Duration { return time.Second }
+
+func (*sqliteBatchJobMock) MaxAttempts() int { return 3 }
 
 func newSQLiteJobMock(
 	name string,

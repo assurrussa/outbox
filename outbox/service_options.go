@@ -20,6 +20,7 @@ type Options struct {
 	jobsRepo             JobsRepository
 	fanoutJobsRepo       FanoutJobsRepository
 	uniqueJobsRepo       UniqueJobsRepository
+	uniqueBatchJobsRepo  UniqueBatchJobsRepository
 	jobsStatRepo         JobsStatRepository
 	jobsFailedRepo       JobsFailedRepository
 	transactor           Transactor
@@ -107,6 +108,11 @@ func (o *Options) detectOptionalRepositories() {
 			o.uniqueJobsRepo = repo
 		}
 	}
+	if o.uniqueBatchJobsRepo == nil {
+		if repo, ok := o.jobsRepo.(UniqueBatchJobsRepository); ok {
+			o.uniqueBatchJobsRepo = repo
+		}
+	}
 	if o.jobsStatRepo == nil {
 		if repo, ok := o.jobsRepo.(JobsStatRepository); ok {
 			o.jobsStatRepo = repo
@@ -174,6 +180,15 @@ func WithFanoutJobsRepo(jobsRepo FanoutJobsRepository) OptOptionsSetter {
 func WithUniqueJobsRepo(jobsRepo UniqueJobsRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.uniqueJobsRepo = jobsRepo
+	}
+}
+
+// WithUniqueBatchJobsRepo configures atomic unique batch staging for split
+// repository compositions. Standard SQL repositories are detected
+// automatically from WithJobsRepo.
+func WithUniqueBatchJobsRepo(jobsRepo UniqueBatchJobsRepository) OptOptionsSetter {
+	return func(o *Options) {
+		o.uniqueBatchJobsRepo = jobsRepo
 	}
 }
 

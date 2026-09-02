@@ -77,6 +77,19 @@ func (r *Repo) FindAndReserveJobsForCapabilities(
 	return r.findAndReserveBatch(ctx, now, until, leaseToken, capabilities, limit)
 }
 
+func (r *Repo) FindAndReserveJobsForCapability(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capability coreoutbox.JobCapability,
+	limit int,
+) ([]models.Job, error) {
+	return r.FindAndReserveJobsForCapabilities(ctx, now, until, leaseToken, []coreoutbox.JobCapability{capability}, limit)
+}
+
+func (*Repo) MaxExecutionBatchSize() int { return coreoutbox.MaxReservationBatchSize }
+
 func (r *Repo) findAndReserveBatch(
 	ctx context.Context,
 	now time.Time,
@@ -331,6 +344,162 @@ func (r *Repo) ReleaseUnstartedJobsWithLease(
 	return result.RowsAffected()
 }
 
+func (r *Repo) ApplyBatchJobOutcomes(
+	ctx context.Context,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	outcomes []coreoutbox.BatchJobOutcome,
+) (int64, error) {
+	if err := validateBatchOutcomes(leaseToken, outcomes); err != nil {
+		return 0, err
+	}
+	var affected int64
+	manager := transaction.New(r.client.DB())
+	err := manager.RunInTx(ctx, func(txCtx context.Context) error {
+		exec := r.executor(txCtx)
+		deleted, err := r.deleteBatchTerminalOutcomes(txCtx, exec, leaseToken, now.UTC(), outcomes)
+		if err != nil {
+			return err
+		}
+		updated, err := r.updateBatchRetryOutcomes(txCtx, exec, leaseToken, now.UTC(), outcomes)
+		if err != nil {
+			return err
+		}
+		affected = deleted + updated
+		if affected != int64(len(outcomes)) {
+			return fmt.Errorf(
+				"%w: finalized %d of %d batch jobs",
+				coreoutbox.ErrLeaseLost,
+				affected,
+				len(outcomes),
+			)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("apply batch job outcomes: %w", err)
+	}
+	return affected, nil
+}
+
+func (r *Repo) deleteBatchTerminalOutcomes(
+	ctx context.Context,
+	exec transaction.TxExecutor,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	outcomes []coreoutbox.BatchJobOutcome,
+) (int64, error) {
+	inputSQL, args := mysqlBatchOutcomeInput(outcomes)
+	query := fmt.Sprintf(`DELETE job FROM %s AS job
+		JOIN (%s) AS input ON input.job_id = job.id
+		WHERE input.kind IN (?, ?) AND job.lease_token = ? AND job.reserved_at > ?;`, r.tableName, inputSQL)
+	args = append(args,
+		coreoutbox.BatchJobOutcomeSuccess,
+		coreoutbox.BatchJobOutcomeDLQ,
+		leaseToken,
+		now,
+	)
+	result, err := exec.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *Repo) updateBatchRetryOutcomes(
+	ctx context.Context,
+	exec transaction.TxExecutor,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	outcomes []coreoutbox.BatchJobOutcome,
+) (int64, error) {
+	inputSQL, args := mysqlBatchOutcomeInput(outcomes)
+	query := fmt.Sprintf(`UPDATE %s AS job
+		JOIN (%s) AS input ON input.job_id = job.id
+		SET job.attempts = CASE WHEN input.kind = ? THEN job.attempts - 1 ELSE job.attempts END,
+			job.available_at = input.available_at, job.reserved_at = NULL, job.lease_token = ?
+		WHERE input.kind IN (?, ?) AND job.lease_token = ?
+			AND job.reserved_at > ? AND job.attempts > 0;`, r.tableName, inputSQL)
+	args = append(args,
+		coreoutbox.BatchJobOutcomeDefer,
+		types.LeaseTokenNil,
+		coreoutbox.BatchJobOutcomeRetry,
+		coreoutbox.BatchJobOutcomeDefer,
+		leaseToken,
+		now,
+	)
+	result, err := exec.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func mysqlBatchOutcomeInput(outcomes []coreoutbox.BatchJobOutcome) (string, []any) {
+	rows := make([]string, len(outcomes))
+	args := make([]any, 0, len(outcomes)*3)
+	for index, outcome := range outcomes {
+		if index == 0 {
+			rows[index] = "SELECT ? AS job_id, ? AS kind, ? AS available_at"
+		} else {
+			rows[index] = "SELECT ?, ?, ?"
+		}
+		args = append(args,
+			outcome.JobID,
+			outcome.Kind,
+			outcome.AvailableAt.UTC(),
+		)
+	}
+	return stdstrings.Join(rows, " UNION ALL "), args
+}
+
+func validateBatchOutcomes(leaseToken coreoutbox.LeaseToken, outcomes []coreoutbox.BatchJobOutcome) error {
+	if err := leaseToken.Validate(); err != nil {
+		return fmt.Errorf("invalid lease token: %w", err)
+	}
+	if len(outcomes) < 1 || len(outcomes) > coreoutbox.MaxReservationBatchSize {
+		return fmt.Errorf("outcome count must be between 1 and %d", coreoutbox.MaxReservationBatchSize)
+	}
+	seen := make(map[types.JobID]struct{}, len(outcomes))
+	for index, outcome := range outcomes {
+		if err := outcome.JobID.Validate(); err != nil {
+			return fmt.Errorf("outcome %d: %w", index, err)
+		}
+		if _, duplicate := seen[outcome.JobID]; duplicate {
+			return fmt.Errorf("duplicate outcome JobID %s", outcome.JobID)
+		}
+		seen[outcome.JobID] = struct{}{}
+		switch outcome.Kind {
+		case coreoutbox.BatchJobOutcomeSuccess:
+		case coreoutbox.BatchJobOutcomeRetry, coreoutbox.BatchJobOutcomeDefer:
+			if outcome.AvailableAt.IsZero() {
+				return fmt.Errorf("outcome %d has an empty availability time", index)
+			}
+		case coreoutbox.BatchJobOutcomeDLQ:
+			if outcome.Reason == "" {
+				return fmt.Errorf("outcome %d has an invalid DLQ record", index)
+			}
+		default:
+			return fmt.Errorf("outcome %d has unknown kind %d", index, outcome.Kind)
+		}
+	}
+	return nil
+}
+
+func (r *Repo) DeferJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken coreoutbox.LeaseToken,
+	now time.Time,
+	availableAt time.Time,
+) (int64, error) {
+	return r.ApplyBatchJobOutcomes(ctx, leaseToken, now, []coreoutbox.BatchJobOutcome{{
+		JobID:       jobID,
+		Kind:        coreoutbox.BatchJobOutcomeDefer,
+		AvailableAt: availableAt,
+	}})
+}
+
 func (r *Repo) DeleteJobWithLease(
 	ctx context.Context,
 	jobID types.JobID,
@@ -435,6 +604,159 @@ func (r *Repo) CreateJobVersionedUniqueResult(
 	}
 
 	return result, nil
+}
+
+func (r *Repo) CreateJobVersionedUniqueBatch(
+	ctx context.Context,
+	items []coreoutbox.UniqueBatchPut,
+) ([]coreoutbox.UniquePutResult, error) {
+	if len(items) < 1 || len(items) > coreoutbox.MaxReservationBatchSize {
+		return nil, fmt.Errorf("item count must be between 1 and %d", coreoutbox.MaxReservationBatchSize)
+	}
+	seen := make(map[string]struct{}, len(items))
+	for index, item := range items {
+		if item.DeduplicationKey == "" {
+			return nil, fmt.Errorf("item %d has an empty deduplication key", index)
+		}
+		if _, duplicate := seen[item.DeduplicationKey]; duplicate {
+			return nil, fmt.Errorf("duplicate deduplication key %q", item.DeduplicationKey)
+		}
+		seen[item.DeduplicationKey] = struct{}{}
+		if err := (coreoutbox.JobCapability{Name: item.Name, SchemaVersion: item.SchemaVersion}).Validate(); err != nil {
+			return nil, fmt.Errorf("item %d: %w", index, err)
+		}
+	}
+	prepared := prepareUniqueBatchPuts(items, time.Now().UTC())
+	results := make([]coreoutbox.UniquePutResult, 0, len(items))
+	manager := transaction.New(r.client.DB())
+	err := manager.RunInTx(ctx, func(txCtx context.Context) error {
+		exec := r.executor(txCtx)
+		stored, err := r.registerUniqueBatchKeys(txCtx, exec, prepared)
+		if err != nil {
+			return err
+		}
+		created := make([]preparedUniqueBatchPut, 0, len(prepared))
+		for _, item := range prepared {
+			key, ok := stored[item.put.DeduplicationKey]
+			if !ok || key.fingerprint != item.fingerprint {
+				return coreoutbox.ErrIdempotencyConflict
+			}
+			isCreated := key.jobID == item.jobID
+			results = append(results, coreoutbox.UniquePutResult{JobID: key.jobID, Created: isCreated})
+			if isCreated {
+				created = append(created, item)
+			}
+		}
+		return r.insertUniqueBatchJobs(txCtx, exec, created)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create unique versioned job batch: %w", err)
+	}
+	return results, nil
+}
+
+type preparedUniqueBatchPut struct {
+	put         coreoutbox.UniqueBatchPut
+	jobID       types.JobID
+	fingerprint string
+	createdAt   time.Time
+}
+
+type storedUniqueBatchKey struct {
+	jobID       types.JobID
+	fingerprint string
+}
+
+func prepareUniqueBatchPuts(items []coreoutbox.UniqueBatchPut, createdAt time.Time) []preparedUniqueBatchPut {
+	prepared := make([]preparedUniqueBatchPut, len(items))
+	for index, item := range items {
+		prepared[index] = preparedUniqueBatchPut{
+			put:         item,
+			jobID:       types.NewJobID(),
+			fingerprint: jobFingerprint(item.Name, item.SchemaVersion, item.Payload, item.AvailableAt),
+			createdAt:   createdAt,
+		}
+	}
+	return prepared
+}
+
+func (r *Repo) registerUniqueBatchKeys(
+	ctx context.Context,
+	exec transaction.TxExecutor,
+	prepared []preparedUniqueBatchPut,
+) (map[string]storedUniqueBatchKey, error) {
+	query := `INSERT INTO outbox_job_idempotency_keys
+		(deduplication_key, job_id, fingerprint, created_at) VALUES ` +
+		sqlValueRows(len(prepared), 4) +
+		` ON DUPLICATE KEY UPDATE deduplication_key = VALUES(deduplication_key);`
+	args := make([]any, 0, len(prepared)*4)
+	for _, item := range prepared {
+		args = append(args, item.put.DeduplicationKey, item.jobID, item.fingerprint, item.createdAt)
+	}
+	if _, err := exec.ExecContext(ctx, query, args...); err != nil {
+		return nil, fmt.Errorf("register batch idempotency keys: %w", err)
+	}
+
+	keys := make([]any, 0, len(prepared))
+	for _, item := range prepared {
+		keys = append(keys, item.put.DeduplicationKey)
+	}
+	rows, err := exec.QueryContext(ctx,
+		`SELECT deduplication_key, job_id, fingerprint
+		FROM outbox_job_idempotency_keys WHERE deduplication_key IN (`+sqlPlaceholders(len(prepared))+`);`,
+		keys...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load batch idempotency keys: %w", err)
+	}
+	defer rows.Close()
+	stored := make(map[string]storedUniqueBatchKey, len(prepared))
+	for rows.Next() {
+		var deduplicationKey string
+		var key storedUniqueBatchKey
+		if err := rows.Scan(&deduplicationKey, &key.jobID, &key.fingerprint); err != nil {
+			return nil, fmt.Errorf("scan batch idempotency key: %w", err)
+		}
+		stored[deduplicationKey] = key
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate batch idempotency keys: %w", err)
+	}
+	return stored, nil
+}
+
+func (r *Repo) insertUniqueBatchJobs(
+	ctx context.Context,
+	exec transaction.TxExecutor,
+	created []preparedUniqueBatchPut,
+) error {
+	if len(created) == 0 {
+		return nil
+	}
+	query := sharedstrings.Concate(`INSERT INTO %s (
+		id, queue, name, schema_version, payload, attempts, reserved_at,
+		lease_token, deduplication_key, available_at, created_at
+	) VALUES `, r.tableName) + sqlValueRows(len(created), 11) + ";"
+	args := make([]any, 0, len(created)*11)
+	for _, item := range created {
+		args = append(args,
+			item.jobID,
+			defaultQueue,
+			item.put.Name,
+			item.put.SchemaVersion,
+			item.put.Payload,
+			0,
+			nil,
+			types.LeaseTokenNil,
+			item.put.DeduplicationKey,
+			item.put.AvailableAt.UTC(),
+			item.createdAt,
+		)
+	}
+	if _, err := exec.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("insert unique job batch: %w", err)
+	}
+	return nil
 }
 
 func (r *Repo) createJobVersionedUnique(
@@ -715,4 +1037,13 @@ func validateBatchLease(jobIDs []types.JobID, leaseToken coreoutbox.LeaseToken) 
 
 func sqlPlaceholders(count int) string {
 	return stdstrings.TrimSuffix(stdstrings.Repeat("?,", count), ",")
+}
+
+func sqlValueRows(count, width int) string {
+	row := "(" + sqlPlaceholders(width) + ")"
+	rows := make([]string, count)
+	for index := range rows {
+		rows[index] = row
+	}
+	return stdstrings.Join(rows, ",")
 }
