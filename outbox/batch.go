@@ -166,6 +166,34 @@ type BatchJobsRepository interface {
 	MaxExecutionBatchSize() int
 }
 
+// BatchClaimLimits bounds one payload-aware execution-batch claim. Both
+// values must be positive. MaxBytes counts the UTF-8 bytes persisted in each
+// job payload.
+type BatchClaimLimits struct {
+	MaxMessages int
+	MaxBytes    int
+}
+
+// BoundedBatchJobsRepository is the optional payload-aware claim capability
+// used to avoid one repository round trip per true-batch item. The repository
+// returns the longest ready prefix in durable queue order within both limits.
+// If the first ready payload alone exceeds MaxBytes, it is returned as a
+// singleton so the service preserves the oversized-first-job contract.
+//
+// BatchJobsRepository remains the required true-batch contract. Repositories
+// that do not implement this optional interface use the compatible singleton
+// collector path.
+type BoundedBatchJobsRepository interface {
+	FindAndReserveJobsForCapabilityBounded(
+		ctx context.Context,
+		now time.Time,
+		until time.Time,
+		leaseToken LeaseToken,
+		capability JobCapability,
+		limits BatchClaimLimits,
+	) ([]models.Job, error)
+}
+
 // DeferJobsRepository is the optional fenced capability used by DeferAt to
 // postpone one claimed job without consuming its attempt.
 type DeferJobsRepository interface {

@@ -377,6 +377,94 @@ func (r *Repo) FindAndReserveJobsForCapability(
 	return r.FindAndReserveJobsForCapabilities(ctx, now, until, leaseToken, []coreoutbox.JobCapability{capability}, limit)
 }
 
+func (r *Repo) FindAndReserveJobsForCapabilityBounded(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capability coreoutbox.JobCapability,
+	limits coreoutbox.BatchClaimLimits,
+) ([]models.Job, error) {
+	const op = "jobs.repo.FindAndReserveJobsForCapabilityBounded"
+
+	if err := validateBatchRequest(leaseToken, limits.MaxMessages); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	if limits.MaxBytes < 1 {
+		return nil, fmt.Errorf("%s: max bytes must be positive: %d", op, limits.MaxBytes)
+	}
+	if err := capability.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: invalid capability: %w", op, err)
+	}
+
+	query := `
+	with candidates as (
+		select
+			j.id,
+			j.available_at,
+			j.created_at,
+			octet_length(j.payload)::bigint as payload_bytes
+		from jobs as j
+		where j.name = $6
+			and j.schema_version = $7
+			and j.available_at <= $1
+			and (j.reserved_at is null or j.reserved_at <= $1)
+		order by j.available_at, j.created_at, j.id
+		limit $4
+		for update of j skip locked
+	), ranked as (
+		select
+			id,
+			row_number() over (order by available_at, created_at, id) as ordinal,
+			sum(payload_bytes) over (order by available_at, created_at, id) as cumulative_bytes
+		from candidates
+	), selected as (
+		select id
+		from ranked
+		where ordinal = 1 or cumulative_bytes <= $5
+	), updated as (
+		update jobs as j
+		set attempts = attempts + 1,
+			reserved_at = $2,
+			lease_token = $3
+		from selected
+		where selected.id = j.id
+		returning
+			j.id,
+			j.queue,
+			j.name,
+			j.schema_version,
+			j.payload,
+			j.attempts,
+			j.reserved_at,
+			j.lease_token,
+			j.deduplication_key,
+			j.available_at,
+			j.created_at
+	)
+	select * from updated
+	order by available_at, created_at, id;`
+
+	args := []any{
+		now.UTC(),
+		until.UTC(),
+		leaseToken,
+		limits.MaxMessages,
+		limits.MaxBytes,
+		capability.Name,
+		capability.SchemaVersion,
+	}
+	var jobs []models.Job
+	if err := r.pgsql.DB().ScanAll(ctx, op, &jobs, query, args...); err != nil {
+		return nil, fmt.Errorf("%s: query context: %w", op, pgsql.ErrorTransform(err))
+	}
+	if len(jobs) == 0 {
+		return nil, sharederrors.ErrNoJobs
+	}
+
+	return jobs, nil
+}
+
 func (r *Repo) MaxExecutionBatchSize() int { return coreoutbox.MaxReservationBatchSize }
 
 func (r *Repo) findAndReserveJobs(

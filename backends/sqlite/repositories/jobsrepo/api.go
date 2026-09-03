@@ -89,6 +89,66 @@ func (r *Repo) FindAndReserveJobsForCapability(
 	return r.FindAndReserveJobsForCapabilities(ctx, now, until, leaseToken, []coreoutbox.JobCapability{capability}, limit)
 }
 
+func (r *Repo) FindAndReserveJobsForCapabilityBounded(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capability coreoutbox.JobCapability,
+	limits coreoutbox.BatchClaimLimits,
+) ([]models.Job, error) {
+	if err := validateBatchClaim(leaseToken, limits.MaxMessages); err != nil {
+		return nil, err
+	}
+	if limits.MaxBytes < 1 {
+		return nil, fmt.Errorf("max bytes must be positive: %d", limits.MaxBytes)
+	}
+	if err := capability.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid capability: %w", err)
+	}
+	if tx := transaction.GetTx(ctx); tx != nil {
+		return r.findAndReserveBatchBoundedWithExecutor(
+			ctx,
+			tx,
+			now,
+			until,
+			leaseToken,
+			capability,
+			limits,
+		)
+	}
+
+	conn, err := r.client.DB().Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout=5000;"); err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE;"); err != nil {
+		return nil, err
+	}
+	jobs, err := r.findAndReserveBatchBoundedWithExecutor(
+		ctx,
+		conn,
+		now,
+		until,
+		leaseToken,
+		capability,
+		limits,
+	)
+	if err != nil {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT;"); err != nil {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
+		return nil, err
+	}
+	return jobs, nil
+}
+
 func (*Repo) MaxExecutionBatchSize() int { return coreoutbox.MaxReservationBatchSize }
 
 func (r *Repo) findAndReserveBatch(
@@ -202,6 +262,121 @@ func (r *Repo) findAndReserveBatchWithExecutor(
 		jobs[index].ReservedAt = sql.NullTime{Time: until.UTC(), Valid: true}
 		jobs[index].LeaseToken = leaseToken
 	}
+	return jobs, nil
+}
+
+func (r *Repo) findAndReserveBatchBoundedWithExecutor(
+	ctx context.Context,
+	exec sqlExecutor,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capability coreoutbox.JobCapability,
+	limits coreoutbox.BatchClaimLimits,
+) ([]models.Job, error) {
+	queryCandidates := fmt.Sprintf(`SELECT id, length(CAST(payload AS BLOB)) FROM %s
+		WHERE available_at <= ? AND (reserved_at IS NULL OR reserved_at <= ?)
+			AND name = ? AND schema_version = ?
+		ORDER BY available_at, created_at, id LIMIT ?;`, r.tableName)
+	rows, err := exec.QueryContext(
+		ctx,
+		queryCandidates,
+		now.UTC().UnixMilli(),
+		now.UTC().UnixMilli(),
+		capability.Name,
+		capability.SchemaVersion,
+		limits.MaxMessages,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	jobIDs := make([]types.JobID, 0, limits.MaxMessages)
+	usedBytes := int64(0)
+	limitReached := false
+	for rows.Next() {
+		var jobID types.JobID
+		var payloadBytes int64
+		if err := rows.Scan(&jobID, &payloadBytes); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if limitReached {
+			continue
+		}
+		if len(jobIDs) == 0 || usedBytes+payloadBytes <= int64(limits.MaxBytes) {
+			jobIDs = append(jobIDs, jobID)
+			usedBytes += payloadBytes
+			if usedBytes > int64(limits.MaxBytes) {
+				limitReached = true
+			}
+			continue
+		}
+		limitReached = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(jobIDs) == 0 {
+		return nil, sharederrors.ErrNoJobs
+	}
+
+	queryUpdate := fmt.Sprintf(`UPDATE %s
+		SET attempts = attempts + 1, reserved_at = ?, lease_token = ?
+		WHERE id IN (%s);`, r.tableName, sqlPlaceholders(len(jobIDs)))
+	updateArgs := []any{until.UTC().UnixMilli(), leaseToken}
+	for _, jobID := range jobIDs {
+		updateArgs = append(updateArgs, jobID)
+	}
+	result, err := exec.ExecContext(ctx, queryUpdate, updateArgs...)
+	if err != nil {
+		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected != int64(len(jobIDs)) {
+		return nil, sharederrors.ErrNoJobs
+	}
+
+	queryClaimed := fmt.Sprintf(`SELECT %s FROM %s
+		WHERE id IN (%s) AND lease_token = ?
+		ORDER BY available_at, created_at, id;`,
+		stdstrings.Join(jobColumns, ", "), r.tableName, sqlPlaceholders(len(jobIDs)))
+	claimedArgs := make([]any, 0, len(jobIDs)+1)
+	for _, jobID := range jobIDs {
+		claimedArgs = append(claimedArgs, jobID)
+	}
+	claimedArgs = append(claimedArgs, leaseToken)
+	claimedRows, err := exec.QueryContext(ctx, queryClaimed, claimedArgs...)
+	if err != nil {
+		return nil, err
+	}
+	jobs := make([]models.Job, 0, len(jobIDs))
+	for claimedRows.Next() {
+		job, scanErr := scanJob(claimedRows)
+		if scanErr != nil {
+			_ = claimedRows.Close()
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+	if err := claimedRows.Err(); err != nil {
+		_ = claimedRows.Close()
+		return nil, err
+	}
+	if err := claimedRows.Close(); err != nil {
+		return nil, err
+	}
+	if len(jobs) != len(jobIDs) {
+		return nil, sharederrors.ErrNoJobs
+	}
+
 	return jobs, nil
 }
 

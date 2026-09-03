@@ -16,6 +16,7 @@ import (
 const (
 	batchCollectorClaimLimit = 1
 	batchFillPollInterval    = 2 * time.Millisecond
+	batchFillClaimHeadroom   = 5 * time.Millisecond
 	batchRetryBase           = 100 * time.Millisecond
 	batchRetryMaximum        = 30 * time.Second
 	batchDLQInsertAllowance  = 25 * time.Millisecond
@@ -65,7 +66,7 @@ func (s *Service) findAndProcessExecutionBatch(
 		return false, ErrBatchRepositoryNotConfigured
 	}
 
-	jobs, leaseToken, err := s.claimExecutionBatch(ctx, repo, capability, batchCollectorClaimLimit)
+	jobs, leaseToken, err := s.claimInitialExecutionBatch(ctx, repo, capability, registration.config)
 	if errors.Is(err, ErrNoJobs) {
 		return false, nil
 	}
@@ -138,22 +139,37 @@ func sortExecutionBatchJobs(jobs []models.Job) {
 	})
 }
 
-func (s *Service) claimExecutionBatch(
+func (s *Service) claimInitialExecutionBatch(
 	ctx context.Context,
 	repo BatchJobsRepository,
 	capability JobCapability,
-	limit int,
+	config normalizedBatchConfig,
 ) ([]models.Job, LeaseToken, error) {
 	leaseToken := types.NewLeaseToken()
-	jobs, err := s.claimExecutionBatchWithToken(ctx, repo, capability, limit, leaseToken)
+	boundedRepo, ok := repo.(BoundedBatchJobsRepository)
+	if !ok {
+		jobs, err := s.claimExecutionBatchSingletonWithToken(
+			ctx,
+			repo,
+			capability,
+			leaseToken,
+		)
+		return jobs, leaseToken, err
+	}
+	jobs, err := s.claimExecutionBatchBoundedWithToken(
+		ctx,
+		boundedRepo,
+		capability,
+		BatchClaimLimits{MaxMessages: config.maxMessages, MaxBytes: config.maxBytes},
+		leaseToken,
+	)
 	return jobs, leaseToken, err
 }
 
-func (s *Service) claimExecutionBatchWithToken(
+func (s *Service) claimExecutionBatchSingletonWithToken(
 	ctx context.Context,
 	repo BatchJobsRepository,
 	capability JobCapability,
-	limit int,
 	leaseToken LeaseToken,
 ) ([]models.Job, error) {
 	now := time.Now().UTC()
@@ -168,15 +184,75 @@ func (s *Service) claimExecutionBatchWithToken(
 		now.Add(s.reserveFor),
 		leaseToken,
 		capability,
-		limit,
+		batchCollectorClaimLimit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("find and reserve execution batch: %w", err)
 	}
-	if err := validateClaimedExecutionBatch(jobs, capability, leaseToken, limit); err != nil {
+	if err := validateClaimedExecutionBatch(jobs, capability, leaseToken, batchCollectorClaimLimit); err != nil {
 		return nil, err
 	}
 	return jobs, nil
+}
+
+func (s *Service) claimExecutionBatchBoundedWithToken(
+	ctx context.Context,
+	repo BoundedBatchJobsRepository,
+	capability JobCapability,
+	limits BatchClaimLimits,
+	leaseToken LeaseToken,
+) ([]models.Job, error) {
+	now := time.Now().UTC()
+	s.claimMu.RLock()
+	defer s.claimMu.RUnlock()
+	if s.IsDraining() {
+		return nil, ErrServiceDraining
+	}
+	jobs, err := repo.FindAndReserveJobsForCapabilityBounded(
+		ctx,
+		now,
+		now.Add(s.reserveFor),
+		leaseToken,
+		capability,
+		limits,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find and reserve bounded execution batch: %w", err)
+	}
+	if err := validateClaimedExecutionBatch(jobs, capability, leaseToken, limits.MaxMessages); err != nil {
+		return nil, err
+	}
+	if err := validateBoundedExecutionBatchPayload(jobs, limits.MaxBytes); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+func validateBoundedExecutionBatchPayload(jobs []models.Job, maxBytes int) error {
+	usedBytes := 0
+	for index, job := range jobs {
+		payloadBytes := len(job.Payload)
+		if index == 0 && payloadBytes > maxBytes {
+			if len(jobs) == 1 {
+				return nil
+			}
+			return fmt.Errorf(
+				"%w: bounded batch returned %d jobs after oversized first payload",
+				ErrUnsupportedClaim,
+				len(jobs),
+			)
+		}
+		if payloadBytes > maxBytes-usedBytes {
+			return fmt.Errorf(
+				"%w: bounded batch payload exceeds %d bytes at job %s",
+				ErrUnsupportedClaim,
+				maxBytes,
+				job.ID,
+			)
+		}
+		usedBytes += payloadBytes
+	}
+	return nil
 }
 
 func validateClaimedExecutionBatch(
@@ -266,6 +342,10 @@ func (s *Service) fillExecutionBatch(
 			repo,
 			capability,
 			manager.leaseToken,
+			BatchClaimLimits{
+				MaxMessages: config.maxMessages - len(jobs),
+				MaxBytes:    config.maxBytes - usedBytes,
+			},
 			deadline,
 		)
 		if fillDeadlineReached {
@@ -314,15 +394,24 @@ func (s *Service) claimExecutionBatchWithinFillWindow(
 	repo BatchJobsRepository,
 	capability JobCapability,
 	leaseToken LeaseToken,
+	limits BatchClaimLimits,
 	deadline time.Time,
 ) ([]models.Job, bool, error) {
+	// Leave a small minimum claim budget before the fill deadline. Starting
+	// another repository operation with less time turns ordinary query and
+	// scheduler latency into an avoidable cancellation. Some drivers must then
+	// discard the underlying connection before it can return to the pool.
+	if time.Until(deadline) <= batchFillClaimHeadroom {
+		return nil, true, nil
+	}
+
 	claimCtx, cancelClaim := context.WithDeadline(ctx, deadline)
-	jobs, err := s.claimExecutionBatchWithToken(
+	jobs, err := s.claimExecutionBatchForFill(
 		claimCtx,
 		repo,
 		capability,
-		batchCollectorClaimLimit,
 		leaseToken,
+		limits,
 	)
 	claimCause := context.Cause(claimCtx)
 	cancelClaim()
@@ -332,11 +421,39 @@ func (s *Service) claimExecutionBatchWithinFillWindow(
 	if cause := context.Cause(ctx); cause != nil {
 		return nil, false, cause
 	}
-	if errors.Is(claimCause, context.DeadlineExceeded) &&
-		(errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+	// Drivers do not have to wrap the context error. PostgreSQL, for example,
+	// reports a deadline-triggered CancelRequest as SQLSTATE 57014. Once our
+	// private fill deadline has fired (and the parent is still alive), the
+	// repository error belongs to that normal early flush.
+	if errors.Is(claimCause, context.DeadlineExceeded) {
 		return nil, true, nil
 	}
 	return nil, false, err
+}
+
+func (s *Service) claimExecutionBatchForFill(
+	ctx context.Context,
+	repo BatchJobsRepository,
+	capability JobCapability,
+	leaseToken LeaseToken,
+	limits BatchClaimLimits,
+) ([]models.Job, error) {
+	boundedRepo, ok := repo.(BoundedBatchJobsRepository)
+	if !ok {
+		return s.claimExecutionBatchSingletonWithToken(
+			ctx,
+			repo,
+			capability,
+			leaseToken,
+		)
+	}
+	return s.claimExecutionBatchBoundedWithToken(
+		ctx,
+		boundedRepo,
+		capability,
+		limits,
+		leaseToken,
+	)
 }
 
 func selectBatchPayloadLimitWithUsed(jobs []models.Job, maxBytes, used int) (selected, tail []models.Job) {

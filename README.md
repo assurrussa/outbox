@@ -126,8 +126,12 @@ svc, err := outbox.New(
 `RegisterBatchJob` activates one real handler batch independently from
 reservation prefetch. The zero config means 100 jobs, 4 MiB of payload, and a
 25 ms fill window; use `MaxMessages: 1` as a same-path singleton control. The
-collector reserves at most one additional candidate at a time, so the byte
-limit does not first materialize all `MaxMessages` payloads.
+PostgreSQL, MySQL, and SQLite use an optional byte-bounded claim to reserve the
+longest ordered prefix in one backend operation. Custom repositories that only
+implement `BatchJobsRepository` retain the compatible singleton collector
+fallback. Every supplemental claim is capped by the remaining `MaxWait` window;
+when it expires, the service flushes the jobs already collected while the
+parent Run context remains live.
 
 ```go
 if err := svc.RegisterBatchJob(applicationBatchJob, outbox.BatchConfig{
@@ -173,11 +177,22 @@ results, err := svc.PutVersionedUniqueBatch(ctx, []outbox.UniqueBatchPut{
 ```
 
 All items commit or roll back together and results preserve input order.
-PostgreSQL, MySQL, and SQLite implement multi-item execution and unique batch
-staging with existing schemas. Picodata supports singleton reservation
-prefetch and no-attempt defer, but does not expose true handler batches or
-unique batch puts because its current client cannot provide the required
-connection-pinned atomic transaction.
+PostgreSQL, MySQL, and SQLite implement multi-item execution, byte-bounded
+claims, and unique batch staging with existing schemas. Picodata supports
+singleton reservation prefetch and no-attempt defer, but does not expose true
+handler batches, bounded claims, or unique batch puts because its current
+client cannot provide the required connection-pinned atomic transaction.
+
+### Capacity evidence
+
+In the normalized small-payload PostgreSQL/NATS integration profile, the
+complete true Outbox batch path raised the confirmed sustainable frontier from
+450 to 2,550 messages per second versus the singleton-Outbox control, a 5.67x
+improvement. Both frontiers passed 3/3 fresh-volume confirmations; the next
+2,600 msg/s candidate passed only 1/3. See [performance evidence](docs/performance.md)
+for exact commits, topology, latency, reconciliation, and test boundaries. This
+is repeatable checkout-workspace evidence, not a universal production-capacity
+guarantee.
 
 ## Version-aware workers
 

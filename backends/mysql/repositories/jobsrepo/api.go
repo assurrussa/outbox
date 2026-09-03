@@ -88,6 +88,64 @@ func (r *Repo) FindAndReserveJobsForCapability(
 	return r.FindAndReserveJobsForCapabilities(ctx, now, until, leaseToken, []coreoutbox.JobCapability{capability}, limit)
 }
 
+func (r *Repo) FindAndReserveJobsForCapabilityBounded(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken coreoutbox.LeaseToken,
+	capability coreoutbox.JobCapability,
+	limits coreoutbox.BatchClaimLimits,
+) ([]models.Job, error) {
+	if err := validateBatchClaim(leaseToken, limits.MaxMessages); err != nil {
+		return nil, err
+	}
+	if limits.MaxBytes < 1 {
+		return nil, fmt.Errorf("max bytes must be positive: %d", limits.MaxBytes)
+	}
+	if err := capability.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid capability: %w", err)
+	}
+
+	query := fmt.Sprintf(`SELECT id, OCTET_LENGTH(payload)
+		FROM %s FORCE INDEX (%s)
+		WHERE name = ? AND schema_version = ?
+			AND available_at <= ? AND (reserved_at IS NULL OR reserved_at <= ?)
+		ORDER BY available_at, created_at, id
+		LIMIT ?;`, r.tableName, batchCapabilityClaimIndex)
+	args := []any{
+		capability.Name,
+		capability.SchemaVersion,
+		now.UTC(),
+		now.UTC(),
+		limits.MaxMessages,
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		jobIDs, err := r.findBoundedBatchCandidateIDs(ctx, query, args, limits)
+		if err != nil {
+			return nil, err
+		}
+		if len(jobIDs) == 0 {
+			return nil, sharederrors.ErrNoJobs
+		}
+		jobs, claimed, err := r.reserveBatchCandidates(
+			ctx,
+			now.UTC(),
+			until.UTC(),
+			leaseToken,
+			jobIDs,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if claimed {
+			return jobs, nil
+		}
+	}
+}
+
 func (*Repo) MaxExecutionBatchSize() int { return coreoutbox.MaxReservationBatchSize }
 
 func (r *Repo) findAndReserveBatch(
@@ -194,6 +252,51 @@ func (r *Repo) findBatchCandidateIDs(
 	}
 	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("close batch claim candidates: %w", err)
+	}
+
+	return jobIDs, nil
+}
+
+func (r *Repo) findBoundedBatchCandidateIDs(
+	ctx context.Context,
+	query string,
+	args []any,
+	limits coreoutbox.BatchClaimLimits,
+) ([]types.JobID, error) {
+	rows, err := r.client.DB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("select bounded batch claim candidates: %w", err)
+	}
+
+	jobIDs := make([]types.JobID, 0, limits.MaxMessages)
+	usedBytes := int64(0)
+	limitReached := false
+	for rows.Next() {
+		var jobID types.JobID
+		var payloadBytes int64
+		if err := rows.Scan(&jobID, &payloadBytes); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan bounded batch claim candidate: %w", err)
+		}
+		if limitReached {
+			continue
+		}
+		if len(jobIDs) == 0 || usedBytes+payloadBytes <= int64(limits.MaxBytes) {
+			jobIDs = append(jobIDs, jobID)
+			usedBytes += payloadBytes
+			if usedBytes > int64(limits.MaxBytes) {
+				limitReached = true
+			}
+			continue
+		}
+		limitReached = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate bounded batch claim candidates: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close bounded batch claim candidates: %w", err)
 	}
 
 	return jobIDs, nil

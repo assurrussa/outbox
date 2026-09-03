@@ -23,6 +23,7 @@ var (
 	_ coreoutbox.UniqueJobsRepository        = (*Repo)(nil)
 	_ coreoutbox.UniqueBatchJobsRepository   = (*Repo)(nil)
 	_ coreoutbox.BatchJobsRepository         = (*Repo)(nil)
+	_ coreoutbox.BoundedBatchJobsRepository  = (*Repo)(nil)
 	_ coreoutbox.DeferJobsRepository         = (*Repo)(nil)
 	_ coreoutbox.FanoutMaintenanceRepository = (*Repo)(nil)
 )
