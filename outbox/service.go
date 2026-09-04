@@ -375,10 +375,15 @@ func (s *Service) IsDraining() bool {
 }
 
 func (s *Service) executeJob(ctx context.Context, j Job, job models.Job) (err error) {
-	ctx, cancel := context.WithTimeout(ctx, j.ExecutionTimeout())
+	handlerCtx, cancel := context.WithTimeout(ctx, j.ExecutionTimeout())
 	defer cancel()
 
-	return s.handleJob(ctx, j, job)
+	err = s.handleJob(handlerCtx, j, job)
+	if cause := context.Cause(handlerCtx); cause != nil {
+		return cause
+	}
+
+	return err
 }
 
 func (s *Service) handleJob(ctx context.Context, j Job, job models.Job) (err error) {

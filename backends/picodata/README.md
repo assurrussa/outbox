@@ -49,6 +49,7 @@ func build(ctx context.Context, dsn string) (*outbox.Service, error) {
 		outbox.WithJobsRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
+		outbox.WithAllowNonAtomicDLQ(),
 		outbox.WithLogger(lg),
 	)
 }
@@ -67,7 +68,7 @@ dsn := cfg.ConnectionURL()
 
 The jobs repository is auto-detected for exact grouped queue stats.
 
-`Transactor` in Picodata backend is currently best-effort (no connection-pinned SQL transaction in current client API).
+`Transactor` in Picodata backend is currently best-effort (no connection-pinned SQL transaction in current client API). To prevent accidental reliance on non-atomic DLQ transitions, `outbox.New` requires `outbox.WithAllowNonAtomicDLQ()` when configuring the Picodata transactor.
 
 The repository exposes the required version-aware fenced reservation contract
 for exactly one job, no-attempt `DeferAt`, and version-preserving failed-job

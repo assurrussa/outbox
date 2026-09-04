@@ -14,7 +14,6 @@ import (
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
 	"github.com/assurrussa/outbox/outbox/models"
-	sharedjob "github.com/assurrussa/outbox/shared/job"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/types"
 )
@@ -38,6 +37,7 @@ func run(ctx context.Context, log outboxlogger.Logger) error {
 		outbox.WithJobsRepo(stubJobsRepo),
 		outbox.WithJobsFailedRepo(stubJobsRepo),
 		outbox.WithTransactor(stubJobsRepo),
+		outbox.WithAllowNonAtomicDLQ(),
 		outbox.WithLogger(log),
 	)
 	if err != nil {
@@ -116,7 +116,7 @@ type printPayload struct {
 }
 
 type printJob struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 	log outboxlogger.Logger
 }
 
@@ -363,6 +363,10 @@ func (j *stubRepo) CreateFailedJobVersioned(
 
 func (j *stubRepo) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
+}
+
+func (j *stubRepo) SupportsAtomicDLQ() bool {
+	return false
 }
 
 func (j *stubRepo) GetQueueStats(

@@ -24,6 +24,7 @@ type Options struct {
 	jobsStatRepo         JobsStatRepository
 	jobsFailedRepo       JobsFailedRepository
 	transactor           Transactor
+	allowNonAtomicDLQ    bool
 	logger               logger.Logger
 }
 
@@ -37,6 +38,7 @@ func NewOptions(options ...OptOptionsSetter) (Options, error) {
 		jobsRepo:             nil,
 		jobsFailedRepo:       nil,
 		transactor:           nil,
+		allowNonAtomicDLQ:    false,
 	}
 
 	for _, opt := range options {
@@ -63,6 +65,13 @@ func (o *Options) Validate() error {
 	}
 	if o.transactor == nil {
 		return errors.New("nil transactor")
+	}
+	if tc, ok := o.transactor.(TransactionCapabilities); !ok {
+		if !o.allowNonAtomicDLQ {
+			return ErrTransactionCapabilitiesRequired
+		}
+	} else if !tc.SupportsAtomicDLQ() && !o.allowNonAtomicDLQ {
+		return ErrNonAtomicDLQUnsupported
 	}
 	if o.logger == nil {
 		return errors.New("nil logger")
@@ -156,6 +165,14 @@ func WithLogger(logger logger.Logger) OptOptionsSetter {
 func WithTransactor(transactor Transactor) OptOptionsSetter {
 	return func(o *Options) {
 		o.transactor = transactor
+	}
+}
+
+// WithAllowNonAtomicDLQ explicitly permits using a transactor that does not
+// guarantee atomic DLQ transitions (e.g. Picodata best-effort transactor).
+func WithAllowNonAtomicDLQ() OptOptionsSetter {
+	return func(o *Options) {
+		o.allowNonAtomicDLQ = true
 	}
 }
 

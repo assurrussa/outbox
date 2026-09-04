@@ -91,3 +91,72 @@ of a supported job use version-preserving fenced DLQ. Picodata exposes the same
 single-element repository contract, but its transaction manager remains
 best-effort and it still must not be presented as an atomic fan-out or DLQ
 runtime.
+
+## Migrating from v0.13 to v0.14
+
+### 1. Fail-Closed Transaction Capabilities and `WithAllowNonAtomicDLQ`
+
+`outbox.New(...)` now validates transactor DLQ atomicity. Transactors must
+either implement the `TransactionCapabilities` interface (`SupportsAtomicDLQ() bool`)
+or the caller must explicitly permit non-atomic DLQ delivery using
+`WithAllowNonAtomicDLQ()`:
+
+- **PostgreSQL, MySQL, SQLite**: standard `transaction.Manager` implementations
+  declare atomic DLQ transactions (`SupportsAtomicDLQ() == true`). No code change
+  is required for standard SQL consumers.
+- **Picodata**: Picodata's `BestEffortRunner` explicitly declares
+  `SupportsAtomicDLQ() == false` because the driver does not expose
+  connection-pinned SQL transactions. Existing Picodata consumers must add
+  `outbox.WithAllowNonAtomicDLQ()` when initializing the service:
+  ```go
+  svc, err := outbox.New(
+      outbox.WithJobsRepo(jobsRepo),
+      outbox.WithJobsFailedRepo(jobsFailedRepo),
+      outbox.WithTransactor(transactor),
+      outbox.WithAllowNonAtomicDLQ(), // Required for Picodata or best-effort transactors
+  )
+  ```
+- **Custom transactors**: custom or mock transactors that do not implement
+  `TransactionCapabilities` will return `ErrTransactionCapabilitiesRequired`. Either
+  implement `SupportsAtomicDLQ() bool` on the transactor or supply
+  `WithAllowNonAtomicDLQ()`.
+
+### 2. Custom Table Options, Identifier Validation, and Idempotency Table Configuration
+
+Repository constructors in MySQL, SQLite, and Picodata now accept functional options:
+- `jobsrepo.New(client, jobsrepo.WithJobsTable("custom_jobs"), jobsrepo.WithIdempotencyTable("custom_idempotency_keys"))`
+- `jobsfailedrepo.New(client, jobsfailedrepo.WithFailedJobsTable("custom_jobs_failed"))`
+
+Validation and quoting rules:
+- Supported identifiers: simple identifiers (`[A-Za-z_][A-Za-z0-9_]*`) or
+  schema-qualified identifiers (`schema.table` / `database.table` for MySQL and SQLite).
+- All identifiers are quoted backend-specifically (`` `table` `` in MySQL,
+  `"table"` in SQLite and Picodata).
+- SQL reserved words (such as `select`, `order`, `group`) can now be safely used as
+  table names without SQL syntax errors.
+- Multi-table idempotency ownership: Exactly one active jobs table may own a given
+  idempotency keys registry table. Calling prune across multiple active jobs tables that share
+  the same idempotency keys table is unsupported because pruning checks active presence
+  only against its own configured jobs table (which would prematurely delete tombstones
+  for other active tables). When using custom or partitioned jobs tables with deduplication,
+  configure a dedicated idempotency table per active table via `jobsrepo.WithIdempotencyTable(...)`.
+
+### 3. Execution Timeout and Handler Panic Semantics
+
+- **Single-Job Execution Timeout**: If a single-job handler exceeds its `ExecutionTimeout()` and
+  incorrectly returns `nil`, the runtime now detects the cancelled context and returns the deadline
+  exceeded cause. The job is NOT acknowledged or deleted, and its attempt count is
+  preserved for lease expiry-based recovery or DLQ routing.
+- **Single-Job Handler Panics**: Single-job handler panics continue to be captured as job errors
+  (`"panic in job %q: %v"`), undergoing bounded retries up to `MaxAttempts` before being routed
+  to DLQ. The worker loop continues running without crashing.
+- **True-Batch Handler Panics**: For true-batch execution (`BatchJob` / `HandleBatch`), a handler
+  panic affects the whole batch. The runtime captures the panic into `*HandlerPanicError`
+  with a full stack trace (`debug.Stack()`), logs the stack, retains leases for expiry-based recovery
+  without attempt compensation, and terminates the worker loop fail-closed.
+
+### 4. `DefaultJob` Namespace
+
+`outbox.DefaultJob` is now available directly in the core package (`github.com/assurrussa/outbox/outbox`).
+The old `shared/job.DefaultJob` is deprecated.
+

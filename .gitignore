@@ -7,3 +7,4 @@ cover*.*
 tmp/
 .cache/
 vendor/
+examples/*/base-app*

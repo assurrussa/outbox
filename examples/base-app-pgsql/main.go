@@ -18,7 +18,6 @@ import (
 	pgsqltx "github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
-	sharedjob "github.com/assurrussa/outbox/shared/job"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -108,7 +107,7 @@ type printPayload struct {
 }
 
 type printJob struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 	log outboxlogger.Logger
 }
 

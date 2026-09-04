@@ -1347,6 +1347,10 @@ func (t *executionBatchTestTransactor) RunInTx(ctx context.Context, fn func(cont
 	return fn(ctx)
 }
 
+func (t *executionBatchTestTransactor) SupportsAtomicDLQ() bool {
+	return true
+}
+
 type executionBatchTestHandler struct {
 	name    string
 	timeout time.Duration
@@ -1469,5 +1473,60 @@ func waitForExtendedJobIDs(t *testing.T, calls <-chan []types.JobID, want ...typ
 		case <-timer.C:
 			t.Fatalf("heartbeat did not cover job IDs %v while tail release was blocked", want)
 		}
+	}
+}
+
+func TestExecutionBatchHandlerPanicDoesNotApplyOutcomesAndFailsClosed(t *testing.T) {
+	repo := &executionBatchTestRepo{}
+	repo.findBatch = func(_ context.Context, _ JobCapability, token LeaseToken, _ int) ([]models.Job, error) {
+		job := executionBatchTestJob(testBatchJobName, token)
+		job.Attempts = 2
+		return []models.Job{job}, nil
+	}
+
+	handler := &executionBatchTestHandler{
+		name: testBatchJobName,
+		handle: func(_ context.Context, _ []BatchJobItem) (BatchResult, error) {
+			panic("deterministic test panic in batch handler")
+		},
+	}
+
+	service := newExecutionBatchTestService(repo, &executionBatchTestFailedRepo{}, &executionBatchTestTransactor{})
+	service.MustRegisterBatchJob(handler, BatchConfig{MaxMessages: 1, MaxWait: time.Millisecond})
+
+	processed, err := service.findAndProcessExecutionBatch(
+		t.Context(),
+		logger.Discard(),
+		JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion},
+	)
+	if !processed {
+		t.Fatalf("expected batch to be processed, got %v", processed)
+	}
+	if err == nil {
+		t.Fatal("expected panic error from findAndProcessExecutionBatch, got nil")
+	}
+
+	var panicErr *HandlerPanicError
+	if !errors.As(err, &panicErr) {
+		t.Fatalf("expected HandlerPanicError, got: %T (%v)", err, err)
+	}
+	if panicErr.JobName != testBatchJobName {
+		t.Fatalf("expected job name %q, got %q", testBatchJobName, panicErr.JobName)
+	}
+	if panicErr.Value != "deterministic test panic in batch handler" {
+		t.Fatalf("unexpected panic value: %v", panicErr.Value)
+	}
+	if len(panicErr.Stack) == 0 {
+		t.Fatal("expected non-empty stack trace")
+	}
+
+	// ApplyBatchJobOutcomes must NOT have been called (no deferral, no attempts reduction)
+	if calls := repo.applyCalls.Load(); calls != 0 {
+		t.Fatalf("ApplyBatchJobOutcomes called %d times, want 0", calls)
+	}
+
+	// ReleaseUnstarted must NOT release the panicked job (manager.forgetAll was called)
+	if calls := repo.releaseCalls.Load(); calls != 0 {
+		t.Fatalf("ReleaseUnstartedJobsWithLease called %d times, want 0", calls)
 	}
 }

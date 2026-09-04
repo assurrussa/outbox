@@ -45,7 +45,7 @@ type TestRepoSuite struct {
 func NewTestRepoSuite(t *testing.T, opts ...picodatatests.OptionDatabase) (context.Context, context.CancelFunc, *TestRepoSuite) {
 	return tests.NewSuite[*TestRepoSuite](t, func(t *testing.T, ctx context.Context) *TestRepoSuite {
 		db, dbHelper, cleanUp := picodatatests.PrepareDB(ctx, t, "TestJobsRepoSuite", opts...)
-		repo := jobsrepo.Must(db, dbHelper.FnGetReplaceName("outbox_jobs"))
+		repo := jobsrepo.Must(db, jobsrepo.WithJobsTable(dbHelper.FnGetReplaceName("outbox_jobs")))
 
 		return &TestRepoSuite{
 			db:       db,

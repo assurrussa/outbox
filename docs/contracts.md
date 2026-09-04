@@ -8,6 +8,12 @@
 - `WithJobsFailedRepo(...)`;
 - `WithTransactor(...)`.
 
+The configured `Transactor` must implement `TransactionCapabilities` (declaring
+`SupportsAtomicDLQ() bool`) and report `true` unless `WithAllowNonAtomicDLQ()`
+is explicitly passed. Transactors without capabilities or reporting `false`
+fail closed during construction (`ErrTransactionCapabilitiesRequired` or
+`ErrNonAtomicDLQUnsupported`).
+
 Defaults are one worker, `1s` idle time, `5m` reservation duration, reservation
 batch size `1`, and the named default logger. Validation bounds are:
 
@@ -282,6 +288,10 @@ type JobsFailedRepository interface {
 type Transactor interface {
 	RunInTx(ctx context.Context, f func(context.Context) error) error
 }
+
+type TransactionCapabilities interface {
+	SupportsAtomicDLQ() bool
+}
 ```
 
 There are no legacy single-claim, unfiltered batch, unconditional delete, or
@@ -301,7 +311,10 @@ delivery IDs are idempotency boundaries.
 
 PostgreSQL, MySQL, and SQLite keep completed idempotency tombstones separately
 from active jobs. Hosts may prune them only after their replay, audit, and
-delivery retry windows. Picodata does not implement fan-out or unique puts.
+delivery retry windows. Exactly one active jobs table may own a given idempotency
+keys registry table; pruning across multiple active tables that share an idempotency
+table is unsupported. Custom active tables must configure dedicated idempotency
+tables via `jobsrepo.WithIdempotencyTable(...)`. Picodata does not implement fan-out or unique puts.
 
 ## Backend Boundaries
 

@@ -1,10 +1,10 @@
 .DEFAULT_GOAL := check
-.PHONY: full prepare check check-all generate fmt fmt-check fmt-core fmt-check-core fmt-backends fmt-check-backends lint lint-fix lint-core lint-fix-core vet vet-core vet-backends test test-full test-core test-full-core test-backends test-race-core test-integration test-integration-all test-integration-mysql test-integration-sqlite test-integration-pgsql test-integration-picodata cover-html bench-all release-ready-backends release-verify-backends release-readiness-core release-readiness-pgsql release-readiness-backends release-version-check devup devwait devwait-mysql devwait-pgsql devwait-picodata devdown
+.PHONY: full prepare check check-all generate fmt fmt-check fmt-core fmt-check-core fmt-backends fmt-check-backends lint lint-fix lint-core lint-fix-core vet vet-core vet-backends test test-full test-core test-full-core test-backends test-backends-standalone test-examples test-race-core test-integration test-integration-all test-integration-mysql test-integration-sqlite test-integration-pgsql test-integration-picodata cover-html bench-all release-ready-backends release-verify-backends release-readiness-core release-readiness-pgsql release-readiness-backends release-version-check devup devwait devwait-mysql devwait-pgsql devwait-picodata devdown
 BACKEND_DIRS := backends/mysql backends/sqlite backends/pgsql backends/picodata
 CORE_PKGS := ./outbox/... ./shared/... ./tools/...
 CORE_GO_FILES := $(shell find outbox shared tools -type f -name '*.go')
 BACKEND_GO_FILES := $(shell find backends -type f -name '*.go')
-CORE_VERSION ?= v0.12.0
+CORE_VERSION ?=
 TEST_OUTBOXLIB_MYSQL_ADDRESS_LOCAL ?= localhost
 TEST_OUTBOXLIB_MYSQL_PORT_LOCAL ?= 33306
 TEST_OUTBOXLIB_MYSQL_PASSWORD ?= tests-service
@@ -26,7 +26,7 @@ export TEST_OUTBOXLIB_PSQL_USERNAME TEST_OUTBOXLIB_PSQL_DATABASENAME
 export TEST_OUTBOXLIB_PICODATA_ADMIN_PASSWORD TEST_OUTBOXLIB_PICODATA_LISTEN_HTTP TEST_OUTBOXLIB_PICODATA_DSN
 
 release-version-check:
-	@test -n "$(CORE_VERSION)" || (echo "CORE_VERSION is required" && exit 2)
+	@test -n "$(CORE_VERSION)" || (echo "CORE_VERSION is required (e.g. make release-ready-backends CORE_VERSION=v0.13.1)" && exit 2)
 	@printf '%s\n' "$(CORE_VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
 		(echo "CORE_VERSION must be an exact semver tag" && exit 2)
 
@@ -55,7 +55,7 @@ full: prepare check
 
 prepare: generate fmt lint-fix
 
-check: fmt-check vet lint test-full
+check: fmt-check vet lint test-full-core test-backends-standalone test-examples
 check-all:
 	@status=0; \
 	$(MAKE) devup || status=$$?; \
@@ -79,7 +79,7 @@ fmt-core:
 fmt-check-core:
 	@unformatted="$$(gofumpt -l $(CORE_GO_FILES))"; \
 		test -z "$$unformatted" || { printf 'gofumpt changes are required:\n%s\nRun: make prepare\n' "$$unformatted" >&2; exit 1; }
-	@import_diff="$$(gci diff -s standard -s default -s "prefix(github.com/assurrussa/outbox)" $(CORE_GO_FILES))"; \
+	@import_diff="$$(gci diff -s standard -s default -s "prefix(github.com/assurrussa/outbox)" $(CORE_GO_FILES) < /dev/null)"; \
 		test -z "$$import_diff" || { printf 'gci changes are required:\n%s\nRun: make prepare\n' "$$import_diff" >&2; exit 1; }
 
 fmt-backends:
@@ -119,6 +119,20 @@ test-full-core:
 
 test-backends:
 	@for d in $(BACKEND_DIRS); do (cd $$d && go test ./...); done
+
+test-backends-standalone:
+	@for d in $(BACKEND_DIRS); do \
+		echo "==> test $$d standalone (GOWORK=off)"; \
+		(cd $$d && GOWORK=off go test ./...) || exit 1; \
+	done
+
+test-examples:
+	@for d in examples/*; do \
+		if [ -d "$$d" ]; then \
+			echo "==> build $$d (GOWORK=off)"; \
+			(cd "$$d" && GOWORK=off go build ./...) || exit 1; \
+		fi; \
+	done
 
 test-race-core:
 	go test -race -count=5 ./...

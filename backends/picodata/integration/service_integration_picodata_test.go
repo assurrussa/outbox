@@ -42,8 +42,8 @@ func NewTestPicodataSuite(t *testing.T, opts ...picodatatests.OptionDatabase) (c
 	return tests.NewSuite[*TestPicodataSuite](t, func(t *testing.T, ctx context.Context) *TestPicodataSuite {
 		db, dbHelper, cleanUp := picodatatests.PrepareDB(ctx, t, "TestJobsSuite", opts...)
 		trx := transaction.New(db.Pool())
-		jobsRepo := jobsrepo.Must(db, dbHelper.FnGetReplaceName("outbox_jobs"))
-		jobsFailedRepo := jobsfailedrepo.Must(db, dbHelper.FnGetReplaceName("outbox_jobs_failed"))
+		jobsRepo := jobsrepo.Must(db, jobsrepo.WithJobsTable(dbHelper.FnGetReplaceName("outbox_jobs")))
+		jobsFailedRepo := jobsfailedrepo.Must(db, jobsfailedrepo.WithFailedJobsTable(dbHelper.FnGetReplaceName("outbox_jobs_failed")))
 		log := logger.Discard()
 
 		outboxSvc, err := outbox.New(
@@ -54,6 +54,7 @@ func NewTestPicodataSuite(t *testing.T, opts ...picodatatests.OptionDatabase) (c
 			outbox.WithJobsStatRepo(jobsRepo),
 			outbox.WithJobsFailedRepo(jobsFailedRepo),
 			outbox.WithTransactor(trx),
+			outbox.WithAllowNonAtomicDLQ(),
 			outbox.WithLogger(log),
 		)
 		require.NoError(t, err)

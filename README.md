@@ -26,15 +26,21 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
-	sharedjob "github.com/assurrussa/outbox/shared/job"
 )
 
 type SendEmailJob struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 }
 
 func (*SendEmailJob) Name() string { return "send_email" }
@@ -42,7 +48,9 @@ func (*SendEmailJob) Name() string { return "send_email" }
 func (*SendEmailJob) Handle(_ context.Context, _ string) error { return nil }
 
 func main() {
-	ctx := context.Background()
+	// Use signal notification only as a shutdown trigger.
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	svc, err := outbox.New(
 		outbox.WithWorkers(1),
@@ -60,8 +68,35 @@ func main() {
 	emailJob := &SendEmailJob{}
 	svc.MustRegisterJob(emailJob)
 
-	go func() { _ = svc.Run(ctx) }()
-	_, _ = svc.Put(ctx, "send_email", `{"id":"1"}`, time.Now())
+	// Keep a separate run context active during graceful drain.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	group, groupCtx := errgroup.WithContext(runCtx)
+	group.Go(func() error {
+		return svc.Run(groupCtx)
+	})
+
+	if _, err := svc.Put(groupCtx, "send_email", `{"id":"1"}`, time.Now()); err != nil {
+		panic(err)
+	}
+
+	// Wait for shutdown trigger or worker failure.
+	select {
+	case <-sigCtx.Done():
+		stop()
+		// Drain new claims while in-flight jobs keep their lease heartbeats.
+		svc.BeginDrain()
+		// Cancel the run context only when the bounded drain deadline expires.
+		drainTimer := time.AfterFunc(10*time.Second, cancelRun)
+		defer drainTimer.Stop()
+	case <-groupCtx.Done():
+	}
+
+	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Printf("service stopped: %v\n", err)
+		os.Exit(1)
+	}
 }
 ```
 
@@ -201,7 +236,7 @@ set. There is no legacy or unfiltered execution mode.
 
 ```go
 type PublishV2Job struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 }
 
 func (*PublishV2Job) Name() string { return "cms.entry.publish" }
@@ -411,10 +446,10 @@ Release prep for backend modules:
 
 ```sh
 # pin all backend modules to a published core tag and refresh their sums
-make release-ready-backends CORE_VERSION=v0.12.0
+make release-ready-backends CORE_VERSION=v0.14.0
 
 # non-mutating exact-version pre-tag gate
-make release-readiness-backends CORE_VERSION=v0.12.0
+make release-readiness-backends CORE_VERSION=v0.14.0
 ```
 
 The commands above name the currently published stable core. Root releases are

@@ -17,7 +17,6 @@ import (
 	picotx "github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
-	sharedjob "github.com/assurrussa/outbox/shared/job"
 )
 
 func main() {
@@ -68,6 +67,7 @@ func run(ctx context.Context, log outboxlogger.Logger) error {
 		outbox.WithJobsRepo(jobs),
 		outbox.WithJobsFailedRepo(failed),
 		outbox.WithTransactor(trx),
+		outbox.WithAllowNonAtomicDLQ(),
 		outbox.WithLogger(log),
 	)
 	if err != nil {
@@ -110,7 +110,7 @@ type printPayload struct {
 }
 
 type printJob struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 	log outboxlogger.Logger
 }
 

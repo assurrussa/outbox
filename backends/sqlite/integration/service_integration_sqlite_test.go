@@ -169,7 +169,7 @@ func TestSQLiteRealBatchDLQUsesConfiguredFailedTable(t *testing.T) {
 		"CREATE TABLE batch_jobs_failed_custom AS SELECT * FROM jobs_failed WHERE 0",
 	)
 	require.NoError(t, err)
-	customFailedRepo := jobsfailedrepo.Must(ts.db, failedTable)
+	customFailedRepo := jobsfailedrepo.Must(ts.db, jobsfailedrepo.WithFailedJobsTable(failedTable))
 	service, err := outbox.New(
 		outbox.WithWorkers(1),
 		outbox.WithIdleTime(100*time.Millisecond),

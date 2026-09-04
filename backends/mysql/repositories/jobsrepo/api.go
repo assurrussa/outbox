@@ -788,8 +788,8 @@ func (r *Repo) registerUniqueBatchKeys(
 	exec transaction.TxExecutor,
 	prepared []preparedUniqueBatchPut,
 ) (map[string]storedUniqueBatchKey, error) {
-	query := `INSERT INTO outbox_job_idempotency_keys
-		(deduplication_key, job_id, fingerprint, created_at) VALUES ` +
+	query := sharedstrings.Concate(`INSERT INTO %s
+		(deduplication_key, job_id, fingerprint, created_at) VALUES `, r.idempotencyTableName) +
 		sqlValueRows(len(prepared), 4) +
 		` ON DUPLICATE KEY UPDATE deduplication_key = VALUES(deduplication_key);`
 	args := make([]any, 0, len(prepared)*4)
@@ -805,8 +805,8 @@ func (r *Repo) registerUniqueBatchKeys(
 		keys = append(keys, item.put.DeduplicationKey)
 	}
 	rows, err := exec.QueryContext(ctx,
-		`SELECT deduplication_key, job_id, fingerprint
-		FROM outbox_job_idempotency_keys WHERE deduplication_key IN (`+sqlPlaceholders(len(prepared))+`);`,
+		fmt.Sprintf(`SELECT deduplication_key, job_id, fingerprint
+		FROM %s WHERE deduplication_key IN (`+sqlPlaceholders(len(prepared))+`);`, r.idempotencyTableName),
 		keys...,
 	)
 	if err != nil {
@@ -874,19 +874,20 @@ func (r *Repo) createJobVersionedUnique(
 	jobID := types.NewJobID()
 	createdAt := time.Now().UTC()
 	fingerprint := jobFingerprint(name, schemaVersion, payload, availableAt)
-	insertKey := `INSERT INTO outbox_job_idempotency_keys
+	insertKey := fmt.Sprintf(`INSERT INTO %s
 		(deduplication_key, job_id, fingerprint, created_at)
 		VALUES (?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE deduplication_key = deduplication_key;`
+		ON DUPLICATE KEY UPDATE deduplication_key = deduplication_key;`, r.idempotencyTableName)
 	if _, err := exec.ExecContext(ctx, insertKey, deduplicationKey, jobID, fingerprint, createdAt); err != nil {
 		return coreoutbox.UniquePutResult{}, fmt.Errorf("register idempotency key: %w", err)
 	}
 
 	var storedJobID types.JobID
 	var storedFingerprint string
+	querySelectKey := fmt.Sprintf(`SELECT job_id, fingerprint FROM %s WHERE deduplication_key = ?;`, r.idempotencyTableName)
 	if err := exec.QueryRowContext(
 		ctx,
-		`SELECT job_id, fingerprint FROM outbox_job_idempotency_keys WHERE deduplication_key = ?;`,
+		querySelectKey,
 		deduplicationKey,
 	).Scan(&storedJobID, &storedFingerprint); err != nil {
 		return coreoutbox.UniquePutResult{}, fmt.Errorf("read idempotency key: %w", err)
@@ -916,21 +917,21 @@ func (r *Repo) PruneJobIdempotencyKeys(ctx context.Context, before time.Time, li
 	if limit < 1 || limit > 10_000 {
 		return 0, errors.New("limit must be between 1 and 10000")
 	}
-	query := `DELETE registry FROM outbox_job_idempotency_keys AS registry
+	query := fmt.Sprintf(`DELETE registry FROM %s AS registry
 		JOIN (
 			SELECT deduplication_key FROM (
 				SELECT candidate.deduplication_key
-				FROM outbox_job_idempotency_keys AS candidate
+				FROM %s AS candidate
 				WHERE candidate.created_at < ?
 					AND NOT EXISTS (
-						SELECT 1 FROM jobs
-						WHERE jobs.deduplication_key = candidate.deduplication_key
+						SELECT 1 FROM %s AS active
+						WHERE active.deduplication_key = candidate.deduplication_key
 					)
 				ORDER BY candidate.created_at, candidate.deduplication_key
 				LIMIT ?
 			) AS bounded
 		) AS candidates
-		ON candidates.deduplication_key = registry.deduplication_key;`
+		ON candidates.deduplication_key = registry.deduplication_key;`, r.idempotencyTableName, r.idempotencyTableName, r.tableName)
 	result, err := r.executor(ctx).ExecContext(ctx, query, before.UTC(), limit)
 	if err != nil {
 		return 0, err

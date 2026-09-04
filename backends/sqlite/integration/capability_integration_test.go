@@ -352,3 +352,177 @@ func (r *sqliteFailSecondDeliveryRepo) CreateJobVersionedUnique(
 		ctx, deduplicationKey, name, schemaVersion, payload, availableAt,
 	)
 }
+
+func TestSQLiteCustomTablePruneJobIdempotencyKeys(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+
+	_, err := ts.db.DB().ExecContext(ctx, `
+		CREATE TABLE outbox_custom_jobs AS SELECT * FROM jobs WHERE 0;
+	`)
+	require.NoError(t, err)
+
+	customRepo, err := jobsrepo.New(ts.db, jobsrepo.WithJobsTable("outbox_custom_jobs"))
+	require.NoError(t, err)
+
+	availableAt := time.Now().UTC()
+	dedupKey := "custom:test:prune"
+
+	// 1. Put versioned unique job into custom table
+	res, err := customRepo.CreateJobVersionedUniqueResult(
+		ctx, dedupKey, "custom.job", 1, `{"val":1}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.True(t, res.Created)
+
+	// 2. Active job in custom table must PROTECT the tombstone from pruning
+	pruned, err := customRepo.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	require.NoError(t, err)
+	require.Zero(t, pruned, "tombstone must not be pruned while active job exists in custom table")
+
+	// 3. Replay before job removal returns identical JobID
+	replayedRes, err := customRepo.CreateJobVersionedUniqueResult(
+		ctx, dedupKey, "custom.job", 1, `{"val":1}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.False(t, replayedRes.Created)
+	require.Equal(t, res.JobID, replayedRes.JobID)
+
+	// 4. Delete active job from custom table
+	_, err = ts.db.DB().ExecContext(ctx, "DELETE FROM outbox_custom_jobs WHERE id = ?", res.JobID.String())
+	require.NoError(t, err)
+
+	// 5. Now pruning should remove the tombstone
+	pruned, err = customRepo.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), pruned, "tombstone must be pruned after active job is deleted")
+
+	// 6. After prune, creating new job with same dedupKey succeeds with new JobID
+	newRes, err := customRepo.CreateJobVersionedUniqueResult(
+		ctx, dedupKey, "custom.job", 1, `{"val":2}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.True(t, newRes.Created)
+	require.NotEqual(t, res.JobID, newRes.JobID)
+
+	// 7. Verify pruning works when the default jobs table does NOT exist
+	_, err = ts.db.DB().ExecContext(ctx, "DROP TABLE jobs")
+	require.NoError(t, err)
+
+	prunedNoDefault, err := customRepo.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	require.NoError(t, err)
+	require.Zero(t, prunedNoDefault)
+}
+
+func TestSQLiteMultiTableIdempotencyIsolation(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+
+	_, err := ts.db.DB().ExecContext(ctx, `
+		CREATE TABLE tenant_a_jobs AS SELECT * FROM jobs WHERE 0;
+		CREATE TABLE tenant_a_idemp AS SELECT * FROM outbox_job_idempotency_keys WHERE 0;
+		CREATE UNIQUE INDEX tenant_a_idemp_key ON tenant_a_idemp(deduplication_key);
+		CREATE TABLE tenant_b_jobs AS SELECT * FROM jobs WHERE 0;
+		CREATE TABLE tenant_b_idemp AS SELECT * FROM outbox_job_idempotency_keys WHERE 0;
+		CREATE UNIQUE INDEX tenant_b_idemp_key ON tenant_b_idemp(deduplication_key);
+	`)
+	require.NoError(t, err)
+
+	repoA, err := jobsrepo.New(ts.db,
+		jobsrepo.WithJobsTable("tenant_a_jobs"),
+		jobsrepo.WithIdempotencyTable("tenant_a_idemp"),
+	)
+	require.NoError(t, err)
+
+	repoB, err := jobsrepo.New(ts.db,
+		jobsrepo.WithJobsTable("tenant_b_jobs"),
+		jobsrepo.WithIdempotencyTable("tenant_b_idemp"),
+	)
+	require.NoError(t, err)
+
+	availableAt := time.Now().UTC()
+	dedupKey := "shared:key:sqlite_isolation"
+
+	// 1. Put unique job in repoA
+	resA, err := repoA.CreateJobVersionedUniqueResult(
+		ctx, dedupKey, "tenant.job", 1, `{"tenant":"a"}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.True(t, resA.Created)
+
+	// 2. Prune in repoB must NOT touch tenant A's idempotency table
+	prunedB, err := repoB.PruneJobIdempotencyKeys(ctx, time.Now().UTC().Add(time.Minute), 10)
+	require.NoError(t, err)
+	require.Zero(t, prunedB)
+
+	// 3. Replay in repoA is still protected by its tombstone
+	replayA, err := repoA.CreateJobVersionedUniqueResult(
+		ctx, dedupKey, "tenant.job", 1, `{"tenant":"a"}`, availableAt,
+	)
+	require.NoError(t, err)
+	require.False(t, replayA.Created)
+	require.Equal(t, resA.JobID, replayA.JobID)
+}
+
+func TestSQLiteTableNameValidation(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+
+	_, err := jobsrepo.New(ts.db, jobsrepo.WithJobsTable(""))
+	require.Error(t, err)
+
+	_, err = jobsrepo.New(ts.db, jobsrepo.WithJobsTable("invalid;drop table"))
+	require.Error(t, err)
+
+	_, err = jobsrepo.New(ts.db, jobsrepo.WithJobsTable("123invalid"))
+	require.Error(t, err)
+
+	_, err = jobsrepo.New(ts.db, jobsrepo.WithJobsTable("a.b.c"))
+	require.Error(t, err)
+
+	_, err = jobsrepo.New(ts.db, jobsrepo.WithIdempotencyTable("invalid;drop table"))
+	require.Error(t, err)
+
+	// Valid simple identifier
+	valid, err := jobsrepo.New(ts.db,
+		jobsrepo.WithJobsTable("valid_table_name"),
+		jobsrepo.WithIdempotencyTable("valid_idemp_name"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, valid)
+
+	// Schema-qualified identifier
+	qualified, err := jobsrepo.New(ts.db,
+		jobsrepo.WithJobsTable("main.jobs"),
+		jobsrepo.WithIdempotencyTable("main.outbox_job_idempotency_keys"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, qualified)
+
+	// Reserved word as table name succeeds because identifier is quoted
+	reservedRepo, err := jobsrepo.New(ts.db,
+		jobsrepo.WithJobsTable("select"),
+		jobsrepo.WithIdempotencyTable("order"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, reservedRepo)
+
+	// Verify live execution against reserved word table name
+	_, err = ts.db.DB().ExecContext(ctx, `CREATE TABLE "select" AS SELECT * FROM jobs WHERE 0;`)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = ts.db.DB().ExecContext(ctx, `DROP TABLE IF EXISTS "select";`)
+	}()
+
+	createdID, err := reservedRepo.CreateJobVersioned(ctx, "test.job", 1, `{"val":1}`, time.Now().UTC())
+	require.NoError(t, err)
+	require.NotEqual(t, types.JobIDNil, createdID)
+
+	// Test jobsfailedrepo validation
+	_, err = jobsfailedrepo.New(ts.db, jobsfailedrepo.WithFailedJobsTable(""))
+	require.Error(t, err)
+
+	failedReserved, err := jobsfailedrepo.New(ts.db, jobsfailedrepo.WithFailedJobsTable("select"))
+	require.NoError(t, err)
+	require.NotNil(t, failedReserved)
+}

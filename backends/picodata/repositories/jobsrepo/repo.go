@@ -5,11 +5,24 @@ import (
 	"fmt"
 
 	"github.com/assurrussa/outbox/backends/picodata"
+	"github.com/assurrussa/outbox/backends/picodata/repositories"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/shared/strings"
 )
 
-const tableName = "outbox_jobs"
+const defaultTableName = "outbox_jobs"
+
+type Option func(*config)
+
+type config struct {
+	tableName string
+}
+
+// WithJobsTable sets a custom table name for active jobs.
+func WithJobsTable(tableName string) Option {
+	return func(c *config) {
+		c.tableName = tableName
+	}
+}
 
 type Repo struct {
 	client    picodata.Client
@@ -22,21 +35,35 @@ var (
 	_ coreoutbox.DeferJobsRepository = (*Repo)(nil)
 )
 
-func New(client picodata.Client, tableNames ...string) (*Repo, error) {
+func New(client picodata.Client, opts ...Option) (*Repo, error) {
 	if client == nil {
-		return nil, errors.New("outbox_jobs_failed: client is nil")
+		return nil, errors.New("picodata jobsrepo: client is nil")
+	}
+
+	cfg := config{
+		tableName: defaultTableName,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	quoted, err := repositories.ValidateAndQuoteTableName(cfg.tableName)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Repo{
 		client:    client,
-		tableName: strings.SelectFirst(tableName, tableNames...),
+		tableName: quoted,
 	}, nil
 }
 
-func Must(client picodata.Client, tableNames ...string) *Repo {
-	repo, err := New(client, tableNames...)
+func Must(client picodata.Client, opts ...Option) *Repo {
+	repo, err := New(client, opts...)
 	if err != nil {
-		panic(fmt.Errorf("fatal jobs failed repo: %w", err))
+		panic(fmt.Errorf("fatal jobs repo: %w", err))
 	}
 
 	return repo
