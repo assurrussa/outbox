@@ -3,7 +3,7 @@ module github.com/assurrussa/outbox/examples/base-app-sqlite
 go 1.26
 
 require (
-	github.com/assurrussa/outbox v0.13.0
+	github.com/assurrussa/outbox v0.14.0
 	github.com/assurrussa/outbox/backends/sqlite v0.0.0
 )
 
