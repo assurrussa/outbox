@@ -5,11 +5,24 @@ import (
 	"fmt"
 
 	"github.com/assurrussa/outbox/backends/sqlite"
+	"github.com/assurrussa/outbox/backends/sqlite/repositories"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/shared/strings"
 )
 
-const tableName = "jobs_failed"
+const defaultTableName = "jobs_failed"
+
+type Option func(*config)
+
+type config struct {
+	tableName string
+}
+
+// WithFailedJobsTable sets a custom table name for failed jobs.
+func WithFailedJobsTable(tableName string) Option {
+	return func(c *config) {
+		c.tableName = tableName
+	}
+}
 
 type Repo struct {
 	client    sqlite.Client
@@ -18,19 +31,33 @@ type Repo struct {
 
 var _ coreoutbox.JobsFailedRepository = (*Repo)(nil)
 
-func New(client sqlite.Client, tableNames ...string) (*Repo, error) {
+func New(client sqlite.Client, opts ...Option) (*Repo, error) {
 	if client == nil {
 		return nil, errors.New("sqlite jobsfailedrepo: client is nil")
 	}
 
+	cfg := config{
+		tableName: defaultTableName,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	quoted, err := repositories.ValidateAndQuoteTableName(cfg.tableName)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Repo{
 		client:    client,
-		tableName: strings.SelectFirst(tableName, tableNames...),
+		tableName: quoted,
 	}, nil
 }
 
-func Must(client sqlite.Client, tableNames ...string) *Repo {
-	repo, err := New(client, tableNames...)
+func Must(client sqlite.Client, opts ...Option) *Repo {
+	repo, err := New(client, opts...)
 	if err != nil {
 		panic(fmt.Errorf("fatal sqlite jobs failed repo: %w", err))
 	}

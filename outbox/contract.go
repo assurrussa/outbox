@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/assurrussa/outbox/outbox/models"
@@ -182,6 +183,38 @@ type JobsFailedRepository interface {
 // Transactor runs callbacks inside a transaction.
 type Transactor interface {
 	RunInTx(ctx context.Context, f func(context.Context) error) error
+}
+
+// TransactionCapabilities declares storage transactor capabilities.
+type TransactionCapabilities interface {
+	SupportsAtomicDLQ() bool
+}
+
+// HandlerPanicError captures panic details recovered during batch execution.
+type HandlerPanicError struct {
+	JobName string
+	Value   any
+	Stack   []byte
+}
+
+func (e *HandlerPanicError) Error() string {
+	return fmt.Sprintf("panic in batch job %q: %v", e.JobName, e.Value)
+}
+
+const (
+	defaultExecutionTimeout = 30 * time.Second
+	defaultMaxAttempts      = 30
+)
+
+// DefaultJob provides safe defaults for optional Job methods.
+type DefaultJob struct{}
+
+func (j DefaultJob) ExecutionTimeout() time.Duration {
+	return defaultExecutionTimeout
+}
+
+func (j DefaultJob) MaxAttempts() int {
+	return defaultMaxAttempts
 }
 
 type Job interface {

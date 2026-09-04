@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"runtime/debug"
 )
 
 type Manager struct {
@@ -13,6 +14,10 @@ type Manager struct {
 
 func New(db *sql.DB) *Manager {
 	return &Manager{db: db}
+}
+
+func (m *Manager) SupportsAtomicDLQ() bool {
+	return true
 }
 
 func (m *Manager) RunInTx(ctx context.Context, fn func(context.Context) error) (err error) {
@@ -33,7 +38,7 @@ func (m *Manager) RunInTx(ctx context.Context, fn func(context.Context) error) (
 
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("panic recovered: %v", r)
+			err = fmt.Errorf("panic recovered: %v\nstack:\n%s", r, debug.Stack())
 		}
 
 		if err == nil {

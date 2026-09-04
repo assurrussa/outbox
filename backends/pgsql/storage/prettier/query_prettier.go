@@ -34,7 +34,8 @@ func LogQuery(ctx context.Context, log logger.Logger, env string, sql string, op
 }
 
 func pretty(sql string, placeholder string, args ...any) string {
-	for i, param := range args {
+	for i := len(args) - 1; i >= 0; i-- {
+		param := args[i]
 		var value string
 		switch v := param.(type) {
 		case string:

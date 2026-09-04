@@ -15,7 +15,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
 
       - name: Test core
         run: go test -v ./...
@@ -35,10 +35,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
 
       - name: Test backend unit
         working-directory: backends/${{ matrix.backend }}
+        env:
+          GOWORK: "off"
         run: go test -v ./...
 
   backends-integration:
@@ -61,7 +63,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
 
       - name: Prepare integration env
         run: cp .env.example .env

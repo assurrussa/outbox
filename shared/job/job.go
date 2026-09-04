@@ -1,21 +1,10 @@
 package sharedjob
 
 import (
-	"time"
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 )
 
-const (
-	defaultExecutionTimeout = 30 * time.Second
-	defaultMaxAttempts      = 30
-)
-
-// DefaultJob is useful for embedding into other repo.
-type DefaultJob struct{}
-
-func (j DefaultJob) ExecutionTimeout() time.Duration {
-	return defaultExecutionTimeout
-}
-
-func (j DefaultJob) MaxAttempts() int {
-	return defaultMaxAttempts
-}
+// DefaultJob is retained for backwards compatibility.
+//
+// Deprecated: use outbox.DefaultJob instead.
+type DefaultJob = coreoutbox.DefaultJob

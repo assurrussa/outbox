@@ -28,6 +28,7 @@ func TestPicodataRejectsReservationBatchAboveOne(t *testing.T) {
 		outbox.WithJobsRepo(ts.jobsRepo),
 		outbox.WithJobsFailedRepo(ts.jobsFailedRepo),
 		outbox.WithTransactor(transaction.New(ts.db.Pool())),
+		outbox.WithAllowNonAtomicDLQ(),
 		outbox.WithLogger(logger.Discard()),
 	)
 	require.Nil(t, service)
@@ -216,4 +217,19 @@ func claimPicodataOne(
 		return models.Job{}, errors.New("claim returned an unexpected batch size")
 	}
 	return jobs[0], nil
+}
+
+func TestPicodataRejectsNonAtomicDLQWithoutOptIn(t *testing.T) {
+	ctx, _, ts := NewTestPicodataSuite(t)
+	defer ts.cleanUp(ctx)
+
+	service, err := outbox.New(
+		outbox.WithJobsRepo(ts.jobsRepo),
+		outbox.WithJobsFailedRepo(ts.jobsFailedRepo),
+		outbox.WithTransactor(transaction.New(ts.db.Pool())),
+		outbox.WithLogger(logger.Discard()),
+	)
+	require.Nil(t, service)
+	require.ErrorIs(t, err, outbox.ErrOption)
+	require.ErrorIs(t, err, outbox.ErrNonAtomicDLQUnsupported)
 }

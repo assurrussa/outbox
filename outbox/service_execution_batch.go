@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sort"
 	"time"
 
@@ -106,6 +107,19 @@ func (s *Service) findAndProcessExecutionBatch(
 		manager.forgetAll()
 		heartbeatErr := manager.stopAndWait()
 		return true, errors.Join(cause, heartbeatErr)
+	}
+	var panicErr *HandlerPanicError
+	if errors.As(handleErr, &panicErr) {
+		manager.forgetAll()
+		heartbeatErr := manager.stopAndWait()
+		log.ErrorContext(ctx, "batch handler panicked",
+			logger.Error(handleErr),
+			slog.String("job_name", capability.Name),
+			slog.Int64("schema_version", int64(capability.SchemaVersion)),
+			slog.Int("batch_size", len(selected)),
+			slog.String("stack", string(panicErr.Stack)),
+		)
+		return true, errors.Join(handleErr, heartbeatErr)
 	}
 
 	processErr := s.finishExecutionBatch(ctx, log, finishExecutionBatchInput{
@@ -478,7 +492,11 @@ func (s *Service) executeBatchHandler(
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result = BatchResult{}
-			err = fmt.Errorf("panic in batch job %q: %v", job.Name(), recovered)
+			err = &HandlerPanicError{
+				JobName: job.Name(),
+				Value:   recovered,
+				Stack:   debug.Stack(),
+			}
 		}
 	}()
 	result, err = job.HandleBatch(handlerCtx, items)
@@ -505,6 +523,10 @@ func (s *Service) finishExecutionBatch(
 	input finishExecutionBatchInput,
 ) error {
 	if input.handleErr != nil {
+		var panicErr *HandlerPanicError
+		if errors.As(input.handleErr, &panicErr) {
+			return input.handleErr
+		}
 		if len(input.result.Items) != 0 {
 			return errors.Join(
 				fmt.Errorf("%w: non-empty result with top-level error", ErrInvalidBatchResult),

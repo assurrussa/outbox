@@ -13,9 +13,17 @@ import (
 	outboxmocks "github.com/assurrussa/outbox/outbox/mocks"
 )
 
+type testAtomicMockTransactor struct {
+	*outboxmocks.MockTransactor
+}
+
+func (testAtomicMockTransactor) SupportsAtomicDLQ() bool {
+	return true
+}
+
 func TestCreate_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	mockTransactor := outboxmocks.NewMockTransactor(ctrl)
+	mockTransactor := testAtomicMockTransactor{MockTransactor: outboxmocks.NewMockTransactor(ctrl)}
 	mockJobsRepo := outboxmocks.NewMockJobsRepository(ctrl)
 	mockJobsRepo.EXPECT().MaxReservationBatchSize().Return(outbox.MaxReservationBatchSize)
 	mockJobsStatRepo := outboxmocks.NewMockJobsStatRepository(ctrl)
@@ -72,7 +80,7 @@ func TestCreate_WorkerCount(t *testing.T) {
 			srv, err := outbox.New(
 				outbox.WithWorkers(tt.workers),
 				outbox.WithLogger(logger.Discard()),
-				outbox.WithTransactor(outboxmocks.NewMockTransactor(ctrl)),
+				outbox.WithTransactor(testAtomicMockTransactor{MockTransactor: outboxmocks.NewMockTransactor(ctrl)}),
 				outbox.WithJobsRepo(jobsRepo),
 				outbox.WithJobsFailedRepo(outboxmocks.NewMockJobsFailedRepository(ctrl)),
 			)

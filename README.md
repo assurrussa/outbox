@@ -26,15 +26,18 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
-	sharedjob "github.com/assurrussa/outbox/shared/job"
 )
 
 type SendEmailJob struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 }
 
 func (*SendEmailJob) Name() string { return "send_email" }
@@ -60,8 +63,19 @@ func main() {
 	emailJob := &SendEmailJob{}
 	svc.MustRegisterJob(emailJob)
 
-	go func() { _ = svc.Run(ctx) }()
-	_, _ = svc.Put(ctx, "send_email", `{"id":"1"}`, time.Now())
+	group, ctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		return svc.Run(ctx)
+	})
+
+	if _, err := svc.Put(ctx, "send_email", `{"id":"1"}`, time.Now()); err != nil {
+		panic(err)
+	}
+
+	if err := group.Wait(); err != nil {
+		fmt.Printf("service stopped: %v\n", err)
+		os.Exit(1)
+	}
 }
 ```
 
@@ -201,7 +215,7 @@ set. There is no legacy or unfiltered execution mode.
 
 ```go
 type PublishV2Job struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 }
 
 func (*PublishV2Job) Name() string { return "cms.entry.publish" }
@@ -411,10 +425,10 @@ Release prep for backend modules:
 
 ```sh
 # pin all backend modules to a published core tag and refresh their sums
-make release-ready-backends CORE_VERSION=v0.12.0
+make release-ready-backends CORE_VERSION=v0.14.0
 
 # non-mutating exact-version pre-tag gate
-make release-readiness-backends CORE_VERSION=v0.12.0
+make release-readiness-backends CORE_VERSION=v0.14.0
 ```
 
 The commands above name the currently published stable core. Root releases are

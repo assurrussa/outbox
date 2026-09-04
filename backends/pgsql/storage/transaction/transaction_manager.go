@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/jackc/pgx/v5"
 
@@ -29,6 +30,10 @@ func New(db pgsql.Transactor) *Manager {
 	}
 }
 
+func (m *Manager) SupportsAtomicDLQ() bool {
+	return true
+}
+
 func (m *Manager) runTransaction(ctx context.Context, txOpts pgx.TxOptions, fn pgsql.FnCallback) (err error) {
 	// If it's nested Transaction, skip initiating a new one and return FnCallback
 	if tx := pgsql.GetTx(ctx); tx != nil {
@@ -44,7 +49,7 @@ func (m *Manager) runTransaction(ctx context.Context, txOpts pgx.TxOptions, fn p
 
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("panic recovered: %v", r)
+			err = fmt.Errorf("panic recovered: %v\nstack:\n%s", r, debug.Stack())
 		}
 
 		if err == nil {

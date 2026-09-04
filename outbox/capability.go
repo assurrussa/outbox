@@ -34,6 +34,12 @@ var (
 	ErrInvalidSchemaVersion          = errors.New("outbox schema version must be positive")
 	ErrLeaseLost                     = errors.New("outbox job lease lost")
 	ErrUnsupportedClaim              = errors.New("outbox repository claimed an unsupported capability")
+	ErrNonAtomicDLQUnsupported       = errors.New(
+		"outbox transactor does not support atomic DLQ; configure WithAllowNonAtomicDLQ() to accept best-effort delivery",
+	)
+	ErrTransactionCapabilitiesRequired = errors.New(
+		"outbox transactor must implement TransactionCapabilities or configure WithAllowNonAtomicDLQ()",
+	)
 )
 
 // JobCapability identifies a handler and persisted payload schema understood by a worker.

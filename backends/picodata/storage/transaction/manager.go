@@ -5,17 +5,30 @@ import (
 	"errors"
 
 	picogo "github.com/picodata/picodata-go"
+
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 )
 
-type Manager struct {
+// BestEffortRunner executes callbacks without atomic BEGIN/COMMIT because
+// the Picodata Go client does not expose connection-pinned SQL transactions.
+type BestEffortRunner struct {
 	pool *picogo.Pool
 }
 
-func New(pool *picogo.Pool) *Manager {
-	return &Manager{pool: pool}
+// Manager is retained for backwards compatibility.
+type Manager = BestEffortRunner
+
+var _ coreoutbox.Transactor = (*BestEffortRunner)(nil)
+
+func New(pool *picogo.Pool) *BestEffortRunner {
+	return &BestEffortRunner{pool: pool}
 }
 
-func (m *Manager) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+func (m *BestEffortRunner) SupportsAtomicDLQ() bool {
+	return false
+}
+
+func (m *BestEffortRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	if m == nil || m.pool == nil {
 		return errors.New("transaction manager is not configured")
 	}

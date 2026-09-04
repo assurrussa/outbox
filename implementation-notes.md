@@ -533,3 +533,107 @@ Decisions made:
   hits from 30 to 19, with the same six WAL records. Because the required
   size-dependent regression was absent, no forward migration replaces the
   existing capability-claim index in this iteration.
+
+## 2026-09-04: Review recommendations and patch release v0.13.1 preparations
+
+- Fixed `PruneJobIdempotencyKeys` in MySQL and SQLite backends to reference the
+  configured `r.tableName` instead of hardcoded `jobs`.
+- Added strict SQL identifier validation `^[A-Za-z_][A-Za-z0-9_]*$` for custom table
+  names in MySQL and SQLite `repo.New(...)`.
+- Refactored true-batch panic handling in `executeBatchHandler` and `executeExecutionBatch`:
+  panics are captured into `*HandlerPanicError` along with `debug.Stack()`. Panics do NOT
+  convert to `BatchJobOutcomeDefer` or decrement/compensate attempts. Leases are cleared
+  from memory via `manager.forgetAll()` for expiry-based recovery, and the error terminates
+  `Service.Run` fail-closed.
+- Introduced `TransactionCapabilities` interface (`SupportsAtomicDLQ() bool`) in `outbox`.
+  Picodata transactor implements `BestEffortRunner` returning `false`. `outbox.New` rejects
+  transactors without atomic DLQ unless explicitly permitted via `WithAllowNonAtomicDLQ()`.
+- Exported `outbox.DefaultJob` in the core package and aliased `shared/job.DefaultJob` to it
+  with deprecation notices.
+- Updated `README.md` canonical example to use `errgroup.WithContext(ctx)` instead of ignoring
+  `svc.Run` errors with `_ =`, and switched to `outbox.DefaultJob`.
+- Fixed placeholder substitution in PostgreSQL query prettier to substitute placeholders in
+  descending numerical order, preventing prefix collision with double-digit parameters (e.g. `$10`).
+- Removed default `CORE_VERSION ?= v0.12.0` in `Makefile` to prevent accidental version down-pinning.
+- Aligned Go version in GitHub Actions workflow with `go.mod` via `go-version-file: go.mod` to the CI workflow.
+
+## 2026-09-04: Second review resolution (P1 & P2 fixes, targeting v0.14.0)
+
+- **Single-Job Handler Timeout & Panic Semantics**:
+  - `executeJob` now checks `context.Cause(handlerCtx)`. When a single-job handler exceeds
+    `ExecutionTimeout()` and returns `nil`, `executeJob` returns the deadline exceeded cause
+    rather than treating it as success.
+  - In `processBatchJob`, deadline exceeded error does NOT call `ackBatch` (`DeleteJobWithLease`).
+    If attempts reached `MaxAttempts`, it moves to DLQ via `dlqBatch`; otherwise the lease
+    is forgotten in memory to be recovered upon lease expiration, and attempts count is preserved.
+  - Single-job panic handling adheres to the verified bounded-retry/DLQ contract: panics
+    are captured as `"panic in job %q: %v"` errors, retrying up to `MaxAttempts` before DLQ routing,
+    without crashing the worker loop (`TestRun_PanicInJobHandler_DoesNotCrashAndMovesToDLQ`).
+  - True-batch panic handling uses `*HandlerPanicError` with full stack traces (`debug.Stack()`),
+    forgets leases for expiry-based recovery without attempt compensation, and terminates the worker loop fail-closed.
+  - Added regression test in `outbox/service_single_timeout_regression_test.go`.
+
+- **Picodata Standalone Build Fix (`GOWORK=off`)**:
+  - Removed compile-time assertion `_ coreoutbox.TransactionCapabilities = (*BestEffortRunner)(nil)`
+    from `backends/picodata/storage/transaction/manager.go`. The method `SupportsAtomicDLQ() bool { return false }`
+    remains, satisfying the core interface via structural typing while allowing standalone builds
+    under `GOWORK=off` against core `v0.13.0`.
+
+- **Fail-Closed `TransactionCapabilities`**:
+  - Enforced `TransactionCapabilities` in `Options.Validate()`: transactors must implement
+    `TransactionCapabilities` or callers must pass `WithAllowNonAtomicDLQ()`.
+  - Added `SupportsAtomicDLQ() bool { return true }` to MySQL, SQLite, and PGSQL `transaction.Manager`.
+  - Added comprehensive core unit tests in `outbox/service_options_test.go` covering all 5 capability scenarios.
+
+- **Transaction Manager Panic Hardening**:
+  - Updated MySQL, SQLite, and PGSQL `RunInTx` / `runTransaction` to safely roll back and return
+    an error retaining the recovered value and the full stack trace (`debug.Stack()`), ensuring
+    diagnostic information is never lost while maintaining compatibility with callers expecting error returns.
+
+- **Table Identifier Validation & Quoting**:
+  - Implemented centralized `ValidateAndQuoteTableName` in `package repositories` for MySQL,
+    SQLite, and Picodata, shared by both `jobsrepo` and `jobsfailedrepo` within each backend module.
+  - MySQL: quotes identifiers with backticks (`` `table` `` or `` `db`.`table` ``), allowing SQL
+    reserved words (e.g. `select`, `order`) and schema-qualified names up to 64 chars per part.
+  - SQLite: quotes identifiers with double quotes (`"table"` or `"schema"."table"`), allowing SQL
+    reserved words and qualified names up to 1000 chars per part.
+  - Picodata: quotes identifiers with double quotes (`"table"`).
+  - Added live integration test `TestMySQLCustomTablePruneJobIdempotencyKeys` and dedicated unit tests in
+    `repositories/table_test.go` for all three backends.
+
+- **Documentation & CI**:
+  - Updated `README.md` and `RELEASING.md` to reference `v0.14.0`.
+  - Added detailed migration instructions in `MIGRATION.md` for `v0.13` -> `v0.14`.
+  - Added Makefile targets `test-backends-standalone` and `test-examples`.
+
+## 2026-09-04: Third review resolution (P1 multi-table prune, P2 example atomic DLQ, documentation, and CI gates)
+
+- **Configurable Idempotency Keys Registry (P1 Fix)**:
+  - Added functional options to MySQL and SQLite `jobsrepo`: `WithJobsTable(string)` and `WithIdempotencyTable(string)`.
+  - Parameterized all idempotency table queries in MySQL and SQLite `jobsrepo`:
+    `registerUniqueBatchKeys`, `createJobVersionedUnique`, and `PruneJobIdempotencyKeys` now use `r.idempotencyTableName`.
+  - Added `WithFailedJobsTable(string)` to `jobsfailedrepo` in MySQL, SQLite, and Picodata.
+  - Documented explicit multi-table idempotency rule in `MIGRATION.md` and `docs/contracts.md`: exactly one active jobs
+    table owns a given idempotency keys registry. Pruning across multiple active jobs tables sharing the same registry
+    is unsupported; each active table must configure a dedicated idempotency table via `WithIdempotencyTable(...)`.
+  - Added live integration tests `TestMySQLMultiTableIdempotencyIsolation` and `TestSQLiteMultiTableIdempotencyIsolation`.
+
+- **Example Atomic DLQ Contract Realism (P2 Fix)**:
+  - Updated `examples/base-app` `stubRepo.SupportsAtomicDLQ()` to return `false`, accurately reflecting its lack of transactional rollback.
+  - Added `outbox.WithAllowNonAtomicDLQ()` in `examples/base-app` service initialization.
+
+- **Documentation Alignment (P2 Fix)**:
+  - Corrected `MIGRATION.md` to accurately distinguish between single-job panic behavior (bounded retry up to `MaxAttempts` -> DLQ, worker loop continues) and true-batch panic behavior (`*HandlerPanicError` fail-closed worker termination with stack trace).
+  - Fixed `README.md` quick-start example error handling: checked error on `svc.Put` and handled `group.Wait()` error.
+
+- **Verification Gates & CI Workflow (P2 Fix)**:
+  - Updated `Makefile` `test-examples` to run with `GOWORK=off`.
+  - Connected `test-backends-standalone` and `test-examples` directly to `make check`.
+
+- **Contracts Documentation Alignment**:
+  - Added `TransactionCapabilities` interface (`SupportsAtomicDLQ() bool`) and explicit fail-closed construction rules to `docs/contracts.md`.
+- **Examples Verification Scope**:
+  - Maintained `examples/*` compilation check within local `make check` / `test-examples` without adding a dedicated CI workflow step for now.
+  - Updated PR #25 description to accurately state that `examples/*` verification is integrated into local `make check`.
+
+

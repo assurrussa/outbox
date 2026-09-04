@@ -800,6 +800,10 @@ func (r *capabilityRepo) RunInTx(ctx context.Context, fn func(context.Context) e
 	return fn(ctx)
 }
 
+func (r *capabilityRepo) SupportsAtomicDLQ() bool {
+	return true
+}
+
 func (r *capabilityRepo) Jobs() []models.Job {
 	r.mu.Lock()
 	defer r.mu.Unlock()

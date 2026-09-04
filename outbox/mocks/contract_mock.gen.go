@@ -577,6 +577,44 @@ func (mr *MockTransactorMockRecorder) RunInTx(ctx, f any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RunInTx", reflect.TypeOf((*MockTransactor)(nil).RunInTx), ctx, f)
 }
 
+// MockTransactionCapabilities is a mock of TransactionCapabilities interface.
+type MockTransactionCapabilities struct {
+	ctrl     *gomock.Controller
+	recorder *MockTransactionCapabilitiesMockRecorder
+	isgomock struct{}
+}
+
+// MockTransactionCapabilitiesMockRecorder is the mock recorder for MockTransactionCapabilities.
+type MockTransactionCapabilitiesMockRecorder struct {
+	mock *MockTransactionCapabilities
+}
+
+// NewMockTransactionCapabilities creates a new mock instance.
+func NewMockTransactionCapabilities(ctrl *gomock.Controller) *MockTransactionCapabilities {
+	mock := &MockTransactionCapabilities{ctrl: ctrl}
+	mock.recorder = &MockTransactionCapabilitiesMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockTransactionCapabilities) EXPECT() *MockTransactionCapabilitiesMockRecorder {
+	return m.recorder
+}
+
+// SupportsAtomicDLQ mocks base method.
+func (m *MockTransactionCapabilities) SupportsAtomicDLQ() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SupportsAtomicDLQ")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// SupportsAtomicDLQ indicates an expected call of SupportsAtomicDLQ.
+func (mr *MockTransactionCapabilitiesMockRecorder) SupportsAtomicDLQ() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SupportsAtomicDLQ", reflect.TypeOf((*MockTransactionCapabilities)(nil).SupportsAtomicDLQ))
+}
+
 // MockJob is a mock of Job interface.
 type MockJob struct {
 	ctrl     *gomock.Controller

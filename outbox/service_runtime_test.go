@@ -311,6 +311,10 @@ func (r *runtimeRepo) RunInTx(ctx context.Context, fn func(context.Context) erro
 	return fn(ctx)
 }
 
+func (r *runtimeRepo) SupportsAtomicDLQ() bool {
+	return true
+}
+
 func (r *runtimeRepo) JobsCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

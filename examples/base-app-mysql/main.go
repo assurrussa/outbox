@@ -17,7 +17,6 @@ import (
 	mysqltx "github.com/assurrussa/outbox/backends/mysql/storage/transaction"
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
-	sharedjob "github.com/assurrussa/outbox/shared/job"
 )
 
 func main() {
@@ -104,7 +103,7 @@ type printPayload struct {
 }
 
 type printJob struct {
-	sharedjob.DefaultJob
+	outbox.DefaultJob
 	log outboxlogger.Logger
 }
 
