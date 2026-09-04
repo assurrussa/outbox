@@ -636,9 +636,16 @@ Decisions made:
   - Maintained `examples/*` compilation check within local `make check` / `test-examples` without adding a dedicated CI workflow step for now.
   - Updated PR #25 description to accurately state that `examples/*` verification is integrated into local `make check`.
 
-- **Graceful Shutdown & Parent Context Cancellation in Example (P2 Fix)**:
-  - Updated `README.md` canonical consumer example to derive the parent context from a signal (`signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)`) or deadline rather than uncancelable `context.Background()`.
-  - Added `<-ctx.Done()`, `svc.BeginDrain()`, and cancellation before `group.Wait()`, ensuring `group.Wait()` does not hang indefinitely after processing queued work and establishing an explicit graceful shutdown path.
+- **Graceful Shutdown & Decoupled Run Context in Example (P2 Fix)**:
+  - Updated `README.md` canonical consumer example to decouple the signal context (`sigCtx`) from the worker execution context (`runCtx`).
+  - Signal notification triggers `svc.BeginDrain()` while in-flight jobs keep their lease heartbeats active.
+  - The worker context (`runCtx`) is canceled only after a bounded drain deadline (`time.AfterFunc(10*time.Second, cancelRun)`), ensuring graceful completion under normal conditions and fail-safe termination if a job exceeds the drain budget.
+  - `select` waits on both `sigCtx.Done()` and `groupCtx.Done()` so that early startup or fatal worker errors unblock immediately without hanging.
+
+- **Single Backend Traversal in `make check` (P1 Fix)**:
+  - Updated `Makefile` `check` target to depend on `test-full-core` instead of `test-full`.
+  - Avoids running backend tests twice (once via `test-full -> test-backends` and once via `test-backends-standalone`), preserving the documented single backend traversal contract while retaining standalone `GOWORK=off` verification.
+
 
 
 

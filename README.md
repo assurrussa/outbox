@@ -48,8 +48,8 @@ func (*SendEmailJob) Name() string { return "send_email" }
 func (*SendEmailJob) Handle(_ context.Context, _ string) error { return nil }
 
 func main() {
-	// Derive the parent context from a signal or deadline (e.g. context.WithTimeout).
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Use signal notification only as a shutdown trigger.
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	svc, err := outbox.New(
@@ -68,19 +68,30 @@ func main() {
 	emailJob := &SendEmailJob{}
 	svc.MustRegisterJob(emailJob)
 
-	group, ctx := errgroup.WithContext(ctx)
+	// Keep a separate run context active during graceful drain.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	group, groupCtx := errgroup.WithContext(runCtx)
 	group.Go(func() error {
-		return svc.Run(ctx)
+		return svc.Run(groupCtx)
 	})
 
-	if _, err := svc.Put(ctx, "send_email", `{"id":"1"}`, time.Now()); err != nil {
+	if _, err := svc.Put(groupCtx, "send_email", `{"id":"1"}`, time.Now()); err != nil {
 		panic(err)
 	}
 
-	// Drain and cancel the service before waiting for the run loop.
-	<-ctx.Done()
-	svc.BeginDrain()
-	stop()
+	// Wait for shutdown trigger or worker failure.
+	select {
+	case <-sigCtx.Done():
+		stop()
+		// Drain new claims while in-flight jobs keep their lease heartbeats.
+		svc.BeginDrain()
+		// Cancel the run context only when the bounded drain deadline expires.
+		drainTimer := time.AfterFunc(10*time.Second, cancelRun)
+		defer drainTimer.Stop()
+	case <-groupCtx.Done():
+	}
 
 	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Printf("service stopped: %v\n", err)

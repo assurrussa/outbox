@@ -55,7 +55,7 @@ full: prepare check
 
 prepare: generate fmt lint-fix
 
-check: fmt-check vet lint test-full test-backends-standalone test-examples
+check: fmt-check vet lint test-full-core test-backends-standalone test-examples
 check-all:
 	@status=0; \
 	$(MAKE) devup || status=$$?; \
