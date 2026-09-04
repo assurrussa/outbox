@@ -26,8 +26,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -45,7 +48,9 @@ func (*SendEmailJob) Name() string { return "send_email" }
 func (*SendEmailJob) Handle(_ context.Context, _ string) error { return nil }
 
 func main() {
-	ctx := context.Background()
+	// Derive the parent context from a signal or deadline (e.g. context.WithTimeout).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	svc, err := outbox.New(
 		outbox.WithWorkers(1),
@@ -72,7 +77,12 @@ func main() {
 		panic(err)
 	}
 
-	if err := group.Wait(); err != nil {
+	// Drain and cancel the service before waiting for the run loop.
+	<-ctx.Done()
+	svc.BeginDrain()
+	stop()
+
+	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Printf("service stopped: %v\n", err)
 		os.Exit(1)
 	}

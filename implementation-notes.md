@@ -636,4 +636,9 @@ Decisions made:
   - Maintained `examples/*` compilation check within local `make check` / `test-examples` without adding a dedicated CI workflow step for now.
   - Updated PR #25 description to accurately state that `examples/*` verification is integrated into local `make check`.
 
+- **Graceful Shutdown & Parent Context Cancellation in Example (P2 Fix)**:
+  - Updated `README.md` canonical consumer example to derive the parent context from a signal (`signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)`) or deadline rather than uncancelable `context.Background()`.
+  - Added `<-ctx.Done()`, `svc.BeginDrain()`, and cancellation before `group.Wait()`, ensuring `group.Wait()` does not hang indefinitely after processing queued work and establishing an explicit graceful shutdown path.
+
+
 
