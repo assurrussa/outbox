@@ -460,10 +460,10 @@ Release prep for backend modules:
 
 ```sh
 # pin all backend modules to a published core tag and refresh their sums
-make release-ready-backends CORE_VERSION=v0.14.0
+make release-ready-backends CORE_VERSION=v0.15.0
 
 # non-mutating exact-version pre-tag gate
-make release-readiness-backends CORE_VERSION=v0.14.0
+make release-readiness-backends CORE_VERSION=v0.15.0
 ```
 
 The commands above name the currently published stable core. Root releases are

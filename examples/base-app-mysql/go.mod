@@ -3,7 +3,7 @@ module github.com/assurrussa/outbox/examples/base-app-mysql
 go 1.26
 
 require (
-	github.com/assurrussa/outbox v0.14.0
+	github.com/assurrussa/outbox v0.15.0
 	github.com/assurrussa/outbox/backends/mysql v0.0.0
 )
 

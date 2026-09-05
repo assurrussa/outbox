@@ -2,7 +2,7 @@ module github.com/assurrussa/outbox/examples/base-app
 
 go 1.26
 
-require github.com/assurrussa/outbox v0.14.0
+require github.com/assurrussa/outbox v0.15.0
 
 require (
 	github.com/google/uuid v1.6.0 // indirect
