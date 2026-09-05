@@ -1,5 +1,21 @@
 # Implementation Notes
 
+## 2026-09-05: PR 29 PostgreSQL fan-out test completion
+
+- Reproduced the CI four-row failure by delaying the retry claim for 500ms
+  while retaining the old 300ms service deadline. The dispatcher remained
+  beside three deliveries; decoding it caused the secondary snapshot error.
+- The retry now waits for a successful persisted ACK, cancels and joins Run,
+  then asserts the exact delivery count and unique IDs. A 10s timeout bounds
+  failure only; the injected first ACK loss still must return ErrLeaseLost.
+- Kept the delayed claim as a deterministic regression and made the delivery
+  count assertion fatal before payload decoding. Runtime and workflow code
+  are unchanged; no jobs or matrix entries were added.
+- Validation: old deadline fails the regression; `make fmt-check-backends
+  test-integration-pgsql` passes against an isolated PostgreSQL under race.
+  gopls MCP cannot resolve this temporary workspace, so compilation/vet from
+  the package test command provides the code diagnostics.
+
 ## 2026-09-05: Lazy lease bounds and historical MySQL upgrade
 
 - Base: `d853a50`, branch `upgrade-logic-lib`. Keep public APIs, dependencies,

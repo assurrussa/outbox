@@ -32,10 +32,14 @@ public APIs, config keys, supported imports, runtime behavior, and release gates
 Read this repo's `AGENTS.md`, `README.md`, `docs/`, backend READMEs, examples,
 code, tests, and configs before shared wiki pages.
 
-When shared context is available, read these paths from the resolved wiki root:
-- `streams/wiki/index.md`
-- `streams/wiki/glossary.md`
+When shared context is needed, follow `streams/AGENTS.md` and its query route.
+Reuse already loaded root rules, PII policy and glossary. Open the known hub
+and only the topic relevant to the task:
+
 - `streams/wiki/platforms/outbox.md`
+
+Use `streams/wiki/index.md` only to locate an unknown area or answer an overview
+question. This is a task router, not a mandatory list of wiki pages.
 
 If local verified docs/code conflict with the shared wiki, treat the wiki as
 stale. When the task includes documentation upkeep, update the matching shared

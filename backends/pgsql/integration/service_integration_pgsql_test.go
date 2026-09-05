@@ -533,7 +533,7 @@ func TestFanoutCrashAfterCommitBeforeAckDoesNotDuplicateDeliveries(t *testing.T)
 
 	_, err := svc.PutFanout(ctx, event, targets, time.Now().UTC())
 	ts.Require().NoError(err)
-	err = runServiceFor(ctx, svc, 500*time.Millisecond)
+	err = runServiceFor(ctx, svc, 10*time.Second)
 	ts.Require().ErrorIs(err, outbox.ErrLeaseLost)
 
 	jobs, err := ts.jobsRepo.All(ctx)
@@ -551,12 +551,15 @@ func TestFanoutCrashAfterCommitBeforeAckDoesNotDuplicateDeliveries(t *testing.T)
 	}
 	ts.Require().False(retryAfter.IsZero())
 	time.Sleep(time.Until(retryAfter) + 100*time.Millisecond)
-	retrySvc := newFanoutIntegrationService(t, ts.jobsRepo, ts.jobsRepo, ts.jobsFailedRepo, txManager)
-	ts.Require().NoError(runServiceFor(ctx, retrySvc, 300*time.Millisecond))
+	// Exercise a claim slower than the old 300ms wall-clock run budget.
+	// Completion is the persisted dispatcher ACK, not elapsed runner time.
+	retryRepo := &notifyingAckRepo{Repo: ts.jobsRepo, acked: make(chan struct{})}
+	retrySvc := newFanoutIntegrationService(t, retryRepo, retryRepo, ts.jobsFailedRepo, txManager)
+	ts.Require().NoError(runServiceUntilAck(ctx, retrySvc, retryRepo.acked))
 
 	jobs, err = ts.jobsRepo.All(ctx)
 	ts.Require().NoError(err)
-	ts.Len(jobs, len(targets))
+	ts.Require().Len(jobs, len(targets))
 	assertUniqueIntegrationDeliveries(t, jobs)
 }
 
@@ -649,6 +652,66 @@ func runServiceFor(ctx context.Context, svc *outbox.Service, duration time.Durat
 	defer cancel()
 
 	return svc.Run(runCtx)
+}
+
+// runServiceUntilAck treats the timeout only as a failure bound and joins
+// Run before the caller inspects the database or tears it down.
+func runServiceUntilAck(ctx context.Context, svc *outbox.Service, acked <-chan struct{}) error {
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- svc.Run(runCtx) }()
+
+	select {
+	case <-acked:
+		cancel()
+		return <-done
+	case err := <-done:
+		if err != nil {
+			return err
+		}
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
+		return errors.New("service stopped before dispatcher ACK")
+	}
+}
+
+type notifyingAckRepo struct {
+	*jobsrepo.Repo
+	acked chan struct{}
+}
+
+func (r *notifyingAckRepo) FindAndReserveJobsForCapabilities(
+	ctx context.Context,
+	now time.Time,
+	until time.Time,
+	leaseToken outbox.LeaseToken,
+	capabilities []outbox.JobCapability,
+	limit int,
+) ([]outboxmodels.Job, error) {
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
+
+	return r.Repo.FindAndReserveJobsForCapabilities(ctx, now, until, leaseToken, capabilities, limit)
+}
+
+func (r *notifyingAckRepo) DeleteJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	affected, err := r.Repo.DeleteJobWithLease(ctx, jobID, leaseToken, now)
+	if err == nil && affected == 1 {
+		close(r.acked)
+	}
+	return affected, err
 }
 
 type loseFirstAckRepo struct {
