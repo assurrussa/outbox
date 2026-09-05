@@ -9,7 +9,7 @@ uses two phases so every backend resolves the exact published core tag; a local
 For the current stable release, run:
 
 ```sh
-make release-readiness-core CORE_VERSION=v0.14.0
+make release-readiness-core CORE_VERSION=v0.15.0
 ```
 
 Commit generated files before this gate. Tag and publish the root module only
@@ -26,17 +26,17 @@ After the core tag resolves without local replacements, update
 every backend `go.mod` to that exact core version and run:
 
 ```sh
-make release-readiness-backends CORE_VERSION=v0.14.0
+make release-readiness-backends CORE_VERSION=v0.15.0
 ```
 
 This gate uses `GOWORK=off`, verifies the actually resolved core version,
 checks tidiness, and runs each backend's standalone tests. Tag each module only
 after the complete gate passes:
 
-- `backends/pgsql/v0.14.0`;
-- `backends/mysql/v0.14.0`;
-- `backends/sqlite/v0.14.0`;
-- `backends/picodata/v0.14.0`.
+- `backends/pgsql/v0.15.0`;
+- `backends/mysql/v0.15.0`;
+- `backends/sqlite/v0.15.0`;
+- `backends/picodata/v0.15.0`.
 
 PostgreSQL, MySQL, and SQLite provide the complete capability/fencing/fan-out
 contract. Picodata provides only versioned create/claim, fenced
