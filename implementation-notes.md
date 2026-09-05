@@ -1,5 +1,83 @@
 # Implementation Notes
 
+## 2026-09-05: Lazy lease bounds and historical MySQL upgrade
+
+- Base: `d853a50`, branch `upgrade-logic-lib`. Keep public APIs, dependencies,
+  migration 00006, reservation bounds and finalization budgets unchanged.
+- Remove per-deletion minimum scans by retaining a conservative lease bound;
+  refresh when expiry/admission/finalization needs a stronger bound.
+- Document guarded manual recovery of completed MySQL keys from a trusted
+  external journal, with tests for the unrecoverable-history boundary.
+- Expand the core benchmark matrix to short/long leases and prefetch scaling;
+  compare identical harnesses in ten alternating before/after pairs.
+- New lease regressions and the exact documented MySQL repair statement pass,
+  including stale-byte/fingerprint guards and the lost-history boundary.
+- `make prepare` and `make check` pass; core race coverage is 83.0%. gopls MCP
+  reports no diagnostics for existing edited files. Its snapshot did not see
+  the new test file, so a fresh CLI `gopls check` with local Go caches verified
+  the full edited core file set without diagnostics.
+- `make test-integration-all` passed all four backend suites under the race
+  detector. Test containers were stopped before the performance comparison.
+- Ten alternating benchmark pairs passed acceptance: at 5m, prefetch 100/1000
+  time per job fell 27.15%/80.44% with unchanged extension counts and no
+  significant control slowdown. Full reproducible evidence is retained in
+  `docs/performance/lease-bound-20260905.md` and its linked artifacts.
+- Synchronized the shared Outbox contract and added an immutable verification
+  snapshot. Wiki lint passed with zero errors and 21 existing stale-source/page
+  warnings. Documentation links and measured-source checksums were verified.
+- PostgreSQL/NATS load campaigns remain in the separate GoMessenger work.
+
+## 2026-09-05: Follow-up code review
+
+- Reproduced two remaining defects: a finalizer could wait past its deadline
+  on the heartbeat mutex, and a successful claim racing cancellation discarded
+  known unstarted rows without compensating their attempts.
+- Finalizers now acquire the lease ledger with their existing deadline and
+  cancel the batch heartbeat if that wait expires. Public interfaces are intact.
+- All claim paths share the same lease deadline and cancellation cleanup.
+  Confirmed live rows with matching tokens are released after leaving the drain
+  claim lock. Expired, foreign, and ambiguous failed claims are left fenced.
+  A fill timeout cannot hide a cleanup failure.
+- Reproduction tests failed before the fixes and pass afterward. Additional
+  regressions cover all three claim paths, token/expiry filtering, duplicate
+  IDs, drain during cleanup, and normal/error/partial cleanup after MaxWait.
+- Verification passed `make prepare`, gopls (no diagnostics), `make check`, and
+  one complete `make test-integration-all` with the race detector on all four
+  backends. Local contracts and the shared Outbox wiki were synchronized with
+  a new immutable evidence snapshot. Wiki lint passed with zero errors and the
+  existing 21 stale-source/page warnings.
+
+## 2026-09-05: Delivery review corrections
+
+- Base: `6128bf7`, branch `upgrade-logic-lib`. Preserve public Go interfaces,
+  dependencies, published migrations, and the existing batch fill deadline.
+- Add exact MySQL identifier storage in migration 00006; Down explicitly fails.
+  Application rollback retains the new schema and existing idempotency records.
+- Share cancellation-independent SQLite cleanup across manual immediate
+  transactions; discard connections whose transaction state is uncertain.
+- Track confirmed lease deadlines, bound claims, guard handler admission, and
+  cover all outstanding rows for one shared finalization budget.
+- Arm the host shutdown timer before BeginDrain. Add deterministic regressions
+  and update local contracts plus the shared platform page after validation.
+- Lease extensions round their confirmed deadlines upward to milliseconds so
+  SQLite storage and the core ledger agree on the protected interval.
+- Verification passed `make prepare`, gopls diagnostics (none), and `make check`
+  including the existing late-nil timeout and tail-compensation regressions.
+- Lost-ACK recovery tests must wait for the persisted dispatcher `ReservedAt`,
+  since finalization now extends ownership beyond the initial reservation.
+  Adjusted the corresponding MySQL, SQLite, and PostgreSQL fixtures.
+- All four full race-enabled integration targets passed. After correcting the
+  lost-ACK fixtures, `make test-integration-all` completed MySQL and SQLite;
+  the remaining PostgreSQL and Picodata suites passed through
+  `make test-integration-pgsql test-integration-picodata`. Implementation sources
+  did not change after the successful source gate.
+- Synced the shared `platforms/outbox` page and added a sanitized raw validation
+  snapshot. Corrected the stale MaxWait description: supplemental claims already
+  use a remaining-fill child deadline in the base commit. Shared startup, graph,
+  source, link, and PII checks passed through `bash scripts/lint-streams.sh`
+  (zero errors; 21 pre-existing stale-page/source warnings).
+- Changes remain uncommitted and unreleased. No production migration was run.
+
 ## 2026-09-02: Add byte-bounded claims within the batch fill deadline
 
 - Added the optional `BoundedBatchJobsRepository` capability. PostgreSQL uses
@@ -645,7 +723,3 @@ Decisions made:
 - **Single Backend Traversal in `make check` (P1 Fix)**:
   - Updated `Makefile` `check` target to depend on `test-full-core` instead of `test-full`.
   - Avoids running backend tests twice (once via `test-full -> test-backends` and once via `test-backends-standalone`), preserving the documented single backend traversal contract while retaining standalone `GOWORK=off` verification.
-
-
-
-

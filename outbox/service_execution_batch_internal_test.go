@@ -680,6 +680,8 @@ func TestFillExecutionBatchHeartbeatsSelectedJobsAndStopsAtByteTail(t *testing.T
 	}
 	service := newExecutionBatchTestService(repo, &executionBatchTestFailedRepo{}, &executionBatchTestTransactor{})
 	service.reserveFor = 60 * time.Millisecond
+	initialJob.ReservedAt.Time = time.Now().UTC().Add(service.reserveFor)
+	selectedJob.ReservedAt.Time = initialJob.ReservedAt.Time
 	batchCtx, cancelBatch := context.WithCancelCause(t.Context())
 	manager := newBatchLeaseManager(
 		batchCtx,
@@ -1112,6 +1114,7 @@ func TestExecutionBatchFinalizationDeadlineScalesWithDLQItems(t *testing.T) {
 	outcomes := make([]BatchJobOutcome, batchSize)
 	for index := range batchSize {
 		jobs[index] = executionBatchTestJob(testBatchJobName, leaseToken)
+		jobs[index].ReservedAt.Time = time.Now().UTC().Add(time.Second)
 		outcomes[index] = dlqExecutionBatchOutcome(jobs[index], "permanent failure")
 	}
 

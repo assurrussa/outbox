@@ -73,7 +73,31 @@ the longest ordered prefix bounded by both message count and UTF-8 payload
 bytes. Custom repositories without it retain the compatible singleton claim
 loop.
 
-One owned heartbeat extends every unfinished row every `reserveFor / 3`. The
+Every claimed row must return its actual, valid `ReservedAt` deadline, still
+in the future. Each repository claim receives a child context capped by its
+requested lease deadline; an earlier parent or fill deadline wins. Initial
+claim timeout is an infrastructure failure. Supplemental fill timeout keeps
+the existing early-flush behavior. Repositories must honor cancellation during
+connection acquisition and SQL execution. A returned expired or missing lease
+is `ErrLeaseLost` and cannot enter a handler. If a successful claim returns after
+cancellation, its confirmed live rows are released with attempt compensation;
+cleanup runs outside the drain claim lock with an independent bounded context.
+Unknown or expired ownership is not released. A supplemental fill timeout cannot
+hide a failed cleanup.
+
+The lease manager tracks confirmed deadlines per unfinished row. Before each
+`Handle` and `HandleBatch`, it checks cancellation, drain, and live ownership;
+less than `reserveFor / 3` headroom triggers synchronous fenced renewal. Renewal
+must finish before the prior earliest lease deadline, match every requested
+row, and leave live leases after the call. No expired lease is resurrected.
+
+The cached earliest deadline may conservatively precede the actual minimum
+after a row is removed. Removal needs no remaining-row scan; a stronger bound
+is recomputed when admission or finalization needs it. Only confirmed live rows
+can advance that bound, including after a fenced extension.
+
+One owned heartbeat checks unfinished rows every `reserveFor / 3` and extends
+only those needing more time. Already longer leases are never shortened. The
 heartbeat goroutine is stopped and joined before releasing manager-owned
 unstarted rows or returning. Built-in bounded claims return only the admissible
 ordered prefix. The singleton fallback may reserve one candidate beyond the
@@ -94,11 +118,31 @@ Per-job outcomes are fenced:
 - an ordinary retriable error leaves that job reserved until its current lease
   expires and the worker continues with the next claimed row.
 
+Before any per-job ACK, retry, defer, or DLQ finalization, all outstanding leases
+cover one shared five-second deadline plus a one-second margin. Renewal and
+terminal SQL share that deadline; nested operations do not reset it. Waiting for
+an in-flight heartbeat to unlock the ledger is also bounded by that deadline;
+expiry cancels the batch heartbeat before cleanup. True batch
+finalization retains its additional per-DLQ-insert budget and uses the same
+deadline protection. This lets a bounded finalization hold the manager lock
+without exposing the waiting tail to another owner.
+
+Per-job protective renewal targets that required deadline plus `reserveFor`,
+so sequential finalizations can reuse the headroom. Short reservations remain
+supported but may require extra writes; longer reservations trade fewer renewals
+for longer recovery after an owner disappears. The host must account for the
+persisted lease deadline, which can exceed the initial reservation.
+
 `BeginDrain`, run cancellation, or an infrastructure/fence error releases only
 the unstarted tail. `ReleaseUnstartedJobsWithLease` clears its reservation and
 token and compensates the attempt added by that claim. The active row is never
 acknowledged merely because the run context ended. A crash or failed release
 leaves the claimed attempts intact.
+
+`BeginDrain()` waits for already-started repository claims. The host must arm
+its cancellation timer before calling it, so the same external deadline bounds
+both claim-admission shutdown and handler drain. The method signature is
+unchanged; repository cancellation remains cooperative.
 
 Delivery remains at-least-once. Fencing prevents a stale worker from deleting a
 row owned by a newer worker; it cannot make an external side effect exactly
@@ -328,6 +372,23 @@ the winning IDs in a short read-committed transaction. SQLite uses a short
 `BEGIN IMMEDIATE` and the standard runtime owns one pooled connection because
 SQLite is single-writer. PostgreSQL uses one ordered CTE `UPDATE ... RETURNING`
 statement.
+
+MySQL migration `00006` requires MySQL 8.0.17+ and stores deduplication keys as
+`VARBINARY(512)` in both active rows and the retained registry. Active and failed
+job names use `utf8mb4_0900_bin` for exact Unicode and trailing-space comparison.
+Apply it with writers and workers stopped, including equivalent host-owned
+custom schemas. Down is prohibited; application rollback retains this schema.
+Active key spellings are repaired from the job. Completed tombstones may have
+lost their original spelling under the old case-insensitive batch replay;
+retaining the fingerprint and ID does not restore it. The
+[MySQL upgrade procedure](../backends/mysql/docs/exact-identifier-upgrade.md)
+defines the inventory, external journal comparison and guarded manual repair.
+
+SQLite owns cleanup of its manual immediate transactions for both claim paths
+and single unique puts. Rollback uses a separate five-second uncancelled context;
+an ambiguous BEGIN or unsuccessful cleanup discards the connection. Original
+and cleanup errors are preserved, while caller-owned transactions remain under
+caller control.
 
 Picodata implements the same public slice contract but only for a single row
 and returns `1` from `MaxReservationBatchSize()`. Plural lease and release

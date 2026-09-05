@@ -1,5 +1,14 @@
 # Performance evidence
 
+## Core lease scheduling
+
+The [2026-09-05 lease-bound comparison](performance/lease-bound-20260905.md)
+measures the lazy minimum-bound change against `d853a50` using identical
+in-memory benchmark harnesses. At five-minute leases, prefetch 100/1000 time per
+job falls by 27.15%/80.44%, with unchanged extension counts and no significant
+slowdown in single or true-batch controls. This is core evidence, separate from
+the database-backed capacity series below.
+
 ## Confirmed true-batch capacity improvement
 
 The normalized GoMessenger PostgreSQL/NATS capacity series demonstrates that

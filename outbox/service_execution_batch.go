@@ -186,20 +186,9 @@ func (s *Service) claimExecutionBatchSingletonWithToken(
 	capability JobCapability,
 	leaseToken LeaseToken,
 ) ([]models.Job, error) {
-	now := time.Now().UTC()
-	s.claimMu.RLock()
-	defer s.claimMu.RUnlock()
-	if s.IsDraining() {
-		return nil, ErrServiceDraining
-	}
-	jobs, err := repo.FindAndReserveJobsForCapability(
-		ctx,
-		now,
-		now.Add(s.reserveFor),
-		leaseToken,
-		capability,
-		batchCollectorClaimLimit,
-	)
+	jobs, err := s.claimJobsWithLease(ctx, leaseToken, func(claimCtx context.Context, now, until time.Time) ([]models.Job, error) {
+		return repo.FindAndReserveJobsForCapability(claimCtx, now, until, leaseToken, capability, batchCollectorClaimLimit)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("find and reserve execution batch: %w", err)
 	}
@@ -216,22 +205,11 @@ func (s *Service) claimExecutionBatchBoundedWithToken(
 	limits BatchClaimLimits,
 	leaseToken LeaseToken,
 ) ([]models.Job, error) {
-	now := time.Now().UTC()
-	s.claimMu.RLock()
-	defer s.claimMu.RUnlock()
-	if s.IsDraining() {
-		return nil, ErrServiceDraining
-	}
-	jobs, err := repo.FindAndReserveJobsForCapabilityBounded(
-		ctx,
-		now,
-		now.Add(s.reserveFor),
-		leaseToken,
-		capability,
-		limits,
-	)
+	jobs, err := s.claimJobsWithLease(ctx, leaseToken, func(claimCtx context.Context, now, until time.Time) ([]models.Job, error) {
+		return repo.FindAndReserveJobsForCapabilityBounded(claimCtx, now, until, leaseToken, capability, limits)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("find and reserve bounded execution batch: %w", err)
+		return nil, fmt.Errorf("find and reserve execution batch: %w", err)
 	}
 	if err := validateClaimedExecutionBatch(jobs, capability, leaseToken, limits.MaxMessages); err != nil {
 		return nil, err
@@ -297,8 +275,8 @@ func validateClaimedExecutionBatch(
 				capability.SchemaVersion,
 			)
 		}
-		if job.LeaseToken != leaseToken {
-			return fmt.Errorf("%w: invalid lease token for job %s", ErrLeaseLost, job.ID)
+		if err := validateClaimedJobLease(job, leaseToken, time.Now().UTC()); err != nil {
+			return err
 		}
 		if _, duplicate := seen[job.ID]; duplicate {
 			return fmt.Errorf("%w: duplicate claimed job %s", ErrLeaseLost, job.ID)
@@ -320,10 +298,10 @@ func (s *Service) releaseClaimedBatchTail(ctx context.Context, token LeaseToken,
 	defer cancel()
 	affected, err := s.jobsRepo.ReleaseUnstartedJobsWithLease(finalizeCtx, ids, token, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("release batch byte-limit tail: %w", err)
+		return fmt.Errorf("release unstarted claimed jobs: %w", err)
 	}
 	if affected != int64(len(ids)) {
-		return fmt.Errorf("%w: released %d of %d byte-limit tail jobs", ErrLeaseLost, affected, len(ids))
+		return fmt.Errorf("%w: released %d of %d unstarted claimed jobs", ErrLeaseLost, affected, len(ids))
 	}
 	return nil
 }
@@ -431,6 +409,11 @@ func (s *Service) claimExecutionBatchWithinFillWindow(
 	cancelClaim()
 	if err == nil {
 		return jobs, false, nil
+	}
+	if errors.Is(err, errCancelledClaimCleanup) {
+		// A normal fill timeout must not hide a failed release of rows that
+		// the repository confirmed after cancellation.
+		return nil, false, err
 	}
 	if cause := context.Cause(ctx); cause != nil {
 		return nil, false, cause

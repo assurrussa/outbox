@@ -77,6 +77,24 @@ batch ordering. Claims remain functional with the original index from `00003`,
 but `00005` avoids a filesort over the supported backlog and should be applied
 before enabling workers from this release.
 
+Migration `00006_enforce_exact_identifiers.sql` makes both active and retained
+idempotency keys `VARBINARY(512)`. Capability names in active jobs and DLQ use
+`utf8mb4_0900_bin`; case, Unicode spelling, and trailing spaces remain distinct.
+MySQL 8.0.17 or newer is required for this collation. Existing IDs, fingerprints,
+payloads, and retention timestamps remain intact. Active registry keys are
+reconciled from their jobs. Completed rows may have lost their original key
+spelling under the old batch replay behavior; their historical deduplication
+requires external reconciliation. Follow the
+[exact identifier upgrade procedure](docs/exact-identifier-upgrade.md), including
+the guarded repair SQL. Previously suppressed messages cannot be reconstructed.
+
+Stop writers and workers before applying `00006`, including equivalent changes
+to host-managed custom tables. Apply the migration completely before restarting:
+MySQL DDL is committed per statement, so an interrupted upgrade must be resumed.
+`Down` deliberately fails because the old comparisons can collapse independent
+keys. Roll back the application while retaining the exact schema. Custom active
+and idempotency tables must use the same exact identifier definitions.
+
 `GetQueueStats` uses one exact grouped scan of the active queue. The host owns
 its polling frequency; the backend adds no cache or projection table.
 
