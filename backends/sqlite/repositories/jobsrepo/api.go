@@ -106,44 +106,13 @@ func (r *Repo) FindAndReserveJobsForCapabilityBounded(
 	if err := capability.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid capability: %w", err)
 	}
-	if tx := transaction.GetTx(ctx); tx != nil {
-		return r.findAndReserveBatchBoundedWithExecutor(
-			ctx,
-			tx,
-			now,
-			until,
-			leaseToken,
-			capability,
-			limits,
-		)
-	}
-
-	conn, err := r.client.DB().Conn(ctx)
+	var jobs []models.Job
+	err := r.withImmediateTransaction(ctx, func(exec sqlExecutor) error {
+		var claimErr error
+		jobs, claimErr = r.findAndReserveBatchBoundedWithExecutor(ctx, exec, now, until, leaseToken, capability, limits)
+		return claimErr
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout=5000;"); err != nil {
-		return nil, err
-	}
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE;"); err != nil {
-		return nil, err
-	}
-	jobs, err := r.findAndReserveBatchBoundedWithExecutor(
-		ctx,
-		conn,
-		now,
-		until,
-		leaseToken,
-		capability,
-		limits,
-	)
-	if err != nil {
-		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
-		return nil, err
-	}
-	if _, err := conn.ExecContext(ctx, "COMMIT;"); err != nil {
-		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
 		return nil, err
 	}
 	return jobs, nil
@@ -162,28 +131,13 @@ func (r *Repo) findAndReserveBatch(
 	if err := validateBatchClaim(leaseToken, limit); err != nil {
 		return nil, err
 	}
-	if tx := transaction.GetTx(ctx); tx != nil {
-		return r.findAndReserveBatchWithExecutor(ctx, tx, now, until, leaseToken, capabilities, limit)
-	}
-
-	conn, err := r.client.DB().Conn(ctx)
+	var jobs []models.Job
+	err := r.withImmediateTransaction(ctx, func(exec sqlExecutor) error {
+		var claimErr error
+		jobs, claimErr = r.findAndReserveBatchWithExecutor(ctx, exec, now, until, leaseToken, capabilities, limit)
+		return claimErr
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout=5000;"); err != nil {
-		return nil, err
-	}
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE;"); err != nil {
-		return nil, err
-	}
-	jobs, err := r.findAndReserveBatchWithExecutor(ctx, conn, now, until, leaseToken, capabilities, limit)
-	if err != nil {
-		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
-		return nil, err
-	}
-	if _, err := conn.ExecContext(ctx, "COMMIT;"); err != nil {
-		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
 		return nil, err
 	}
 	return jobs, nil
@@ -671,29 +625,15 @@ func (r *Repo) CreateJobVersionedUniqueResult(
 	if err := capability.Validate(); err != nil {
 		return coreoutbox.UniquePutResult{}, fmt.Errorf("validate capability: %w", err)
 	}
-	if tx := transaction.GetTx(ctx); tx != nil {
-		return r.createJobVersionedUnique(ctx, tx, deduplicationKey, name, schemaVersion, payload, availableAt)
-	}
-	conn, err := r.client.DB().Conn(ctx)
+	var result coreoutbox.UniquePutResult
+	err := r.withImmediateTransaction(ctx, func(exec sqlExecutor) error {
+		var putErr error
+		result, putErr = r.createJobVersionedUnique(ctx, exec, deduplicationKey, name, schemaVersion, payload, availableAt)
+		return putErr
+	})
 	if err != nil {
 		return coreoutbox.UniquePutResult{}, err
 	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE;"); err != nil {
-		return coreoutbox.UniquePutResult{}, err
-	}
-	result, err := r.createJobVersionedUnique(
-		ctx, conn, deduplicationKey, name, schemaVersion, payload, availableAt,
-	)
-	if err != nil {
-		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
-		return coreoutbox.UniquePutResult{}, err
-	}
-	if _, err := conn.ExecContext(ctx, "COMMIT;"); err != nil {
-		_, _ = conn.ExecContext(ctx, "ROLLBACK;")
-		return coreoutbox.UniquePutResult{}, err
-	}
-
 	return result, nil
 }
 

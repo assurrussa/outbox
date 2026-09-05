@@ -71,6 +71,12 @@ Concurrent direct repository users serialize at SQLite's writer boundary; the
 repository applies the busy timeout to every batch connection rather than only
 the first pooled connection.
 
+Manual immediate transactions used by claims and single unique puts always
+clean up before returning their connection. Rollback has a separate five-second
+context that survives work cancellation. An uncertain BEGIN or failed rollback
+discards the physical connection; cleanup errors retain the original error.
+An enclosing caller-owned transaction remains under the caller's control.
+
 `GetQueueStats` uses one exact grouped scan of the active queue. The host owns
 its polling frequency; the backend adds no cache or projection table.
 

@@ -231,7 +231,17 @@ func TestSQLiteFanoutLostAckDoesNotDuplicateDeliveries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, jobs, len(targets)+1)
 
-	time.Sleep(time.Second + 100*time.Millisecond)
+	// A failed ACK retains the finalization guard. Retry after the persisted
+	// lease expires instead of assuming the initial one-second reservation.
+	var retryAfter time.Time
+	for _, job := range jobs {
+		if job.Name == outbox.FanoutDispatcherJobName {
+			require.True(t, job.ReservedAt.Valid)
+			retryAfter = job.ReservedAt.Time
+		}
+	}
+	require.False(t, retryAfter.IsZero())
+	time.Sleep(time.Until(retryAfter) + 100*time.Millisecond)
 	retry := newSQLiteFanoutService(t, ts.jobsRepo, ts.jobsRepo, ts.jobsFailedRepo, txManager)
 	require.NoError(t, runSQLiteServiceFor(ctx, retry, 300*time.Millisecond))
 	jobs, err = ts.jobsRepo.All(ctx)

@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "samples_per_variant": 280,
+  "target_count": 4,
+  "target_results": [
+    "ExecutionPaths/prefetch-100-sequential/lease=10s-2               1.44k \u00b1 1%             1.05k \u00b1 1%  -27.31%  (p=0.000 n=10+10)",
+    "ExecutionPaths/prefetch-1000-sequential/lease=10s-2              4.94k \u00b1 3%             0.97k \u00b1 3%  -80.42%  (p=0.000 n=10+9)",
+    "ExecutionPaths/prefetch-100-sequential/lease=5m0s-2              1.44k \u00b1 1%             1.05k \u00b1 2%  -27.15%  (p=0.000 n=10+9)",
+    "ExecutionPaths/prefetch-1000-sequential/lease=5m0s-2             4.93k \u00b1 3%             0.96k \u00b1 2%  -80.44%  (p=0.000 n=10+9)"
+  ],
+  "significant_time_regressions_over_5_percent": []
+}

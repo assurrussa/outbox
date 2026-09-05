@@ -13,63 +13,76 @@ import (
 	"github.com/assurrussa/outbox/shared/types"
 )
 
-const executionBenchmarkJobsPerOperation = 100
+const executionBenchmarkJobsPerOperation = 1000
 
 //nolint:gocognit // One benchmark matrix keeps setup and per-job normalization identical across paths.
 func BenchmarkExecutionPaths(b *testing.B) {
 	benchmarks := []struct {
 		name     string
 		batchMax int
+		prefetch int
 	}{
-		{name: "single", batchMax: 0},
-		{name: "true-batch-1", batchMax: 1},
-		{name: "true-batch-100", batchMax: 100},
+		{name: "single", batchMax: 0, prefetch: 1},
+		{name: "prefetch-16-sequential", batchMax: 0, prefetch: 16},
+		{name: "prefetch-100-sequential", batchMax: 0, prefetch: 100},
+		{name: "prefetch-1000-sequential", batchMax: 0, prefetch: 1000},
+		{name: "true-batch-1", batchMax: 1, prefetch: 1},
+		{name: "true-batch-100", batchMax: 100, prefetch: 1},
+		{name: "true-batch-1000", batchMax: 1000, prefetch: 1},
 	}
 
-	for _, benchmark := range benchmarks {
-		b.Run(benchmark.name, func(b *testing.B) {
-			repo := newExecutionBenchmarkRepo()
-			service := newExecutionBenchmarkService(repo, benchmark.batchMax)
-			capability := JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion}
-			ctx := context.Background()
-			log := logger.Discard()
+	for _, reserveFor := range []time.Duration{time.Second, 5 * time.Second, 10 * time.Second, 5 * time.Minute} {
+		for _, benchmark := range benchmarks {
+			b.Run(benchmark.name+"/lease="+reserveFor.String(), func(b *testing.B) {
+				repo := newExecutionBenchmarkRepo()
+				service := newExecutionBenchmarkService(repo, benchmark.batchMax)
+				service.reserveFor = reserveFor
+				if benchmark.prefetch > 0 {
+					service.reservationBatchSize = benchmark.prefetch
+				}
+				capability := JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion}
+				ctx := context.Background()
+				log := logger.Discard()
 
-			runtime.GC()
-			var memoryBefore runtime.MemStats
-			var memoryAfter runtime.MemStats
-			runtime.ReadMemStats(&memoryBefore)
-			b.ResetTimer()
-			for range b.N {
-				repo.reset(executionBenchmarkJobsPerOperation)
-				if benchmark.batchMax == 0 {
-					for range executionBenchmarkJobsPerOperation {
-						if err := service.findAndProcessBatch(ctx, log, []JobCapability{capability}); err != nil {
+				runtime.GC()
+				var memoryBefore runtime.MemStats
+				var memoryAfter runtime.MemStats
+				runtime.ReadMemStats(&memoryBefore)
+				b.ResetTimer()
+				for range b.N {
+					repo.reset(executionBenchmarkJobsPerOperation)
+					if benchmark.batchMax == 0 {
+						for repo.remainingJobs() > 0 {
+							if err := service.findAndProcessBatch(ctx, log, []JobCapability{capability}); err != nil {
+								b.Fatal(err)
+							}
+						}
+						continue
+					}
+					for repo.remainingJobs() > 0 {
+						processed, err := service.findAndProcessExecutionBatch(ctx, log, capability)
+						if err != nil {
 							b.Fatal(err)
 						}
-					}
-					continue
-				}
-				for repo.remainingJobs() > 0 {
-					processed, err := service.findAndProcessExecutionBatch(ctx, log, capability)
-					if err != nil {
-						b.Fatal(err)
-					}
-					if !processed {
-						b.Fatal("execution batch did not process an available job")
+						if !processed {
+							b.Fatal("execution batch did not process an available job")
+						}
 					}
 				}
-			}
-			b.StopTimer()
-			runtime.ReadMemStats(&memoryAfter)
+				b.StopTimer()
+				runtime.ReadMemStats(&memoryAfter)
 
-			jobs := float64(b.N * executionBenchmarkJobsPerOperation)
-			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/jobs, "ns/job")
-			b.ReportMetric(float64(memoryAfter.TotalAlloc-memoryBefore.TotalAlloc)/jobs, "B/job")
-			b.ReportMetric(float64(memoryAfter.Mallocs-memoryBefore.Mallocs)/jobs, "allocs/job")
-			b.ReportMetric(float64(repo.claimCalls.Load())/jobs, "claims/job")
-			b.ReportMetric(float64(repo.handlerCalls.Load())/jobs, "handler-calls/job")
-			b.ReportMetric(float64(repo.finalizationCalls.Load())/jobs, "finalizations/job")
-		})
+				jobs := float64(b.N * executionBenchmarkJobsPerOperation)
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/jobs, "ns/job")
+				b.ReportMetric(float64(memoryAfter.TotalAlloc-memoryBefore.TotalAlloc)/jobs, "B/job")
+				b.ReportMetric(float64(memoryAfter.Mallocs-memoryBefore.Mallocs)/jobs, "allocs/job")
+				b.ReportMetric(float64(repo.claimCalls.Load())/jobs, "claims/job")
+				b.ReportMetric(float64(repo.handlerCalls.Load())/jobs, "handler-calls/job")
+				b.ReportMetric(float64(repo.finalizationCalls.Load())/jobs, "finalizations/job")
+				b.ReportMetric(float64(repo.leaseCalls.Load())/jobs, "lease-calls/job")
+				b.ReportMetric(float64(repo.leaseRows.Load())/jobs, "lease-rows/job")
+			})
+		}
 	}
 }
 
@@ -79,6 +92,8 @@ type executionBenchmarkRepo struct {
 	claimCalls        atomic.Int64
 	handlerCalls      atomic.Int64
 	finalizationCalls atomic.Int64
+	leaseCalls        atomic.Int64
+	leaseRows         atomic.Int64
 }
 
 func newExecutionBenchmarkRepo() *executionBenchmarkRepo {
@@ -91,6 +106,14 @@ func (r *executionBenchmarkRepo) reset(jobs int) {
 
 func (r *executionBenchmarkRepo) remainingJobs() int64 {
 	return r.remaining.Load()
+}
+
+func (r *executionBenchmarkRepo) ExtendJobLeases(
+	_ context.Context, jobIDs []types.JobID, _ LeaseToken, _, _ time.Time,
+) (int64, error) {
+	r.leaseCalls.Add(1)
+	r.leaseRows.Add(int64(len(jobIDs)))
+	return int64(len(jobIDs)), nil
 }
 
 func (r *executionBenchmarkRepo) FindAndReserveJobsForCapabilities(

@@ -1,0 +1,36 @@
+{
+  "base": "d853a50944e43b48c8051a893b0975dbb9aebb53",
+  "head": "d853a50944e43b48c8051a893b0975dbb9aebb53",
+  "working_tree_dirty": true,
+  "source_tree_sha256": {
+    "before": "81fe742058a22d2cdee9be636b618f3006731c80fa8371f24f800321d55547d3",
+    "after": "041a674ddca7f8b60528b292591d326ac4921add3e8b8aa17d7f4907d654037a"
+  },
+  "harness_sha256": "b13336945238a8617be7b5ee77ccb1a15032a21c962bfa1ce0f4ccaf822d5547",
+  "tracked_diff_sha256": "a53d50c6814afad101a5e6bece5355db79a20586f0bc0047e24579dbc1626b11",
+  "measured_sources_sha256": {
+    "before": "bfc9032d6992afabc0c092b2ace1ba983bf7b4aa1b76ea88661f0345186c977e",
+    "after": "9ad7f145a84b9fcccf5bd320a8ef286db341984bb77eaf6419f0aacf1377a317"
+  },
+  "go": "go version go1.27.0 darwin/arm64",
+  "benchstat_build": "benchstat: go1.18\n\tpath\tgolang.org/x/perf/cmd/benchstat\n\tmod\tgolang.org/x/perf\tv0.0.0-20220411212318-84e58bfe0a7e\th1:UBrvN5ammRQo0PdSto9IaLlVejsjN2EE3tXSbjkP3Bc=\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=1\n\tbuild\tCGO_CFLAGS=\n\tbuild\tCGO_CPPFLAGS=\n\tbuild\tCGO_CXXFLAGS=\n\tbuild\tCGO_LDFLAGS=\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin",
+  "host": {
+    "system": "Darwin",
+    "architecture": "arm64",
+    "cpu": "Apple M5 Pro"
+  },
+  "settings": {
+    "GOMAXPROCS": "2",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off",
+    "GOFLAGS": ""
+  },
+  "go_experiment": "",
+  "benchtime": "300ms",
+  "pairs": 10,
+  "order": "AB then BA, alternating",
+  "jobs_per_operation": 1000,
+  "scope": "in-memory core; no database or broker",
+  "started_at": "2026-09-05T06:14:22.901363+00:00",
+  "completed_at": "2026-09-05T06:18:42.507454+00:00"
+}

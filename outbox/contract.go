@@ -82,6 +82,11 @@ type Stats interface {
 // between one and limit jobs carrying the supplied non-zero lease token. When
 // no jobs are available, return ErrNoJobs instead of an empty successful
 // result; the latter is rejected as ErrEmptyReservationBatch.
+// Each claimed row must carry its actual, valid ReservedAt lease deadline.
+// Expired claims are rejected before handler admission. Operations must honor
+// their context, including the claim deadline and cancellation while acquiring
+// a connection. ExtendJobLeases must update only live leases with matching
+// tokens and report the number of affected rows.
 type JobsRepository interface {
 	CreateJobVersioned(
 		ctx context.Context,

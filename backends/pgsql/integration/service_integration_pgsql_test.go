@@ -540,7 +540,17 @@ func TestFanoutCrashAfterCommitBeforeAckDoesNotDuplicateDeliveries(t *testing.T)
 	ts.Require().NoError(err)
 	ts.Len(jobs, len(targets)+1)
 
-	time.Sleep(reserveFor + 100*time.Millisecond)
+	// A failed ACK retains the finalization guard. Retry after the persisted
+	// lease expires instead of assuming the initial reservation duration.
+	var retryAfter time.Time
+	for _, job := range jobs {
+		if job.Name == outbox.FanoutDispatcherJobName {
+			ts.Require().True(job.ReservedAt.Valid)
+			retryAfter = job.ReservedAt.Time
+		}
+	}
+	ts.Require().False(retryAfter.IsZero())
+	time.Sleep(time.Until(retryAfter) + 100*time.Millisecond)
 	retrySvc := newFanoutIntegrationService(t, ts.jobsRepo, ts.jobsRepo, ts.jobsFailedRepo, txManager)
 	ts.Require().NoError(runServiceFor(ctx, retrySvc, 300*time.Millisecond))
 

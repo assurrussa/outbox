@@ -43,13 +43,30 @@ race stress and HTML coverage are explicit `make test-race-core` and
 make bench-all
 ```
 
-`BenchmarkExecutionPaths` compares legacy single execution with the true-batch
-singleton control and a 100-item true batch. Besides standard benchmark output,
+`BenchmarkExecutionPaths` compares single execution, sequential prefetch of
+16/100/1000 jobs and true batches of 1/100/1000 jobs, with leases of 1s, 5s, 10s
+and 5m. Each operation processes 1000 jobs. Besides standard benchmark output,
 it reports `ns/job`, `B/job`, `allocs/job`, claim calls/job, handler calls/job,
-and finalization calls/job. This in-memory benchmark is a fast regression and
+finalization calls/job, lease extension calls/job and extended rows/job.
+This in-memory benchmark is a fast regression and
 mechanism diagnostic; it does not establish PostgreSQL/NATS capacity or a
 production advantage. The separate repeated PostgreSQL/NATS result and its
 scope are recorded in [performance evidence](performance.md).
+
+For an isolated before/after comparison of the current sources against a commit:
+
+```sh
+python3 scripts/compare-lease-benchmarks.py --base d853a50 --output /tmp/outbox-lease-comparison
+```
+
+The output directory must be new. The script needs Python 3, Go and `benchstat`
+on PATH. It copies both source trees, applies the identical current benchmark
+harness to both, builds binaries and runs ten alternating pairs at
+`GOMAXPROCS=2`, `GOGC=100`, `GOMEMLIMIT=off`, `-benchtime=300ms`, without race.
+It records source checksums, tool versions, raw samples and the comparison.
+Run after source checks and without concurrent tests or load campaigns. Compare
+per-job metrics and report statistical uncertainty; an improvement in core
+does not prove an improvement in database-backed throughput.
 
 ## Integration Services
 

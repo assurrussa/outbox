@@ -1,0 +1,381 @@
+diff --git a/README.md b/README.md
+index 17fc578..1a422f6 100644
+--- a/README.md
++++ b/README.md
+@@ -410,6 +410,11 @@ have elapsed.
+ 
+ Pick only the backend module you need for a project.
+ 
++Before upgrading a populated MySQL database to exact identifiers, follow the
++[migration 00006 reconciliation procedure](backends/mysql/docs/exact-identifier-upgrade.md).
++Active keys can be repaired from jobs; original key spellings of completed
++historical batch replays may require a trusted external journal.
++
+ - [MySQL backend](./backends/mysql/README.md)
+ - [SQLite backend](./backends/sqlite/README.md)
+ - [Postgres backend](./backends/pgsql/README.md)
+diff --git a/backends/mysql/README.md b/backends/mysql/README.md
+index e347c58..c88930b 100644
+--- a/backends/mysql/README.md
++++ b/backends/mysql/README.md
+@@ -81,8 +81,12 @@ Migration `00006_enforce_exact_identifiers.sql` makes both active and retained
+ idempotency keys `VARBINARY(512)`. Capability names in active jobs and DLQ use
+ `utf8mb4_0900_bin`; case, Unicode spelling, and trailing spaces remain distinct.
+ MySQL 8.0.17 or newer is required for this collation. Existing IDs, fingerprints,
+-payloads, and idempotency retention remain intact; previously suppressed messages
+-cannot be reconstructed by the migration.
++payloads, and retention timestamps remain intact. Active registry keys are
++reconciled from their jobs. Completed rows may have lost their original key
++spelling under the old batch replay behavior; their historical deduplication
++requires external reconciliation. Follow the
++[exact identifier upgrade procedure](docs/exact-identifier-upgrade.md), including
++the guarded repair SQL. Previously suppressed messages cannot be reconstructed.
+ 
+ Stop writers and workers before applying `00006`, including equivalent changes
+ to host-managed custom tables. Apply the migration completely before restarting:
+diff --git a/docs/contracts.md b/docs/contracts.md
+index 090f562..7a1949b 100644
+--- a/docs/contracts.md
++++ b/docs/contracts.md
+@@ -91,6 +91,11 @@ less than `reserveFor / 3` headroom triggers synchronous fenced renewal. Renewal
+ must finish before the prior earliest lease deadline, match every requested
+ row, and leave live leases after the call. No expired lease is resurrected.
+ 
++The cached earliest deadline may conservatively precede the actual minimum
++after a row is removed. Removal needs no remaining-row scan; a stronger bound
++is recomputed when admission or finalization needs it. Only confirmed live rows
++can advance that bound, including after a fenced extension.
++
+ One owned heartbeat checks unfinished rows every `reserveFor / 3` and extends
+ only those needing more time. Already longer leases are never shortened. The
+ heartbeat goroutine is stopped and joined before releasing manager-owned
+@@ -122,6 +127,12 @@ finalization retains its additional per-DLQ-insert budget and uses the same
+ deadline protection. This lets a bounded finalization hold the manager lock
+ without exposing the waiting tail to another owner.
+ 
++Per-job protective renewal targets that required deadline plus `reserveFor`,
++so sequential finalizations can reuse the headroom. Short reservations remain
++supported but may require extra writes; longer reservations trade fewer renewals
++for longer recovery after an owner disappears. The host must account for the
++persisted lease deadline, which can exceed the initial reservation.
++
+ `BeginDrain`, run cancellation, or an infrastructure/fence error releases only
+ the unstarted tail. `ReleaseUnstartedJobsWithLease` clears its reservation and
+ token and compensates the attempt added by that claim. The active row is never
+@@ -367,6 +378,11 @@ MySQL migration `00006` requires MySQL 8.0.17+ and stores deduplication keys as
+ job names use `utf8mb4_0900_bin` for exact Unicode and trailing-space comparison.
+ Apply it with writers and workers stopped, including equivalent host-owned
+ custom schemas. Down is prohibited; application rollback retains this schema.
++Active key spellings are repaired from the job. Completed tombstones may have
++lost their original spelling under the old case-insensitive batch replay;
++retaining the fingerprint and ID does not restore it. The
++[MySQL upgrade procedure](../backends/mysql/docs/exact-identifier-upgrade.md)
++defines the inventory, external journal comparison and guarded manual repair.
+ 
+ SQLite owns cleanup of its manual immediate transactions for both claim paths
+ and single unique puts. Rollback uses a separate five-second uncancelled context;
+diff --git a/docs/development.md b/docs/development.md
+index a8fa711..a1b650f 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -43,14 +43,31 @@ race stress and HTML coverage are explicit `make test-race-core` and
+ make bench-all
+ ```
+ 
+-`BenchmarkExecutionPaths` compares legacy single execution with the true-batch
+-singleton control and a 100-item true batch. Besides standard benchmark output,
++`BenchmarkExecutionPaths` compares single execution, sequential prefetch of
++16/100/1000 jobs and true batches of 1/100/1000 jobs, with leases of 1s, 5s, 10s
++and 5m. Each operation processes 1000 jobs. Besides standard benchmark output,
+ it reports `ns/job`, `B/job`, `allocs/job`, claim calls/job, handler calls/job,
+-and finalization calls/job. This in-memory benchmark is a fast regression and
++finalization calls/job, lease extension calls/job and extended rows/job.
++This in-memory benchmark is a fast regression and
+ mechanism diagnostic; it does not establish PostgreSQL/NATS capacity or a
+ production advantage. The separate repeated PostgreSQL/NATS result and its
+ scope are recorded in [performance evidence](performance.md).
+ 
++For an isolated before/after comparison of the current sources against a commit:
++
++```sh
++python3 scripts/compare-lease-benchmarks.py --base d853a50 --output /tmp/outbox-lease-comparison
++```
++
++The output directory must be new. The script needs Python 3, Go and `benchstat`
++on PATH. It copies both source trees, applies the identical current benchmark
++harness to both, builds binaries and runs ten alternating pairs at
++`GOMAXPROCS=2`, `GOGC=100`, `GOMEMLIMIT=off`, `-benchtime=300ms`, without race.
++It records source checksums, tool versions, raw samples and the comparison.
++Run after source checks and without concurrent tests or load campaigns. Compare
++per-job metrics and report statistical uncertainty; an improvement in core
++does not prove an improvement in database-backed throughput.
++
+ ## Integration Services
+ 
+ The Makefile exports safe local integration defaults. Copy the template only
+diff --git a/implementation-notes.md b/implementation-notes.md
+index 3e51e91..85c1bca 100644
+--- a/implementation-notes.md
++++ b/implementation-notes.md
+@@ -1,5 +1,26 @@
+ # Implementation Notes
+ 
++## 2026-09-05: Lazy lease bounds and historical MySQL upgrade
++
++- Base: `d853a50`, branch `upgrade-logic-lib`. Keep public APIs, dependencies,
++  migration 00006, reservation bounds and finalization budgets unchanged.
++- Remove per-deletion minimum scans by retaining a conservative lease bound;
++  refresh when expiry/admission/finalization needs a stronger bound.
++- Document guarded manual recovery of completed MySQL keys from a trusted
++  external journal, with tests for the unrecoverable-history boundary.
++- Expand the core benchmark matrix to short/long leases and prefetch scaling;
++  compare identical harnesses in ten alternating before/after pairs.
++- New lease regressions and the exact documented MySQL repair statement pass,
++  including stale-byte/fingerprint guards and the lost-history boundary.
++- `make prepare` and `make check` pass; core race coverage is 83.0%. gopls MCP
++  reports no diagnostics for existing edited files. Its snapshot did not see
++  the new test file, so a fresh CLI `gopls check` with local Go caches verified
++  the full edited core file set without diagnostics.
++- `make test-integration-all` passed all four backend suites under the race
++  detector. Test containers were stopped before the performance comparison.
++- Pending: final benchmark evidence and shared wiki synchronization.
++- PostgreSQL/NATS load campaigns remain in the separate GoMessenger work.
++
+ ## 2026-09-05: Follow-up code review
+ 
+ - Reproduced two remaining defects: a finalizer could wait past its deadline
+@@ -696,6 +717,3 @@ Decisions made:
+ - **Single Backend Traversal in `make check` (P1 Fix)**:
+   - Updated `Makefile` `check` target to depend on `test-full-core` instead of `test-full`.
+   - Avoids running backend tests twice (once via `test-full -> test-backends` and once via `test-backends-standalone`), preserving the documented single backend traversal contract while retaining standalone `GOWORK=off` verification.
+-
+-
+-
+diff --git a/outbox/service_batch.go b/outbox/service_batch.go
+index e0556b2..46d0a64 100644
+--- a/outbox/service_batch.go
++++ b/outbox/service_batch.go
+@@ -16,11 +16,13 @@ import (
+ const leaseFinalizationTimeout = 5 * time.Second
+ 
+ type batchLeaseManager struct {
+-	repo          JobsRepository
+-	leaseToken    LeaseToken
+-	reserveFor    time.Duration
+-	orderedIDs    []types.JobID
+-	outstanding   map[types.JobID]time.Time
++	repo        JobsRepository
++	leaseToken  LeaseToken
++	reserveFor  time.Duration
++	orderedIDs  []types.JobID
++	outstanding map[types.JobID]time.Time
++	// earliestUntil is a conservative lower bound. Removing a row cannot
++	// invalidate it; refresh only when a caller needs a stronger bound.
+ 	earliestUntil time.Time
+ 
+ 	mu          leaseMutex
+@@ -125,6 +127,7 @@ func (m *batchLeaseManager) ensureLeasesLocked(ctx context.Context, requiredUnti
+ 			jobIDs = append(jobIDs, jobID)
+ 		}
+ 	}
++	m.earliestUntil = earliest
+ 	if len(jobIDs) == 0 {
+ 		return nil
+ 	}
+@@ -155,11 +158,16 @@ func (m *batchLeaseManager) checkLeasesLocked(now time.Time) error {
+ 	if now.Before(m.earliestUntil) {
+ 		return nil
+ 	}
++	var earliest time.Time
+ 	for jobID, until := range m.outstanding {
+ 		if !until.After(now) {
+ 			return m.failLeaseLocked(fmt.Errorf("%w: expired lease for job %s", ErrLeaseLost, jobID))
+ 		}
++		if earliest.IsZero() || until.Before(earliest) {
++			earliest = until
++		}
+ 	}
++	m.earliestUntil = earliest
+ 	return nil
+ }
+ 
+@@ -203,8 +211,7 @@ func (m *batchLeaseManager) finalize(ctx context.Context, jobID types.JobID, fin
+ 	}
+ 	defer m.mu.Unlock()
+ 
+-	removedUntil, ok := m.outstanding[jobID]
+-	if !ok {
++	if _, ok := m.outstanding[jobID]; !ok {
+ 		return ErrLeaseLost
+ 	}
+ 	requiredUntil := deadline.Add(batchFinalizationMargin)
+@@ -219,8 +226,8 @@ func (m *batchLeaseManager) finalize(ctx context.Context, jobID types.JobID, fin
+ 		return err
+ 	}
+ 	delete(m.outstanding, jobID)
+-	if removedUntil.Equal(m.earliestUntil) || m.earliestUntil.IsZero() {
+-		m.recomputeEarliestLocked()
++	if len(m.outstanding) == 0 {
++		m.earliestUntil = time.Time{}
+ 	}
+ 	return nil
+ }
+@@ -273,10 +280,9 @@ func (m *batchLeaseManager) finalizeAll(
+ 
+ func (m *batchLeaseManager) forget(jobID types.JobID) {
+ 	m.mu.Lock()
+-	removedUntil, ok := m.outstanding[jobID]
+ 	delete(m.outstanding, jobID)
+-	if ok && (removedUntil.Equal(m.earliestUntil) || m.earliestUntil.IsZero()) {
+-		m.recomputeEarliestLocked()
++	if len(m.outstanding) == 0 {
++		m.earliestUntil = time.Time{}
+ 	}
+ 	m.mu.Unlock()
+ }
+diff --git a/outbox/service_execution_batch_benchmark_test.go b/outbox/service_execution_batch_benchmark_test.go
+index f7ab9f6..49895f3 100644
+--- a/outbox/service_execution_batch_benchmark_test.go
++++ b/outbox/service_execution_batch_benchmark_test.go
+@@ -13,7 +13,7 @@ import (
+ 	"github.com/assurrussa/outbox/shared/types"
+ )
+ 
+-const executionBenchmarkJobsPerOperation = 100
++const executionBenchmarkJobsPerOperation = 1000
+ 
+ //nolint:gocognit // One benchmark matrix keeps setup and per-job normalization identical across paths.
+ func BenchmarkExecutionPaths(b *testing.B) {
+@@ -23,58 +23,66 @@ func BenchmarkExecutionPaths(b *testing.B) {
+ 		prefetch int
+ 	}{
+ 		{name: "single", batchMax: 0, prefetch: 1},
++		{name: "prefetch-16-sequential", batchMax: 0, prefetch: 16},
+ 		{name: "prefetch-100-sequential", batchMax: 0, prefetch: 100},
++		{name: "prefetch-1000-sequential", batchMax: 0, prefetch: 1000},
+ 		{name: "true-batch-1", batchMax: 1, prefetch: 1},
+ 		{name: "true-batch-100", batchMax: 100, prefetch: 1},
++		{name: "true-batch-1000", batchMax: 1000, prefetch: 1},
+ 	}
+ 
+-	for _, benchmark := range benchmarks {
+-		b.Run(benchmark.name, func(b *testing.B) {
+-			repo := newExecutionBenchmarkRepo()
+-			service := newExecutionBenchmarkService(repo, benchmark.batchMax)
+-			if benchmark.prefetch > 0 {
+-				service.reservationBatchSize = benchmark.prefetch
+-			}
+-			capability := JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion}
+-			ctx := context.Background()
+-			log := logger.Discard()
+-
+-			runtime.GC()
+-			var memoryBefore runtime.MemStats
+-			var memoryAfter runtime.MemStats
+-			runtime.ReadMemStats(&memoryBefore)
+-			b.ResetTimer()
+-			for range b.N {
+-				repo.reset(executionBenchmarkJobsPerOperation)
+-				if benchmark.batchMax == 0 {
++	for _, reserveFor := range []time.Duration{time.Second, 5 * time.Second, 10 * time.Second, 5 * time.Minute} {
++		for _, benchmark := range benchmarks {
++			b.Run(benchmark.name+"/lease="+reserveFor.String(), func(b *testing.B) {
++				repo := newExecutionBenchmarkRepo()
++				service := newExecutionBenchmarkService(repo, benchmark.batchMax)
++				service.reserveFor = reserveFor
++				if benchmark.prefetch > 0 {
++					service.reservationBatchSize = benchmark.prefetch
++				}
++				capability := JobCapability{Name: testBatchJobName, SchemaVersion: DefaultSchemaVersion}
++				ctx := context.Background()
++				log := logger.Discard()
++
++				runtime.GC()
++				var memoryBefore runtime.MemStats
++				var memoryAfter runtime.MemStats
++				runtime.ReadMemStats(&memoryBefore)
++				b.ResetTimer()
++				for range b.N {
++					repo.reset(executionBenchmarkJobsPerOperation)
++					if benchmark.batchMax == 0 {
++						for repo.remainingJobs() > 0 {
++							if err := service.findAndProcessBatch(ctx, log, []JobCapability{capability}); err != nil {
++								b.Fatal(err)
++							}
++						}
++						continue
++					}
+ 					for repo.remainingJobs() > 0 {
+-						if err := service.findAndProcessBatch(ctx, log, []JobCapability{capability}); err != nil {
++						processed, err := service.findAndProcessExecutionBatch(ctx, log, capability)
++						if err != nil {
+ 							b.Fatal(err)
+ 						}
+-					}
+-					continue
+-				}
+-				for repo.remainingJobs() > 0 {
+-					processed, err := service.findAndProcessExecutionBatch(ctx, log, capability)
+-					if err != nil {
+-						b.Fatal(err)
+-					}
+-					if !processed {
+-						b.Fatal("execution batch did not process an available job")
++						if !processed {
++							b.Fatal("execution batch did not process an available job")
++						}
+ 					}
+ 				}
+-			}
+-			b.StopTimer()
+-			runtime.ReadMemStats(&memoryAfter)
+-
+-			jobs := float64(b.N * executionBenchmarkJobsPerOperation)
+-			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/jobs, "ns/job")
+-			b.ReportMetric(float64(memoryAfter.TotalAlloc-memoryBefore.TotalAlloc)/jobs, "B/job")
+-			b.ReportMetric(float64(memoryAfter.Mallocs-memoryBefore.Mallocs)/jobs, "allocs/job")
+-			b.ReportMetric(float64(repo.claimCalls.Load())/jobs, "claims/job")
+-			b.ReportMetric(float64(repo.handlerCalls.Load())/jobs, "handler-calls/job")
+-			b.ReportMetric(float64(repo.finalizationCalls.Load())/jobs, "finalizations/job")
+-		})
++				b.StopTimer()
++				runtime.ReadMemStats(&memoryAfter)
++
++				jobs := float64(b.N * executionBenchmarkJobsPerOperation)
++				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/jobs, "ns/job")
++				b.ReportMetric(float64(memoryAfter.TotalAlloc-memoryBefore.TotalAlloc)/jobs, "B/job")
++				b.ReportMetric(float64(memoryAfter.Mallocs-memoryBefore.Mallocs)/jobs, "allocs/job")
++				b.ReportMetric(float64(repo.claimCalls.Load())/jobs, "claims/job")
++				b.ReportMetric(float64(repo.handlerCalls.Load())/jobs, "handler-calls/job")
++				b.ReportMetric(float64(repo.finalizationCalls.Load())/jobs, "finalizations/job")
++				b.ReportMetric(float64(repo.leaseCalls.Load())/jobs, "lease-calls/job")
++				b.ReportMetric(float64(repo.leaseRows.Load())/jobs, "lease-rows/job")
++			})
++		}
+ 	}
+ }
+ 
+@@ -84,6 +92,8 @@ type executionBenchmarkRepo struct {
+ 	claimCalls        atomic.Int64
+ 	handlerCalls      atomic.Int64
+ 	finalizationCalls atomic.Int64
++	leaseCalls        atomic.Int64
++	leaseRows         atomic.Int64
+ }
+ 
+ func newExecutionBenchmarkRepo() *executionBenchmarkRepo {
+@@ -98,6 +108,14 @@ func (r *executionBenchmarkRepo) remainingJobs() int64 {
+ 	return r.remaining.Load()
+ }
+ 
++func (r *executionBenchmarkRepo) ExtendJobLeases(
++	_ context.Context, jobIDs []types.JobID, _ LeaseToken, _, _ time.Time,
++) (int64, error) {
++	r.leaseCalls.Add(1)
++	r.leaseRows.Add(int64(len(jobIDs)))
++	return int64(len(jobIDs)), nil
++}
++
+ func (r *executionBenchmarkRepo) FindAndReserveJobsForCapabilities(
+ 	_ context.Context,
+ 	_, until time.Time,

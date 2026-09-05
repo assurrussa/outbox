@@ -352,6 +352,8 @@ func (s *Service) Readiness(ctx context.Context) error {
 // can start another repository claim, while handlers for already reserved jobs
 // keep their original context and lease heartbeat until they finish or the
 // caller cancels the Run context at its bounded drain deadline.
+// Arm that deadline before calling BeginDrain: waiting for an already-started
+// claim is also part of draining, and repository calls must honor cancellation.
 func (s *Service) BeginDrain() {
 	if s == nil {
 		return

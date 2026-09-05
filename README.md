@@ -85,11 +85,11 @@ func main() {
 	select {
 	case <-sigCtx.Done():
 		stop()
-		// Drain new claims while in-flight jobs keep their lease heartbeats.
-		svc.BeginDrain()
-		// Cancel the run context only when the bounded drain deadline expires.
+		// Bound both claim-admission shutdown and in-flight handler drain.
 		drainTimer := time.AfterFunc(10*time.Second, cancelRun)
 		defer drainTimer.Stop()
+		// Drain new claims while in-flight jobs keep their lease heartbeats.
+		svc.BeginDrain()
 	case <-groupCtx.Done():
 	}
 
@@ -100,8 +100,11 @@ func main() {
 }
 ```
 
-For a graceful worker shutdown, first remove the process from readiness, then
-call `svc.BeginDrain()` without cancelling the `Run` context. After
+For a graceful worker shutdown, first remove the process from readiness and
+arm the host's drain deadline, then call `svc.BeginDrain()` without immediately
+cancelling the `Run` context. `BeginDrain` waits for already-started claims, so
+the timer must be armed before the call. Repository operations must honor their
+contexts, including while waiting for a pooled connection. After
 `BeginDrain` returns, no new repository claim can start; already reserved
 capability jobs keep their fenced lease heartbeat and may ack normally. Cancel
 the `Run` context only when the host's bounded drain deadline expires, so an
@@ -131,8 +134,13 @@ its own `MaxReservationBatchSize()`. The core maximum is exported as
 size above either maximum before workers start. PostgreSQL, MySQL, and SQLite
 return `1000`; Picodata returns `1`.
 
-One claim uses one fenced token and commits before any handler starts. A shared
-heartbeat extends the current and unstarted jobs. Successful jobs are deleted
+One claim uses one fenced token and commits before any handler starts. Claims
+are bounded by their requested lease deadline and must return a valid, unexpired
+`ReservedAt` for every row. Handler admission rechecks ownership deadlines and
+renews leases with insufficient headroom. A shared heartbeat protects the current
+and unstarted jobs. Before a per-job finalization can block that heartbeat, all
+unfinished leases cover its shared five-second budget plus a one-second margin.
+Successful jobs are deleted
 immediately and are not rolled back if a later job fails. An ordinary handler
 error leaves only that job reserved until its current lease expires and the
 worker continues through the batch. Infrastructure or fence errors stop the
@@ -272,8 +280,9 @@ DLQ. This is the safe rolling-deployment policy because one worker cannot know
 whether another worker supports the row. Cleanup or DLQ of unsupported work is
 an explicit administrative operation outside the worker contract.
 
-Supported jobs use fenced outcomes. Active leases are refreshed every
-`reserveFor / 3`; successful ack, `RetryAt`, and version-preserving DLQ deletion
+Supported jobs use fenced outcomes. Active leases are checked every
+`reserveFor / 3` and extended as needed, without shortening a longer confirmed
+lease; successful ack, `RetryAt`, and version-preserving DLQ deletion
 all require the same live token. `Permanent` and attempt exhaustion move a
 supported job to DLQ.
 
@@ -400,6 +409,11 @@ have elapsed.
 ## Backend modules
 
 Pick only the backend module you need for a project.
+
+Before upgrading a populated MySQL database to exact identifiers, follow the
+[migration 00006 reconciliation procedure](backends/mysql/docs/exact-identifier-upgrade.md).
+Active keys can be repaired from jobs; original key spellings of completed
+historical batch replays may require a trusted external journal.
 
 - [MySQL backend](./backends/mysql/README.md)
 - [SQLite backend](./backends/sqlite/README.md)
