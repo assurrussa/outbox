@@ -35,13 +35,14 @@ func (m *Manager) RunInTx(ctx context.Context, fn func(context.Context) error) (
 	}
 
 	ctx = WithTx(ctx, tx)
+	callbackReturned := false
 
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic recovered: %v\nstack:\n%s", r, debug.Stack())
 		}
 
-		if err == nil {
+		if callbackReturned && err == nil {
 			err = tx.Commit()
 			if err != nil {
 				err = fmt.Errorf("commit: %w", err)
@@ -54,5 +55,7 @@ func (m *Manager) RunInTx(ctx context.Context, fn func(context.Context) error) (
 		}
 	}()
 
-	return fn(ctx)
+	err = fn(ctx)
+	callbackReturned = true
+	return err
 }

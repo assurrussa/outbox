@@ -377,6 +377,9 @@ func (s *Service) findAndProcessBatch(
 		cancelBatch,
 	)
 
+	// Also join the heartbeat if a callback exits the worker via runtime.Goexit.
+	defer func() { _ = manager.stopAndWait() }()
+
 	var processErr error
 	for index := range jobs {
 		job := jobs[index]

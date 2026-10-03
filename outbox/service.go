@@ -21,6 +21,8 @@ var (
 	ErrServiceRunning    = errors.New("outbox service is already running")
 	ErrServiceNotRunning = errors.New("outbox service is not running")
 	ErrServiceDraining   = errors.New("outbox service is draining")
+	// ErrWorkerGoexit means a worker callback exited without returning.
+	ErrWorkerGoexit = errors.New("outbox worker exited via runtime.Goexit")
 )
 
 type Service struct {
@@ -209,7 +211,10 @@ func (s *Service) Run(ctx context.Context) error {
 	defer s.running.Store(false)
 	defer s.ready.Store(false)
 
-	eg, ctx := errgroup.WithContext(ctx)
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+	var workerExited atomic.Bool
+	eg, ctx := errgroup.WithContext(workerCtx)
 	singleCapabilities := s.registeredSingleCapabilities()
 	batchCapabilities := s.registeredBatchCapabilities()
 
@@ -219,13 +224,28 @@ func (s *Service) Run(ctx context.Context) error {
 			batchCursor: i,
 			preferBatch: i%2 == 0,
 		}
-		eg.Go(func() error { return s.runWorker(ctx, log, singleCapabilities, batchCapabilities, schedule) })
+		eg.Go(func() error {
+			returned := false
+			defer func() {
+				if !returned {
+					workerExited.Store(true)
+					cancelWorkers()
+				}
+			}()
+			err := s.runWorker(ctx, log, singleCapabilities, batchCapabilities, schedule)
+			returned = true
+			return err
+		})
 	}
 	if !s.IsDraining() {
 		s.ready.Store(true)
 	}
 
-	return eg.Wait()
+	err := eg.Wait()
+	if workerExited.Load() {
+		return errors.Join(err, ErrWorkerGoexit)
+	}
+	return err
 }
 
 func (s *Service) runWorker(

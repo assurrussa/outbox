@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -46,21 +47,24 @@ func (m *Manager) runTransaction(ctx context.Context, txOpts pgx.TxOptions, fn p
 	}
 
 	ctx = pgsql.WithTx(ctx, tx)
+	callbackReturned := false
 
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic recovered: %v\nstack:\n%s", r, debug.Stack())
 		}
 
-		if err == nil {
+		if callbackReturned && err == nil {
 			err = tx.Commit(ctx)
 			if err != nil {
 				err = fmt.Errorf("commit failed: %w", err)
 			}
 		}
 
-		if err != nil {
-			if errRollback := tx.Rollback(ctx); errRollback != nil {
+		if !callbackReturned || err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if errRollback := tx.Rollback(cleanupCtx); errRollback != nil {
 				err = errors.Join(err, fmt.Errorf("rollback failed: %w", errRollback))
 			}
 		}
@@ -68,7 +72,9 @@ func (m *Manager) runTransaction(ctx context.Context, txOpts pgx.TxOptions, fn p
 
 	// Handle the code inside the runTransaction. If the function
 	// fails, return the error and the defer function will roll back or commit otherwise.
-	return fn(ctx)
+	err = fn(ctx)
+	callbackReturned = true
+	return err
 }
 
 // RunInTx adapter for Trx DB.

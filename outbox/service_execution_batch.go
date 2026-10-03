@@ -78,6 +78,9 @@ func (s *Service) findAndProcessExecutionBatch(
 	batchCtx, cancelBatch := context.WithCancelCause(ctx)
 	defer cancelBatch(nil)
 	manager := newBatchLeaseManager(batchCtx, s.jobsRepo, jobs, leaseToken, s.reserveFor, cancelBatch)
+	// Also join the heartbeat if a callback exits the worker via runtime.Goexit.
+	defer func() { _ = manager.stopAndWait() }()
+
 	filled, fillErr := s.fillExecutionBatch(
 		batchCtx,
 		repo,

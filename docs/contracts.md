@@ -182,11 +182,17 @@ error:
 - item `DeferAt` compensates the claimed attempt and persists the exact time;
 - item `Permanent` or attempt exhaustion creates the failed row and deletes
   the active row atomically;
-- a transient top-level error, panic, timeout, retry, or defer compensates all
+- a transient top-level error, timeout, retry, or defer compensates all
   claimed attempts and reschedules the batch with a separate bounded
   capability retry streak;
-- top-level `Permanent` and structural result defects stop the service with no
-  ACK or DLQ.
+- top-level `Permanent`, handler panic, and structural result defects stop the
+  service with no ACK or DLQ.
+
+If a single or batch callback explicitly calls `runtime.Goexit`, `Run` cancels
+its remaining workers and returns `ErrWorkerGoexit`. The aborted claim stays
+leased for expiry-based recovery; it is not acknowledged or compensated.
+Heartbeat cleanup is joined before the worker exits. Ordinary returned errors
+and recovered panics retain their existing retry/fail-closed behavior.
 
 A defer pauses new claims for that exact capability until its durable time, so
 a broker outage cannot create a tight claim storm. A valid result resets the
@@ -398,3 +404,14 @@ backend does not expose the standard atomic runtime or fan-out contract.
 
 Existing migrations and schema-v1 defaults are preserved. Rows created before
 capability columns existed are interpreted as schema v1 with an empty lease.
+
+## Transaction Callback Cleanup
+
+MySQL, SQLite, and PostgreSQL transaction managers commit only when the owned
+callback returns normally without an error. An explicit `runtime.Goexit`
+unwinds without committing partial work. Existing panic-to-error recovery is
+preserved. Nested callbacks borrow the caller's transaction and do not finalize
+it independently. PostgreSQL rollback uses a separate five-second cleanup
+context retaining caller values, so cancellation of the transaction's work
+context does not suppress cleanup. A failed commit remains an error; cleanup
+does not turn an ambiguous commit result into a guaranteed rollback.
