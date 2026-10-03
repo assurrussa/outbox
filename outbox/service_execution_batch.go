@@ -78,6 +78,15 @@ func (s *Service) findAndProcessExecutionBatch(
 	batchCtx, cancelBatch := context.WithCancelCause(ctx)
 	defer cancelBatch(nil)
 	manager := newBatchLeaseManager(batchCtx, s.jobsRepo, jobs, leaseToken, s.reserveFor, cancelBatch)
+	processingFinished := false
+	defer func() {
+		if !processingFinished {
+			notifyWorkerExit(ctx)
+		}
+		// Cancel peers before joining an aborted worker's heartbeat.
+		_ = manager.stopAndWait()
+	}()
+
 	filled, fillErr := s.fillExecutionBatch(
 		batchCtx,
 		repo,
@@ -87,12 +96,14 @@ func (s *Service) findAndProcessExecutionBatch(
 		jobs,
 	)
 	if fillErr != nil {
+		processingFinished = true
 		heartbeatErr := manager.stopAndWait()
 		return true, errors.Join(fillErr, heartbeatErr, manager.releaseUnstarted(ctx))
 	}
 	selected := append([]models.Job(nil), filled...)
 	sortExecutionBatchJobs(selected)
 	if err := manager.admit(batchCtx, s.drain); err != nil {
+		processingFinished = true
 		heartbeatErr := manager.stopAndWait()
 		return true, errors.Join(err, heartbeatErr, manager.releaseUnstarted(ctx))
 	}
@@ -105,12 +116,14 @@ func (s *Service) findAndProcessExecutionBatch(
 	result, handleErr := s.executeBatchHandler(batchCtx, registration.job, handlerItems)
 	if cause := context.Cause(batchCtx); cause != nil {
 		manager.forgetAll()
+		processingFinished = true
 		heartbeatErr := manager.stopAndWait()
 		return true, errors.Join(cause, heartbeatErr)
 	}
 	var panicErr *HandlerPanicError
 	if errors.As(handleErr, &panicErr) {
 		manager.forgetAll()
+		processingFinished = true
 		heartbeatErr := manager.stopAndWait()
 		log.ErrorContext(ctx, "batch handler panicked",
 			logger.Error(handleErr),
@@ -132,6 +145,7 @@ func (s *Service) findAndProcessExecutionBatch(
 		// recovery instead of compensating them as unstarted work.
 		manager.forgetAll()
 	}
+	processingFinished = true
 	heartbeatErr := manager.stopAndWait()
 	if processErr == nil && heartbeatErr != nil {
 		processErr = heartbeatErr

@@ -377,6 +377,15 @@ func (s *Service) findAndProcessBatch(
 		cancelBatch,
 	)
 
+	processingFinished := false
+	defer func() {
+		if !processingFinished {
+			notifyWorkerExit(ctx)
+		}
+		// Cancel peers before joining an aborted worker's heartbeat.
+		_ = manager.stopAndWait()
+	}()
+
 	var processErr error
 	for index := range jobs {
 		job := jobs[index]
@@ -391,6 +400,7 @@ func (s *Service) findAndProcessBatch(
 		break
 	}
 
+	processingFinished = true
 	heartbeatErr := manager.stopAndWait()
 	if processErr == nil && heartbeatErr != nil {
 		processErr = heartbeatErr

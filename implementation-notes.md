@@ -739,3 +739,24 @@ Decisions made:
 - **Single Backend Traversal in `make check` (P1 Fix)**:
   - Updated `Makefile` `check` target to depend on `test-full-core` instead of `test-full`.
   - Avoids running backend tests twice (once via `test-full -> test-backends` and once via `test-backends-standalone`), preserving the documented single backend traversal contract while retaining standalone `GOWORK=off` verification.
+
+
+## 2026-10-02: Callback-exit and transaction-cleanup audit
+
+- Fixed all three atomic backend transaction managers committing on explicit
+  `runtime.Goexit`; owned commits now require normal callback completion.
+- PostgreSQL rollback now uses a bounded uncancelled context. Borrowed
+  transaction ownership, panic recovery, and commit/rollback error chains stay
+  unchanged. SQL commit failures retain database/sql's already-done behavior.
+- Worker callback Goexit is an uncommon explicit abnormal exit, distinct from
+  an ordinary returned error. Run now cancels peers, joins heartbeat cleanup,
+  and reports ErrWorkerGoexit. Claimed work remains for lease-expiry recovery.
+  A private Run-context notifier now cancels peers before deferred heartbeat
+  joins, so slow heartbeat cleanup cannot delay sibling cancellation. Normal
+  processing paths mark completion before their explicit heartbeat stop;
+  returned errors and recovered handler panics retain their existing behavior.
+  Deterministic two-worker tests hold cleanup open for both single and true-batch
+  handlers, checking peer cancellation, heartbeat joining, and caller isolation.
+- Regression tests use synthetic drivers/repositories only; no production
+  queues or databases are touched. The disk-full workspace required temporary
+  validation in /tmp; final aggregate gates are recorded separately.
