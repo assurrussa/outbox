@@ -46,6 +46,8 @@ type batchJobRegistration struct {
 	config normalizedBatchConfig
 }
 
+type workerExitContextKey struct{}
+
 type workerSchedule struct {
 	batchCursor int
 	preferBatch bool
@@ -214,6 +216,10 @@ func (s *Service) Run(ctx context.Context) error {
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
 	var workerExited atomic.Bool
+	workerCtx = context.WithValue(workerCtx, workerExitContextKey{}, func() {
+		workerExited.Store(true)
+		cancelWorkers()
+	})
 	eg, ctx := errgroup.WithContext(workerCtx)
 	singleCapabilities := s.registeredSingleCapabilities()
 	batchCapabilities := s.registeredBatchCapabilities()
@@ -228,8 +234,7 @@ func (s *Service) Run(ctx context.Context) error {
 			returned := false
 			defer func() {
 				if !returned {
-					workerExited.Store(true)
-					cancelWorkers()
+					notifyWorkerExit(ctx)
 				}
 			}()
 			err := s.runWorker(ctx, log, singleCapabilities, batchCapabilities, schedule)
@@ -246,6 +251,15 @@ func (s *Service) Run(ctx context.Context) error {
 		return errors.Join(err, ErrWorkerGoexit)
 	}
 	return err
+}
+
+// notifyWorkerExit cancels Run's peers before an aborted worker waits for
+// heartbeat cleanup. The outer worker guard remains a fallback for exits that
+// happen before a lease manager exists.
+func notifyWorkerExit(ctx context.Context) {
+	if notify, ok := ctx.Value(workerExitContextKey{}).(func()); ok {
+		notify()
+	}
 }
 
 func (s *Service) runWorker(

@@ -751,6 +751,12 @@ Decisions made:
 - Worker callback Goexit is an uncommon explicit abnormal exit, distinct from
   an ordinary returned error. Run now cancels peers, joins heartbeat cleanup,
   and reports ErrWorkerGoexit. Claimed work remains for lease-expiry recovery.
+  A private Run-context notifier now cancels peers before deferred heartbeat
+  joins, so slow heartbeat cleanup cannot delay sibling cancellation. Normal
+  processing paths mark completion before their explicit heartbeat stop;
+  returned errors and recovered handler panics retain their existing behavior.
+  Deterministic two-worker tests hold cleanup open for both single and true-batch
+  handlers, checking peer cancellation, heartbeat joining, and caller isolation.
 - Regression tests use synthetic drivers/repositories only; no production
   queues or databases are touched. The disk-full workspace required temporary
   validation in /tmp; final aggregate gates are recorded separately.
