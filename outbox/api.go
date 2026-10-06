@@ -11,6 +11,8 @@ import (
 	"github.com/assurrussa/outbox/shared/types"
 )
 
+var _ Stats = (*Service)(nil)
+
 func (s *Service) Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
 	return s.PutVersioned(ctx, name, DefaultSchemaVersion, payload, availableAt)
 }
@@ -132,6 +134,11 @@ func (s *Service) PutVersionedUniqueBatch(
 	}
 
 	return results, nil
+}
+
+// QueueStats implements Stats with the same behavior as GetQueueStats.
+func (s *Service) QueueStats(ctx context.Context) (QueueStats, error) {
+	return s.GetQueueStats(ctx)
 }
 
 // GetQueueStats returns queue totals when JobsStatRepository is configured.

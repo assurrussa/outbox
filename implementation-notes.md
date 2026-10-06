@@ -760,3 +760,25 @@ Decisions made:
 - Regression tests use synthetic drivers/repositories only; no production
   queues or databases are touched. The disk-full workspace required temporary
   validation in /tmp; final aggregate gates are recorded separately.
+
+
+## 2026-10-06: Additive listing cursors and Stats compatibility
+
+- Added backend-local `PageCursor` structural aliases and `ListPage` to MySQL,
+  SQLite, and Picodata active/DLQ repositories. This avoids making standalone
+  backend builds depend on an unpublished core API; core pins stay at v0.16.0.
+  The aliases share an API shape, not a cross-database cursor value contract.
+- Kept `ListPaged` unchanged and documented its equal-timestamp omission and
+  deprecation. No PostgreSQL listing API, new migration, retry framework,
+  worker algorithm, replay, or observer was added.
+- Bounded new pages to 1000 rows (default 10). Cursor timestamps retain each
+  backend's stored precision; the DLQ tie-breaker is the failed-row primary ID.
+- Added `Service.QueueStats` as a delegating compatibility method, preserving
+  the existing `Stats` interface and `GetQueueStats` implementation.
+- Integration regressions exercise 12 equal-time rows across a 10-row page,
+  multiple adjacent timestamp groups, deterministic ordering, serialization,
+  timezone equivalence, custom tables, defaults, end cursors, and cancellation.
+  Each backend's standalone consumer compile test checks both API signatures.
+- Local validation uses the available disposable services. Hosted CI remains
+  required for backend/version combinations not available in the task runtime;
+  SQLite results are not a substitute for MySQL or Picodata integration.

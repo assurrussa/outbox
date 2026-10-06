@@ -167,7 +167,7 @@ type FanoutMaintenanceRepository interface {
 // JobsStatRepository provides access to outbox queue stats.
 //
 // Optional:
-// this repository is required only when calling Service.GetQueueStats.
+// this repository is required only when calling Service.QueueStats or Service.GetQueueStats.
 // The worker flow (Put/Run processing) works without it.
 type JobsStatRepository interface {
 	GetQueueStats(ctx context.Context, observedAt time.Time) (QueueStats, error)

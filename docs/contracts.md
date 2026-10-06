@@ -415,3 +415,24 @@ it independently. PostgreSQL rollback uses a separate five-second cleanup
 context retaining caller values, so cancellation of the transaction's work
 context does not suppress cleanup. A failed commit remains an error; cleanup
 does not turn an ambiguous commit result into a guaranteed rollback.
+
+## Listing And Stats Compatibility
+
+MySQL, SQLite, and Picodata expose additive `ListPage` methods for active and
+failed rows. They use exclusive `(created_at, id)` boundaries and descending
+ordering on both fields. Backend-root `PageCursor` aliases have the same
+structural type, while cursor values remain scoped to one backend/table.
+Nil starts at the newest row; the last row's exact `CreatedAt` and `ID` start
+the next page. For DLQ cursors this is the failed-row ID, not its source job ID.
+Non-positive limits default to 10, limits above 1000 are rejected. A non-nil cursor uses both fields, including
+zero values when present in stored rows. An empty page is the end, not `ErrNoJobs`.
+Listings are live, with no snapshot isolation between calls.
+
+The deprecated `ListPaged` signatures and strict time-only filtering are
+unchanged. Equal-time rows at its page boundaries can be omitted. PostgreSQL
+has neither this legacy listing nor a new listing method in this change.
+
+`*Service` implements the existing `Stats` interface through `QueueStats`,
+which delegates to `GetQueueStats`. The existing method, repository interface,
+auto-detection, split override priority, and missing-repository error remain
+unchanged. Optional observability does not become a worker requirement.
