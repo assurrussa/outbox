@@ -782,3 +782,12 @@ Decisions made:
 - Local validation uses the available disposable services. Hosted CI remains
   required for backend/version combinations not available in the task runtime;
   SQLite results are not a substitute for MySQL or Picodata integration.
+
+- Canonical `make check` exposed pre-existing standalone example drift: all four
+  DB examples still required core v0.15.0 while their backend modules required
+  v0.16.0. Aligned only those core requirements; no other dependency, checksum,
+  replacement, or toolchain change was needed.
+- Picodata pgx scans can return `time.Local` for a UTC instant. Pagination
+  regressions compare UTC-normalized instants without rounding fractions,
+  preserving the existing scanner behavior rather than asserting Location
+  pointer identity.

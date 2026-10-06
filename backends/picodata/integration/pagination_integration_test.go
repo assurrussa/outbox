@@ -63,12 +63,13 @@ func testPicodataListPage(t *testing.T, count int) {
 		}
 		return -slices.Compare(a.ID[:], b.ID[:])
 	})
+	// pgx may decode timestamps in time.Local; compare exact instants, not Location pointers.
 	pages := map[string]func(context.Context, int, *picodata.PageCursor) ([]picodata.PageCursor, error){
 		"active": func(ctx context.Context, limit int, cursor *picodata.PageCursor) ([]picodata.PageCursor, error) {
 			rows, err := active.ListPage(ctx, limit, cursor)
 			result := make([]picodata.PageCursor, len(rows))
 			for i, row := range rows {
-				result[i] = picodata.PageCursor{CreatedAt: row.CreatedAt, ID: row.ID}
+				result[i] = picodata.PageCursor{CreatedAt: row.CreatedAt.UTC(), ID: row.ID}
 			}
 			return result, err
 		},
@@ -76,7 +77,7 @@ func testPicodataListPage(t *testing.T, count int) {
 			rows, err := failed.ListPage(ctx, limit, cursor)
 			result := make([]picodata.PageCursor, len(rows))
 			for i, row := range rows {
-				result[i] = picodata.PageCursor{CreatedAt: row.CreatedAt, ID: row.ID}
+				result[i] = picodata.PageCursor{CreatedAt: row.CreatedAt.UTC(), ID: row.ID}
 			}
 			return result, err
 		},
