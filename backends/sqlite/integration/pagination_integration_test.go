@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,15 +59,20 @@ func testSQLiteListPage(t *testing.T, custom bool, count int) {
 		if i >= 23 {
 			at = base
 		}
-		id := types.JobID(uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1)))
+		id := types.JobID(uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012x", i+1)))
 		expected = append(expected, sqlite.PageCursor{CreatedAt: at, ID: id})
+		storedID := id.String()
+		if i%2 == 0 {
+			storedID = strings.ToUpper(storedID)
+		}
+
 		_, err := ts.db.DB().ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
    (id, queue, name, schema_version, payload, attempts, available_at, created_at)
-   VALUES (?, 'queue', 'page', 2, '{}', 0, ?, ?)`, activeTable), id, at.UnixMilli(), at.UnixMilli())
+   VALUES (?, 'queue', 'page', 2, '{}', 0, ?, ?)`, activeTable), storedID, at.UnixMilli(), at.UnixMilli())
 		require.NoError(t, err)
 		_, err = ts.db.DB().ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
    (id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception)
-   VALUES (?, ?, 'queue', 'page', 2, '{}', 'test', ?, ?, '', '')`, failedTable), id, types.NewJobID(), at.UnixMilli(), at.UnixMilli())
+   VALUES (?, ?, 'queue', 'page', 2, '{}', 'test', ?, ?, '', '')`, failedTable), storedID, types.NewJobID(), at.UnixMilli(), at.UnixMilli())
 		require.NoError(t, err)
 	}
 	slices.SortFunc(expected, func(a, b sqlite.PageCursor) int {
@@ -212,4 +218,32 @@ func TestSQLiteListPageZeroIDAndDeletedBoundary(t *testing.T) {
 	rows, err = ts.jobsRepo.ListPage(ctx, 1, before)
 	require.NoError(t, err)
 	require.Empty(t, rows)
+}
+
+func TestSQLiteCaseAliasesHaveAmbiguousCursorIdentity(t *testing.T) {
+	ctx, _, ts := NewTestSQLiteSuite(t)
+	defer ts.cleanUp(ctx)
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	rawID := "aaaaaaaa-0000-4000-8000-000000000001"
+	for _, spelling := range []string{rawID, strings.ToUpper(rawID)} {
+		_, err := ts.db.DB().ExecContext(ctx, `INSERT INTO jobs (id, queue, name, payload, attempts, available_at, created_at)
+   VALUES (?, 'queue', 'ambiguous-identity', '{}', 0, ?, ?)`, spelling, at.UnixMilli(), at.UnixMilli())
+		require.NoError(t, err)
+		_, err = ts.db.DB().ExecContext(ctx, `INSERT INTO jobs_failed (id, job_id, queue, name, payload, reason, failed_at, created_at, connection, exception)
+   VALUES (?, ?, 'queue', 'ambiguous-identity', '{}', 'test', ?, ?, '', '')`, spelling, types.NewJobID(), at.UnixMilli(), at.UnixMilli())
+		require.NoError(t, err)
+	}
+	active, err := ts.jobsRepo.ListPage(ctx, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, active, 2)
+	failed, err := ts.jobsFailedRepo.ListPage(ctx, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, failed, 2)
+	// Case aliases of one UUID are distinct TEXT keys but collapse in the public
+	// model. They violate the documented unique logical UUID identity precondition;
+	// no (CreatedAt, parsed ID) cursor can distinguish these physical rows.
+	require.Equal(t, sqlite.PageCursor{CreatedAt: active[0].CreatedAt, ID: active[0].ID},
+		sqlite.PageCursor{CreatedAt: active[1].CreatedAt, ID: active[1].ID})
+	require.Equal(t, sqlite.PageCursor{CreatedAt: failed[0].CreatedAt, ID: failed[0].ID},
+		sqlite.PageCursor{CreatedAt: failed[1].CreatedAt, ID: failed[1].ID})
 }

@@ -14,10 +14,13 @@ const (
 )
 
 // PageCursor is the exclusive boundary for ListPage's created_at DESC, id DESC
-// ordering. Copy both fields from the last returned row, without rounding its
+// ordering, comparing IDs by canonical UUID value. Copy both fields from the last returned row, without rounding its
 // timestamp. A nil cursor starts at the newest row. For DLQ rows ID is the failed
 // row's ID, not its JobID. Cursors belong to one backend and one table; they are
 // not portable between databases or between the active queue and the DLQ.
+// Stored IDs must use standard hyphenated UUID text (either letter case) and
+// unique logical UUID values. Case-only aliases of the same UUID or other text
+// formats must be normalized/deduplicated before traversal.
 //
 // This structural alias keeps the pagination API compatible across backend
 // modules without requiring a new core dependency.

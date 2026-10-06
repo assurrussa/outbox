@@ -9,7 +9,7 @@ import (
 	"github.com/assurrussa/outbox/outbox/models"
 )
 
-// ListPage returns rows ordered by created_at DESC, id DESC. Pass nil for the
+// ListPage returns rows ordered by created_at DESC, canonical UUID DESC. Pass nil for the
 // first page, then copy CreatedAt and ID from the last returned row into before.
 // An empty page ends traversal. Non-positive limits default to DefaultPageSize;
 // limits above MaxPageSize return an error.
@@ -24,10 +24,10 @@ func (r *Repo) ListPage(ctx context.Context, limit int, before *mysql.PageCursor
 	query := fmt.Sprintf("SELECT %s FROM %s", stdstrings.Join(jobColumns, ", "), r.tableName)
 	var args []any
 	if before != nil {
-		query += " WHERE created_at < ? OR (created_at = ? AND id < ?)"
+		query += " WHERE created_at < ? OR (created_at = ? AND LOWER(id) < ?)"
 		args = []any{before.CreatedAt.UTC(), before.CreatedAt.UTC(), before.ID}
 	}
-	query += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT %d;", limit)
+	query += fmt.Sprintf(" ORDER BY created_at DESC, LOWER(id) DESC LIMIT %d;", limit)
 	rows, err := r.executor(ctx).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

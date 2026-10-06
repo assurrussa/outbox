@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,12 @@ func testMySQLListPage(t *testing.T, custom bool, count int) {
 		_, err = ts.db.DB().ExecContext(ctx, "ALTER TABLE jobs_failed RENAME TO page_failed")
 		require.NoError(t, err)
 		activeTable, failedTable = "page_jobs", "page_failed"
+		// ID columns inherit the database collation; custom/historical tables may use binary ordering.
+		for _, table := range []string{activeTable, failedTable} {
+			_, err = ts.db.DB().ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN id CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL", table))
+			require.NoError(t, err)
+		}
+
 		active = jobsrepo.Must(ts.db, jobsrepo.WithJobsTable(activeTable))
 		failed = jobsfailedrepo.Must(ts.db, jobsfailedrepo.WithFailedJobsTable(failedTable))
 	}
@@ -58,15 +65,20 @@ func testMySQLListPage(t *testing.T, custom bool, count int) {
 		if i >= 23 {
 			at = base
 		}
-		id := types.JobID(uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1)))
+		id := types.JobID(uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012x", i+1)))
 		expected = append(expected, mysql.PageCursor{CreatedAt: at, ID: id})
+		storedID := id.String()
+		if i%2 == 0 {
+			storedID = strings.ToUpper(storedID)
+		}
+
 		_, err := ts.db.DB().ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
    (id, queue, name, schema_version, payload, attempts, available_at, created_at)
-   VALUES (?, 'queue', 'page', 2, '{}', 0, ?, ?)`, activeTable), id, at, at)
+   VALUES (?, 'queue', 'page', 2, '{}', 0, ?, ?)`, activeTable), storedID, at, at)
 		require.NoError(t, err)
 		_, err = ts.db.DB().ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
    (id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception)
-   VALUES (?, ?, 'queue', 'page', 2, '{}', 'test', ?, ?, '', '')`, failedTable), id, types.NewJobID(), at, at)
+   VALUES (?, ?, 'queue', 'page', 2, '{}', 'test', ?, ?, '', '')`, failedTable), storedID, types.NewJobID(), at, at)
 		require.NoError(t, err)
 	}
 	slices.SortFunc(expected, func(a, b mysql.PageCursor) int {

@@ -136,3 +136,15 @@ with identical creation times. Migrate complete listings to `ListPage`.
 
 SQLite stores these timestamps at millisecond precision. Use the returned
 `CreatedAt` rather than reconstructing it from a higher-precision source.
+
+For MySQL and SQLite, IDs are compared in lowercase in both the cursor predicate
+and ordering, so uppercase/lowercase spellings of distinct UUIDs traverse
+consistently even under a case-sensitive text collation. Stored IDs must use
+standard hyphenated UUID text and be unique by logical UUID value. Case-only
+aliases of the same UUID at one timestamp produce identical public cursors;
+complete traversal of those ambiguous physical rows is not supported. Normalize
+nonstandard UUID text and resolve duplicate logical identities before listing
+historical/custom data. Repository-generated IDs already satisfy this contract.
+
+The new listing orders by `LOWER(id)`. A custom index on raw text IDs may not
+satisfy that normalized ordering; inspect the query plan for large listings.

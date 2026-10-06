@@ -791,3 +791,14 @@ Decisions made:
   regressions compare UTC-normalized instants without rounding fractions,
   preserving the existing scanner behavior rather than asserting Location
   pointer identity.
+
+- The full Codex review found that case-sensitive text ordering could repeat an
+  uppercase SQLite ID after `JobID` parsing canonicalized the cursor. Applied
+  `LOWER(id)` consistently in WHERE and ORDER BY for SQLite and MySQL (whose
+  CHAR(36) ID can also inherit binary collation). Mixed-case distinct UUID
+  regressions cover active/DLQ and custom tables; MySQL custom fixtures use
+  binary collation. This does not rewrite stored rows or change legacy listing.
+- Documented the text-store identity boundary: standard hyphenated UUID text,
+  unique by logical UUID value. Added a SQLite fixture showing that two case
+  aliases of one UUID at one timestamp collapse to the same public cursor;
+  such ambiguous historical data needs normalization/deduplication first.
