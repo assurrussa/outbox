@@ -471,6 +471,10 @@ LIMIT 100;
 	return result, nil
 }
 
+// ListPaged returns rows with created_at strictly before the supplied time.
+// Equal timestamps at a page boundary can cause rows to be skipped.
+//
+// Deprecated: use ListPage with both CreatedAt and ID for complete traversal.
 func (r *Repo) ListPaged(ctx context.Context, limit int, before time.Time) ([]models.Job, error) {
 	if limit <= 0 {
 		limit = 10

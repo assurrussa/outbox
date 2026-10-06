@@ -293,7 +293,9 @@ can provide a real atomic transaction boundary.
 
 ## Queue observability
 
-`Service.GetQueueStats(...)` returns one exact snapshot with UTC `ObservedAt`,
+`Service.QueueStats(...)` implements the `Stats` interface. The existing
+`Service.GetQueueStats(...)` remains available with identical behavior. Both
+return one exact snapshot with UTC `ObservedAt`,
 aggregate `Total`, `Available`, and `Processing`, plus sorted `ByCapability`
 groups. Each group includes the exact name, schema version, the same counts, and
 `OldestAvailableAt`; a zero timestamp means that group has no ready job. For a
@@ -305,6 +307,35 @@ entire active backlog. It is intentionally not cached and has no projection
 table, top-N truncation, or new index. Treat it as an active-queue scan and let
 the host choose a suitable polling/scrape frequency. Unsupported capabilities
 remain included in total backlog and are visible by name and schema version.
+
+## Active queue and DLQ pagination
+
+MySQL, SQLite, and Picodata repositories provide `ListPage(ctx, limit, before)`
+for complete descending `(created_at, id)` traversal, including rows sharing a
+creation time. Start with a nil cursor, then copy `CreatedAt` and `ID` from the
+last returned row into the backend's `PageCursor`. An empty page ends traversal.
+For a failed row, use its `ID`, not the original `JobID`.
+
+Non-positive limits use 10 rows; limits above 1000 return an error. Preserve the
+returned timestamp exactly, including fractional seconds. A cursor belongs to
+that backend and table, not another database or the other queue. Each call is a
+live query, so concurrent inserts/deletes are not a multi-page snapshot.
+
+The older `ListPaged(ctx, limit, before time.Time)` is unchanged and deprecated:
+it filters strictly by creation time and can skip the rest of an equal-time
+group at a page boundary. Use `ListPage` for a lossless traversal of stable rows.
+Postgres has no `ListPaged` API and is unchanged by this addition. See the
+[SQLite pagination example](backends/sqlite/README.md#pagination) for cursor use.
+
+
+For MySQL and SQLite, IDs are compared in lowercase in both the cursor predicate
+and ordering, so uppercase/lowercase spellings of distinct UUIDs traverse
+consistently even under a case-sensitive text collation. Stored IDs must use
+standard hyphenated UUID text and be unique by logical UUID value. Case-only
+aliases of the same UUID at one timestamp produce identical public cursors;
+complete traversal of those ambiguous physical rows is not supported. Normalize
+nonstandard UUID text and resolve duplicate logical identities before listing
+historical/custom data. Repository-generated IDs already satisfy this contract.
 
 ## Unique puts and persisted retry dispositions
 
@@ -348,6 +379,13 @@ func (j *PublishJob) Handle(ctx context.Context, payload string) error {
 	return nil
 }
 ```
+
+For an ordinary error from a single-job `Handle`, the job remains reserved
+until its current persisted lease expires. There is no exponential-backoff
+policy for this path; the default initial reservation is five minutes, and
+protective renewals can extend it. Use `RetryAt` when the handler knows the next
+retry time. True handler batches have their own bounded retry behavior described
+[above](#true-handler-batches).
 
 `Permanent` moves the owned job directly to DLQ. `RetryAt` atomically persists
 the next availability and releases the current lease; it never sleeps in a
@@ -460,10 +498,10 @@ Release prep for backend modules:
 
 ```sh
 # pin all backend modules to a published core tag and refresh their sums
-make release-ready-backends CORE_VERSION=v0.15.0
+make release-ready-backends CORE_VERSION=v0.16.0
 
 # non-mutating exact-version pre-tag gate
-make release-readiness-backends CORE_VERSION=v0.15.0
+make release-readiness-backends CORE_VERSION=v0.16.0
 ```
 
 The commands above name the currently published stable core. Root releases are

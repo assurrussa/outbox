@@ -760,3 +760,45 @@ Decisions made:
 - Regression tests use synthetic drivers/repositories only; no production
   queues or databases are touched. The disk-full workspace required temporary
   validation in /tmp; final aggregate gates are recorded separately.
+
+
+## 2026-10-06: Additive listing cursors and Stats compatibility
+
+- Added backend-local `PageCursor` structural aliases and `ListPage` to MySQL,
+  SQLite, and Picodata active/DLQ repositories. This avoids making standalone
+  backend builds depend on an unpublished core API; core pins stay at v0.16.0.
+  The aliases share an API shape, not a cross-database cursor value contract.
+- Kept `ListPaged` unchanged and documented its equal-timestamp omission and
+  deprecation. No PostgreSQL listing API, new migration, retry framework,
+  worker algorithm, replay, or observer was added.
+- Bounded new pages to 1000 rows (default 10). Cursor timestamps retain each
+  backend's stored precision; the DLQ tie-breaker is the failed-row primary ID.
+- Added `Service.QueueStats` as a delegating compatibility method, preserving
+  the existing `Stats` interface and `GetQueueStats` implementation.
+- Integration regressions exercise 12 equal-time rows across a 10-row page,
+  multiple adjacent timestamp groups, deterministic ordering, serialization,
+  timezone equivalence, custom tables, defaults, end cursors, and cancellation.
+  Each backend's standalone consumer compile test checks both API signatures.
+- Local validation uses the available disposable services. Hosted CI remains
+  required for backend/version combinations not available in the task runtime;
+  SQLite results are not a substitute for MySQL or Picodata integration.
+
+- Canonical `make check` exposed pre-existing standalone example drift: all four
+  DB examples still required core v0.15.0 while their backend modules required
+  v0.16.0. Aligned only those core requirements; no other dependency, checksum,
+  replacement, or toolchain change was needed.
+- Picodata pgx scans can return `time.Local` for a UTC instant. Pagination
+  regressions compare UTC-normalized instants without rounding fractions,
+  preserving the existing scanner behavior rather than asserting Location
+  pointer identity.
+
+- The full Codex review found that case-sensitive text ordering could repeat an
+  uppercase SQLite ID after `JobID` parsing canonicalized the cursor. Applied
+  `LOWER(id)` consistently in WHERE and ORDER BY for SQLite and MySQL (whose
+  CHAR(36) ID can also inherit binary collation). Mixed-case distinct UUID
+  regressions cover active/DLQ and custom tables; MySQL custom fixtures use
+  binary collation. This does not rewrite stored rows or change legacy listing.
+- Documented the text-store identity boundary: standard hyphenated UUID text,
+  unique by logical UUID value. Added a SQLite fixture showing that two case
+  aliases of one UUID at one timestamp collapse to the same public cursor;
+  such ambiguous historical data needs normalization/deduplication first.

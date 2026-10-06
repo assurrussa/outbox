@@ -131,3 +131,40 @@ Required invariants:
 - Tier-level settings like `can_vote` are not exposed as dedicated top-level env vars.
   - Use `PICODATA_CONFIG_PARAMETERS`, for example:
     - `PICODATA_CONFIG_PARAMETERS=cluster.tier.default.can_vote=false`
+
+## Pagination
+
+Both `jobsrepo.Repo` and `jobsfailedrepo.Repo` expose
+`ListPage(ctx, limit, before *picodata.PageCursor)`. Rows are ordered by
+`created_at DESC, id DESC`; nil starts the first page. For example:
+
+```go
+var before *picodata.PageCursor
+for {
+    rows, err := jobs.ListPage(ctx, 100, before)
+    if err != nil {
+        return err
+    }
+    if len(rows) == 0 {
+        break
+    }
+    // Consume rows before requesting the next page.
+    last := rows[len(rows)-1]
+    before = &picodata.PageCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+}
+```
+
+Import the backend root package (`github.com/assurrussa/outbox/backends/picodata`)
+for `PageCursor`. The same loop works for the failed-jobs repository; its cursor
+uses the failed row's `ID`, never the source `JobID`. Non-positive limits use
+`DefaultPageSize` (10); values above `MaxPageSize` (1000) return an error. Custom table options apply to every page.
+
+Use the exact returned pair, retaining timestamp precision and the ID. A cursor
+belongs to the selected backend and table. Do not reuse it across databases or
+between active and failed queues. The API queries live data rather than holding
+a snapshot across pages; concurrent deletes can remove rows, and inserts newer
+than the cursor are seen only by restarting from nil.
+
+`ListPaged(ctx, limit, before time.Time)` is retained unchanged but deprecated.
+Its strict time-only boundary can skip rows when a page ends inside a group
+with identical creation times. Migrate complete listings to `ListPage`.

@@ -1,0 +1,165 @@
+//go:build integration
+
+package outbox_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/outbox/backends/mysql"
+	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsfailedrepo"
+	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsrepo"
+	"github.com/assurrussa/outbox/outbox/models"
+	"github.com/assurrussa/outbox/shared/types"
+)
+
+func TestMySQLListPage(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		for _, count := range []int{12, 27} {
+			t.Run(fmt.Sprintf("custom=%t/rows=%d", custom, count), func(t *testing.T) {
+				testMySQLListPage(t, custom, count)
+			})
+		}
+	}
+}
+
+func testMySQLListPage(t *testing.T, custom bool, count int) {
+	t.Helper()
+	ctx, _, ts := NewTestMySQLSuite(t)
+	defer ts.cleanUp(ctx)
+	activeTable, failedTable := "jobs", "jobs_failed"
+	active, failed := ts.jobsRepo, ts.jobsFailedRepo
+	if custom {
+		_, err := ts.db.DB().ExecContext(ctx, "ALTER TABLE jobs RENAME TO page_jobs")
+		require.NoError(t, err)
+		_, err = ts.db.DB().ExecContext(ctx, "ALTER TABLE jobs_failed RENAME TO page_failed")
+		require.NoError(t, err)
+		activeTable, failedTable = "page_jobs", "page_failed"
+		// ID columns inherit the database collation; custom/historical tables may use binary ordering.
+		for _, table := range []string{activeTable, failedTable} {
+			_, err = ts.db.DB().ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN id CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL", table))
+			require.NoError(t, err)
+		}
+
+		active = jobsrepo.Must(ts.db, jobsrepo.WithJobsTable(activeTable))
+		failed = jobsfailedrepo.Must(ts.db, jobsfailedrepo.WithFailedJobsTable(failedTable))
+	}
+
+	const precision = time.Microsecond
+	base := time.Date(2026, 10, 3, 12, 0, 0, 123456789, time.UTC).Truncate(precision)
+	expected := make([]mysql.PageCursor, 0, count)
+	// Insert out of cursor order. The first timestamp group alone exceeds a page.
+	for i := range count {
+		at := base.Add(2 * precision)
+		if i >= 12 {
+			at = base.Add(precision)
+		}
+		if i >= 23 {
+			at = base
+		}
+		id := types.JobID(uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012x", i+1)))
+		expected = append(expected, mysql.PageCursor{CreatedAt: at, ID: id})
+		storedID := id.String()
+		if i%2 == 0 {
+			storedID = strings.ToUpper(storedID)
+		}
+
+		_, err := ts.db.DB().ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
+   (id, queue, name, schema_version, payload, attempts, available_at, created_at)
+   VALUES (?, 'queue', 'page', 2, '{}', 0, ?, ?)`, activeTable), storedID, at, at)
+		require.NoError(t, err)
+		_, err = ts.db.DB().ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
+   (id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception)
+   VALUES (?, ?, 'queue', 'page', 2, '{}', 'test', ?, ?, '', '')`, failedTable), storedID, types.NewJobID(), at, at)
+		require.NoError(t, err)
+	}
+	slices.SortFunc(expected, func(a, b mysql.PageCursor) int {
+		if n := b.CreatedAt.Compare(a.CreatedAt); n != 0 {
+			return n
+		}
+		return -slices.Compare(a.ID[:], b.ID[:])
+	})
+	pages := map[string]func(context.Context, int, *mysql.PageCursor) ([]mysql.PageCursor, error){
+		"active": func(ctx context.Context, limit int, cursor *mysql.PageCursor) ([]mysql.PageCursor, error) {
+			rows, err := active.ListPage(ctx, limit, cursor)
+			result := make([]mysql.PageCursor, len(rows))
+			for i, row := range rows {
+				result[i] = mysql.PageCursor{CreatedAt: row.CreatedAt, ID: row.ID}
+			}
+			return result, err
+		},
+		"failed": func(ctx context.Context, limit int, cursor *mysql.PageCursor) ([]mysql.PageCursor, error) {
+			rows, err := failed.ListPage(ctx, limit, cursor)
+			result := make([]mysql.PageCursor, len(rows))
+			for i, row := range rows {
+				result[i] = mysql.PageCursor{CreatedAt: row.CreatedAt, ID: row.ID}
+			}
+			return result, err
+		},
+	}
+	for name, list := range pages {
+		t.Run(name, func(t *testing.T) {
+			for _, limit := range []int{10, 1, mysql.MaxPageSize} {
+				var cursor *mysql.PageCursor
+				seen := make([]mysql.PageCursor, 0, count)
+				for page := 0; ; page++ {
+					require.LessOrEqual(t, page, count, "pagination must terminate")
+					rows, err := list(ctx, limit, cursor)
+					require.NoError(t, err)
+					require.LessOrEqual(t, len(rows), limit)
+					if len(rows) == 0 {
+						break
+					}
+					seen = append(seen, rows...)
+					// A serialization round trip preserves backend timestamp precision.
+					encoded, err := json.Marshal(rows[len(rows)-1])
+					require.NoError(t, err)
+					cursor = new(mysql.PageCursor)
+					require.NoError(t, json.Unmarshal(encoded, cursor))
+					cursor.CreatedAt = cursor.CreatedAt.In(time.FixedZone("offset", 3*60*60))
+				}
+				require.Equal(t, expected, seen, "no skips, duplicates, or ordering changes")
+				rows, err := list(ctx, limit, cursor)
+				require.NoError(t, err)
+				require.Empty(t, rows, "end cursor stays empty")
+			}
+			for _, limit := range []int{0, -1} {
+				rows, err := list(ctx, limit, nil)
+				require.NoError(t, err)
+				require.Equal(t, expected[:mysql.DefaultPageSize], rows)
+			}
+			rows, err := list(ctx, mysql.MaxPageSize+1, nil)
+			require.Error(t, err)
+			require.Empty(t, rows)
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			_, err = list(cancelled, 10, nil)
+			require.Error(t, err)
+		})
+	}
+	// The deprecated timestamp-only method retains its exact strict-before API.
+	oldActive, err := active.ListPaged(ctx, 10, base.Add(3*precision))
+	require.NoError(t, err)
+	require.Len(t, oldActive, 10)
+	oldFailed, err := failed.ListPaged(ctx, 10, base.Add(3*precision))
+	require.NoError(t, err)
+	require.Len(t, oldFailed, 10)
+	if count == 12 {
+		var a []models.Job
+		a, err = active.ListPaged(ctx, 10, oldActive[9].CreatedAt)
+		require.NoError(t, err)
+		require.Empty(t, a)
+		var f []models.JobFailed
+		f, err = failed.ListPaged(ctx, 10, oldFailed[9].CreatedAt)
+		require.NoError(t, err)
+		require.Empty(t, f)
+	}
+}
