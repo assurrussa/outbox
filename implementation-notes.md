@@ -1002,3 +1002,12 @@ Source/focused validation precedes the coordinated final full gate; GoUploads
 currently owns the heavy lane. Prior-head CI does not validate this correction.
 Focused `go test ./outbox -run '^TestObserver' -count=1` passed after the fix;
 focused core lint reported zero issues, formatting and diff checks passed.
+
+After GoUploads released the heavy lane, one final local `make check` passed on
+exact corrected source `01a879d5e1994ccf4aec00860fcd7303bbd11b99`: formatting,
+core/backend vet, zero-issue lint, core race/coverage, standalone backend tests
+and all five example builds. No fixture or container was started. This subsequent
+evidence update changes documentation only and reuses that passed source gate.
+The correction remains unpushed: automatic CI publication requires separate
+parent coordination under the user's GitHub Actions minutes constraint. No
+workflow settings or dispatches were changed. Heavy lane released again.
