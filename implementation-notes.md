@@ -1137,3 +1137,112 @@ integration was added. The CPU lane was explicitly returned after completion;
 no background Go process or fixture remains from this gate. This evidence
 update changes documentation only. Draft publication precedes parent review;
 no hosted CI dispatch/rerun, capability expansion, tag or deployment.
+
+## 2026-10-07: Bounded PostgreSQL ordinary-job replay
+
+Owner approved retrying the same business operation while retaining its identity
+and failed evidence, not intentionally creating a new business effect. Branch
+starts from merged master `08e7266`. Implement only a PostgreSQL `replay` package;
+no generic backend fallback, core worker changes, routes or automation. Keep
+public backend-local ID aliases compatible with the supported core aliases
+without requiring an unpublished core tag for standalone backend compilation.
+
+Replay takes an immutable request UUID, failed-row UUID and an explicit small
+host admission function. Admission confirms the exact original capability is
+supported, authorizes this operation under host policy, and returns the stable
+business-effect key already consumed by the handler. The SDK cannot infer that
+key from opaque payloads. This is a callback contract, not an authorization
+framework. Reject nil admission, built-in fan-out, invalid source and nested
+caller-owned transactions; own one existing PostgreSQL transaction manager.
+
+Lock the failed row to serialize requests for that source. Repeat the same
+request by returning retained provenance after admission, including after ACK;
+conflicting source/content/business-key reuse fails. A new request rejects the
+original source job or an earlier replay of that failed row still in active
+jobs. Copy payload, capability and queue unchanged into a new zero-attempt,
+unleased job under a distinct replay request key using existing unique enqueue.
+Commit new work, its idempotency tombstone and provenance in one transaction.
+On failed/ambiguous commit return no confirmed result; callers repeat the same
+request, never invent a new effect identity to resolve uncertainty.
+
+Add one additive provenance migration. Keep failed evidence referenced and
+retain request provenance after job deletion; no pruning API/default. Guard
+migration down when recorded requests exist instead of discarding evidence.
+Expose provenance reads by request and new queue-job ID for host audit and
+legacy handler identity resolution. Direct SQL privileges remain host-owned;
+the API supplies no tamper-proof audit claim or exactly-once external guarantee.
+
+Transition cases: invalid/nil admission or unsupported fan-out => no writes;
+missing/active source => no staging; first admitted request => atomic fresh
+work/provenance; same request => prior result without recreation; conflicting
+request => no writes; queue/provenance/commit failure => rollback or unresolved
+commit with zero confirmed result; cancellation => existing cleanup contract.
+Test live commit ambiguity and request concurrency on unique owned PostgreSQL
+schemas. AuthHub minpassword owns the current lane, then GoUploads' short
+cutoff correction; all Outbox work remains source-only until explicit release.
+
+After explicit GoUploads release, source `bb6a89e` passed touched-package
+integration-enabled lint (zero issues), owned PostgreSQL 18.6 replay race tests
+without skips, and one `make check` (core race/coverage, standalone backends,
+example builds). The first lint finding required the consumer example's empty
+Output marker; it was corrected before these passing gates. Narrow cleanup
+removed the recorded-ID/owner-label container and found zero replay schemas.
+The heavy lane was explicitly returned to AuthHub for its affected correction.
+
+Final source review strengthens the same failed-row invariant for distinct
+request IDs: they must preserve its first admitted operation/business key too,
+even after ACK. Existing row locking serializes the baseline check. Add changed
+key/operation assertions to the PG contract matrix. This correction is
+source-only until AuthHub explicitly releases; then repeat only affected replay
+lint, standalone consumer/unit checks and owned PG race validation. Preserve
+the earlier unrelated full readiness evidence; do not repeat its aggregate.
+
+AuthHub explicitly returned the short corrective window. On final code/test
+source `ee0e8b0670b52cb24cd69b47edff60cbea5021dd`, integration-enabled replay lint
+reported zero issues, `GOWORK=off go test -count=1 ./replay` passed against the
+unchanged published core dependency, and the owned PostgreSQL 18.6 replay race
+contract passed without skips. Changed capability/key under a distinct request
+after ACK failed closed; the Down test confirmed the actual retention guard
+message. The corrective container was removed by recorded ID plus owner label,
+with zero remaining replay schemas; the lane was explicitly released. Final
+evidence/consumer-navigation edits are Markdown only. No full aggregate repeat,
+hosted CI launch, tag, deployment, production operation or retention mutation.
+
+## 2026-10-07: Replay downgrade concurrency review correction
+
+Independent PR39 review found that EXISTS before the destructive lock could
+see an empty journal while the first replay remained uncommitted. DROP would
+then wait, resume after that commit, and destroy its new provenance. Move
+ACCESS EXCLUSIVE acquisition before EXISTS in migration 00005 Down, with lock,
+check and DROP in the same migration transaction.
+
+Verified pinned goose v3.26.0 source: internal/sqlparser/parser.go defaults
+useTx=true (only NO TRANSACTION opts out); migration.go passes that flag to
+runSQLMigration; migration_sql.go uses one db.BeginTx for SQL statements and
+store.DeleteVersion, rolls back errors and commits both together. This migration
+has no NO TRANSACTION annotation.
+
+Add a deterministic real-PG interleaving: pause actual Replay at its pre-commit
+boundary after provenance insertion, confirm zero rows visible outside it,
+start actual goose Down on a distinct named connection, observe its ungranted
+AccessExclusiveLock blocked by that replay PID, then permit commit. Guarded Down
+must retain provenance, source, queued work and version 5. A test-owned copy
+with only the new lock removed must reproduce the original successful Down and
+lost committed provenance. A separate owned version-deletion trigger fails after
+DROP, proving DDL rolls back with version bookkeeping; empty Down then succeeds.
+Coordination uses channels and actual pg_locks/pg_blocking_pids, not elapsed
+sleeps. Cancellation cleanup joins all test goroutines before closing pools.
+Source-only while AuthHub RegistryUI has its reservation; only affected static
+and owned PG migration/replay gates are authorized, with prior full evidence
+retained. No production downgrade or broad check rerun.
+
+After AuthHub's explicit short handoff, exact correction source
+`6f1bcae7dd598a6577f1c87ed0da97a50c90a6f7` passed integration-tag vet for
+replay/migrator, new-code lint with zero issues, and the affected PostgreSQL
+18.6 migration/replay race gate without skips. The unguarded control reproduced
+lost committed provenance; the fixed interleaving retained its record and
+version 5. Version-update failure restored dropped DDL; empty Down reached
+version 4. Cleanup removed the recorded-ID/owner-labelled container with zero
+replay schemas left. Lane explicitly returned to RegistryUI; no Go/fixture
+remains. Prior full gate evidence is preserved without rerun. Subsequent changes
+are evidence Markdown and the existing draft update only.

@@ -395,6 +395,15 @@ after the active job was acknowledged; different content returns
 `ErrIdempotencyConflict`. The host owns bounded tombstone retention and must not
 prune a key while the message can still be replayed.
 
+For an explicit retry of a failed PostgreSQL ordinary job, use the backend's
+[`replay` package](backends/pgsql/replay/README.md). It requires host admission
+of the original business key, preserves the failed operation/evidence and
+atomically stages fresh delivery with retained request provenance. Repeating
+that request after ACK returns its prior record without recreating work.
+Built-in fan-out and other backends are unsupported. Hosts retain responsibility
+for authorization and external effect idempotency; this does not promise
+exactly-once external effects.
+
 Handlers can classify a failure without changing the `Job` interface:
 
 ```go

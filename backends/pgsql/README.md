@@ -114,6 +114,15 @@ jobs sequentially.
 `GetQueueStats` uses one exact grouped scan of the active queue. The host owns
 its polling frequency; the backend adds no cache or projection table.
 
+## Ordinary-job replay
+
+The opt-in [`replay` package](replay/README.md) stages an explicitly admitted
+failed operation with unchanged payload/capability/queue, a fresh queue identity
+and atomic retained provenance. Hosts own authorization and the original
+business-effect idempotency key. Repeated request IDs return the same record
+after ACK; active sources and built-in fan-out fail closed. No other-backend
+fallback, automatic replay or retention default is provided.
+
 ## Migrations
 
 Recommended:
@@ -132,6 +141,11 @@ durable idempotency registry used by fan-out. The registry deliberately
 survives job deletion. Use `jobsrepo.Repo.PruneJobIdempotencyKeys(...)` only
 with a cutoff older than the application's complete replay and audit retention
 window.
+
+Migration `00005_add_job_replay_provenance.sql` adds the replay request journal.
+Recorded requests survive queue deletion and restrict deletion of referenced
+failed evidence. Down refuses to drop a nonempty journal. Apply it before using
+the replay package; ordinary unreplayed jobs retain their existing behavior.
 
 Filesystem mode:
 

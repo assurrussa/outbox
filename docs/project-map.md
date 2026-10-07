@@ -40,7 +40,8 @@ Workspace modules also include runnable examples:
 - `backends/sqlite/`: SQLite storage, repositories, transaction manager, and
   migrations.
 - `backends/pgsql/`: Postgres storage, repositories, transaction manager,
-  migrations, and pgx-backed client code.
+  migrations, pgx-backed client code and opt-in admitted ordinary-job replay
+  with retained request/source provenance.
 - `backends/picodata/`: Picodata storage, repositories, migrations, deploy-env
   helper, and transaction adapter.
 - `examples/`: runnable consumer wiring for the core and each backend.

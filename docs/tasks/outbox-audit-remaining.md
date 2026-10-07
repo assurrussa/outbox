@@ -54,13 +54,44 @@ including core race/coverage, standalone backend tests and example builds.
 No containers were needed. Parent review included the confirmed collection-count
 correction and manual-only CI transition; merged as `b0b2b58`. No replay implementation.
 
-## 4. Safe replay
+## 4. Safe replay (implemented; draft review)
 
-Define replay authorization, immutable provenance, deduplication identity,
-version selection, tombstone retention and operator visibility. Replay should
-create auditable work without bypassing current fencing or deleting evidence.
-Test duplicate requests, conflicting content, unsupported versions and crash
-boundaries. Clarify replay versus retry and host effect idempotency.
+Owner approved retrying the same business operation, preserving its identity
+and failed record, without intentionally creating a new effect. Host-owned
+authorization is sufficient; no generic authorization framework is required.
+Implement a PostgreSQL-only ordinary-job API with a persisted immutable request
+ID and explicit host admission of the original exact capability and consumed
+business key. Copy payload/queue/capability unchanged into fresh zero-attempt,
+unleased work; atomically retain request/source/new-job provenance. Repeated
+requests return retained records after ACK. Active sources, conflicting reuse,
+unsupported exact handlers and built-in fan-out fail closed. No worker changes,
+admin routes, automatic replay, pruning defaults or other-backend fallback.
+
+Provenance reads support host audit and legacy handler identity resolution;
+fresh queue IDs never become new business-effect keys. Test duplicate/concurrent
+requests, unsupported inputs, admission, source activity, persistence rollback,
+commit-response ambiguity before/after commit, retained evidence and guarded
+migration Down. Source preparation precedes a coordinated owned PostgreSQL
+gate and one necessary local readiness aggregate; draft review follows checks.
+
+Implemented the [`replay` API and consumer contract](../../backends/pgsql/replay/README.md)
+plus additive migration `00005`. Source `bb6a89e` passed one full `make check`
+and the live PostgreSQL 18.6 replay race contract without skips. Final identity
+guard on source `ee0e8b0` also pins distinct requests to the first admitted
+operation/business key; affected integration lint (zero issues), standalone
+consumer/unit tests and live PG race contract passed. Reuse unchanged full-gate
+constituents instead of repeating the aggregate. Both narrowly owned containers
+were removed with zero leftover replay schemas; lane explicitly released.
+Publication is a draft for independent parent review; no tag/deploy or hosted
+CI dispatch. Next ready action is review/merge, not automatic measurement work.
+
+PR39 review correction on source `6f1bcae` acquires ACCESS EXCLUSIVE before
+Down's emptiness check in the goose transaction. A coordinated first-replay
+commit versus Down test reproduces loss in an unguarded owned control and
+verifies retained evidence in the fix; a version-update fault verifies DDL
+rollback. Affected scoped vet/lint and PostgreSQL 18.6 replay/migration race
+tests passed without skips. Owned fixture cleaned, lane released, prior full
+check retained; focused re-review precedes merge.
 
 ## 5. SQLite durability configuration (merged PR #36)
 
@@ -74,9 +105,9 @@ reopen/rollback, mode validation, DSN precedence and configuration-failure
 cleanup. Document filesystem/power-loss assumptions; no power-loss measurement
 or durability guarantee is inferred from clean reopen tests. No schema changes.
 
-Replay remains pending owner semantics and whether host-owned authorization is
-sufficient. Picodata ping-failure cleanup and capability GoDoc are complete in
-PR #37. SQLite final gates and parent review are complete.
+Replay owner semantics are approved in item 4. Picodata ping-failure cleanup and
+capability GoDoc are complete in PR #37. SQLite final gates and parent review
+are complete.
 
 Final local `make check test-integration-sqlite` passed on source `8a2a7e1`,
 including core race/coverage, standalone backend tests, example builds and
@@ -131,5 +162,5 @@ live integrations, race/full gates and fault/soak work only after lane
 coordination. Report exact commands and skips; compile-only tests do not prove
 transactional behavior. Open a draft PR for parent review after permitted
 checks, then complete pending gates before requesting merge. Further
-implementation remains on hold pending replay owner decisions or a separately
-requested release; measurement work requires its own scope and lane coordination.
+implementation is limited to approved item 4. Release and measurement work
+require their own request, scope and lane coordination.
