@@ -1235,3 +1235,14 @@ sleeps. Cancellation cleanup joins all test goroutines before closing pools.
 Source-only while AuthHub RegistryUI has its reservation; only affected static
 and owned PG migration/replay gates are authorized, with prior full evidence
 retained. No production downgrade or broad check rerun.
+
+After AuthHub's explicit short handoff, exact correction source
+`6f1bcae7dd598a6577f1c87ed0da97a50c90a6f7` passed integration-tag vet for
+replay/migrator, new-code lint with zero issues, and the affected PostgreSQL
+18.6 migration/replay race gate without skips. The unguarded control reproduced
+lost committed provenance; the fixed interleaving retained its record and
+version 5. Version-update failure restored dropped DDL; empty Down reached
+version 4. Cleanup removed the recorded-ID/owner-labelled container with zero
+replay schemas left. Lane explicitly returned to RegistryUI; no Go/fixture
+remains. Prior full gate evidence is preserved without rerun. Subsequent changes
+are evidence Markdown and the existing draft update only.

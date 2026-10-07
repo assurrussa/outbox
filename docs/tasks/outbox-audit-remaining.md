@@ -85,6 +85,14 @@ were removed with zero leftover replay schemas; lane explicitly released.
 Publication is a draft for independent parent review; no tag/deploy or hosted
 CI dispatch. Next ready action is review/merge, not automatic measurement work.
 
+PR39 review correction on source `6f1bcae` acquires ACCESS EXCLUSIVE before
+Down's emptiness check in the goose transaction. A coordinated first-replay
+commit versus Down test reproduces loss in an unguarded owned control and
+verifies retained evidence in the fix; a version-update fault verifies DDL
+rollback. Affected scoped vet/lint and PostgreSQL 18.6 replay/migration race
+tests passed without skips. Owned fixture cleaned, lane released, prior full
+check retained; focused re-review precedes merge.
+
 ## 5. SQLite durability configuration (merged PR #36)
 
 Deterministic regressions reproduced missing connection-local settings on pool
