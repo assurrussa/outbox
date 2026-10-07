@@ -11,7 +11,7 @@ type jobMetadataKey struct{}
 
 // JobMetadata identifies the currently executing persisted attempt.
 type JobMetadata struct {
-	ID      types.JobID
+	ID      JobID
 	Attempt int
 }
 
@@ -20,7 +20,7 @@ func withJobMetadata(ctx context.Context, job models.Job) context.Context {
 }
 
 // JobIDFromContext retrieves a job identifier previously attached to context.
-func JobIDFromContext(ctx context.Context) types.JobID {
+func JobIDFromContext(ctx context.Context) JobID {
 	metadata, ok := JobMetadataFromContext(ctx)
 	if ok {
 		return metadata.ID

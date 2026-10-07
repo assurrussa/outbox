@@ -6,13 +6,12 @@ import (
 	"time"
 
 	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 //go:generate toolsmocks
 
 type Putter interface {
-	Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error)
+	Put(ctx context.Context, name, payload string, availableAt time.Time) (JobID, error)
 }
 
 type VersionedPutter interface {
@@ -22,13 +21,13 @@ type VersionedPutter interface {
 		schemaVersion SchemaVersion,
 		payload string,
 		availableAt time.Time,
-	) (types.JobID, error)
+	) (JobID, error)
 }
 
 // UniquePutResult describes whether a unique put created a new job or
 // resolved an existing idempotency tombstone with identical content.
 type UniquePutResult struct {
-	JobID   types.JobID
+	JobID   JobID
 	Created bool
 }
 
@@ -51,7 +50,7 @@ type FanoutPutter interface {
 		event FanoutEvent,
 		targets []FanoutTarget,
 		availableAt time.Time,
-	) (types.JobID, error)
+	) (JobID, error)
 }
 
 type QueueStats struct {
@@ -94,7 +93,7 @@ type JobsRepository interface {
 		schemaVersion SchemaVersion,
 		payload string,
 		availableAt time.Time,
-	) (types.JobID, error)
+	) (JobID, error)
 	FindAndReserveJobsForCapabilities(
 		ctx context.Context,
 		now time.Time,
@@ -105,26 +104,26 @@ type JobsRepository interface {
 	) ([]models.Job, error)
 	ExtendJobLeases(
 		ctx context.Context,
-		jobIDs []types.JobID,
+		jobIDs []JobID,
 		leaseToken LeaseToken,
 		now time.Time,
 		until time.Time,
 	) (int64, error)
 	ReleaseUnstartedJobsWithLease(
 		ctx context.Context,
-		jobIDs []types.JobID,
+		jobIDs []JobID,
 		leaseToken LeaseToken,
 		now time.Time,
 	) (int64, error)
 	DeleteJobWithLease(
 		ctx context.Context,
-		jobID types.JobID,
+		jobID JobID,
 		leaseToken LeaseToken,
 		now time.Time,
 	) (int64, error)
 	RescheduleJobWithLease(
 		ctx context.Context,
-		jobID types.JobID,
+		jobID JobID,
 		leaseToken LeaseToken,
 		now time.Time,
 		availableAt time.Time,
@@ -142,7 +141,7 @@ type FanoutJobsRepository interface {
 		schemaVersion SchemaVersion,
 		payload string,
 		availableAt time.Time,
-	) (types.JobID, error)
+	) (JobID, error)
 }
 
 // UniqueJobsRepository extends unique job creation with a created/replayed
@@ -177,12 +176,12 @@ type JobsStatRepository interface {
 type JobsFailedRepository interface {
 	CreateFailedJobVersioned(
 		ctx context.Context,
-		jobID types.JobID,
+		jobID JobID,
 		name string,
 		schemaVersion SchemaVersion,
 		payload string,
 		reason string,
-	) (types.JobID, error)
+	) (JobID, error)
 }
 
 // Transactor runs callbacks inside a transaction.

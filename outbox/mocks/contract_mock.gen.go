@@ -18,7 +18,6 @@ import (
 
 	outbox "github.com/assurrussa/outbox/outbox"
 	models "github.com/assurrussa/outbox/outbox/models"
-	types "github.com/assurrussa/outbox/shared/types"
 )
 
 // MockPutter is a mock of Putter interface.
@@ -46,10 +45,10 @@ func (m *MockPutter) EXPECT() *MockPutterMockRecorder {
 }
 
 // Put mocks base method.
-func (m *MockPutter) Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
+func (m *MockPutter) Put(ctx context.Context, name, payload string, availableAt time.Time) (outbox.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Put", ctx, name, payload, availableAt)
-	ret0, _ := ret[0].(types.JobID)
+	ret0, _ := ret[0].(outbox.JobID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -85,10 +84,10 @@ func (m *MockVersionedPutter) EXPECT() *MockVersionedPutterMockRecorder {
 }
 
 // PutVersioned mocks base method.
-func (m *MockVersionedPutter) PutVersioned(ctx context.Context, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (types.JobID, error) {
+func (m *MockVersionedPutter) PutVersioned(ctx context.Context, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (outbox.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PutVersioned", ctx, name, schemaVersion, payload, availableAt)
-	ret0, _ := ret[0].(types.JobID)
+	ret0, _ := ret[0].(outbox.JobID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -163,10 +162,10 @@ func (m *MockFanoutPutter) EXPECT() *MockFanoutPutterMockRecorder {
 }
 
 // PutFanout mocks base method.
-func (m *MockFanoutPutter) PutFanout(ctx context.Context, event outbox.FanoutEvent, targets []outbox.FanoutTarget, availableAt time.Time) (types.JobID, error) {
+func (m *MockFanoutPutter) PutFanout(ctx context.Context, event outbox.FanoutEvent, targets []outbox.FanoutTarget, availableAt time.Time) (outbox.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PutFanout", ctx, event, targets, availableAt)
-	ret0, _ := ret[0].(types.JobID)
+	ret0, _ := ret[0].(outbox.JobID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -241,10 +240,10 @@ func (m *MockJobsRepository) EXPECT() *MockJobsRepositoryMockRecorder {
 }
 
 // CreateJobVersioned mocks base method.
-func (m *MockJobsRepository) CreateJobVersioned(ctx context.Context, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (types.JobID, error) {
+func (m *MockJobsRepository) CreateJobVersioned(ctx context.Context, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (outbox.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateJobVersioned", ctx, name, schemaVersion, payload, availableAt)
-	ret0, _ := ret[0].(types.JobID)
+	ret0, _ := ret[0].(outbox.JobID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -256,7 +255,7 @@ func (mr *MockJobsRepositoryMockRecorder) CreateJobVersioned(ctx, name, schemaVe
 }
 
 // DeleteJobWithLease mocks base method.
-func (m *MockJobsRepository) DeleteJobWithLease(ctx context.Context, jobID types.JobID, leaseToken outbox.LeaseToken, now time.Time) (int64, error) {
+func (m *MockJobsRepository) DeleteJobWithLease(ctx context.Context, jobID outbox.JobID, leaseToken outbox.LeaseToken, now time.Time) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteJobWithLease", ctx, jobID, leaseToken, now)
 	ret0, _ := ret[0].(int64)
@@ -271,7 +270,7 @@ func (mr *MockJobsRepositoryMockRecorder) DeleteJobWithLease(ctx, jobID, leaseTo
 }
 
 // ExtendJobLeases mocks base method.
-func (m *MockJobsRepository) ExtendJobLeases(ctx context.Context, jobIDs []types.JobID, leaseToken outbox.LeaseToken, now, until time.Time) (int64, error) {
+func (m *MockJobsRepository) ExtendJobLeases(ctx context.Context, jobIDs []outbox.JobID, leaseToken outbox.LeaseToken, now, until time.Time) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ExtendJobLeases", ctx, jobIDs, leaseToken, now, until)
 	ret0, _ := ret[0].(int64)
@@ -315,7 +314,7 @@ func (mr *MockJobsRepositoryMockRecorder) MaxReservationBatchSize() *gomock.Call
 }
 
 // ReleaseUnstartedJobsWithLease mocks base method.
-func (m *MockJobsRepository) ReleaseUnstartedJobsWithLease(ctx context.Context, jobIDs []types.JobID, leaseToken outbox.LeaseToken, now time.Time) (int64, error) {
+func (m *MockJobsRepository) ReleaseUnstartedJobsWithLease(ctx context.Context, jobIDs []outbox.JobID, leaseToken outbox.LeaseToken, now time.Time) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ReleaseUnstartedJobsWithLease", ctx, jobIDs, leaseToken, now)
 	ret0, _ := ret[0].(int64)
@@ -330,7 +329,7 @@ func (mr *MockJobsRepositoryMockRecorder) ReleaseUnstartedJobsWithLease(ctx, job
 }
 
 // RescheduleJobWithLease mocks base method.
-func (m *MockJobsRepository) RescheduleJobWithLease(ctx context.Context, jobID types.JobID, leaseToken outbox.LeaseToken, now, availableAt time.Time) (int64, error) {
+func (m *MockJobsRepository) RescheduleJobWithLease(ctx context.Context, jobID outbox.JobID, leaseToken outbox.LeaseToken, now, availableAt time.Time) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "RescheduleJobWithLease", ctx, jobID, leaseToken, now, availableAt)
 	ret0, _ := ret[0].(int64)
@@ -369,10 +368,10 @@ func (m *MockFanoutJobsRepository) EXPECT() *MockFanoutJobsRepositoryMockRecorde
 }
 
 // CreateJobVersionedUnique mocks base method.
-func (m *MockFanoutJobsRepository) CreateJobVersionedUnique(ctx context.Context, deduplicationKey, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (types.JobID, error) {
+func (m *MockFanoutJobsRepository) CreateJobVersionedUnique(ctx context.Context, deduplicationKey, name string, schemaVersion outbox.SchemaVersion, payload string, availableAt time.Time) (outbox.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateJobVersionedUnique", ctx, deduplicationKey, name, schemaVersion, payload, availableAt)
-	ret0, _ := ret[0].(types.JobID)
+	ret0, _ := ret[0].(outbox.JobID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -525,10 +524,10 @@ func (m *MockJobsFailedRepository) EXPECT() *MockJobsFailedRepositoryMockRecorde
 }
 
 // CreateFailedJobVersioned mocks base method.
-func (m *MockJobsFailedRepository) CreateFailedJobVersioned(ctx context.Context, jobID types.JobID, name string, schemaVersion outbox.SchemaVersion, payload, reason string) (types.JobID, error) {
+func (m *MockJobsFailedRepository) CreateFailedJobVersioned(ctx context.Context, jobID outbox.JobID, name string, schemaVersion outbox.SchemaVersion, payload, reason string) (outbox.JobID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateFailedJobVersioned", ctx, jobID, name, schemaVersion, payload, reason)
-	ret0, _ := ret[0].(types.JobID)
+	ret0, _ := ret[0].(outbox.JobID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

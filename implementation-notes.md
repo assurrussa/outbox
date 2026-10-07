@@ -802,3 +802,32 @@ Decisions made:
   unique by logical UUID value. Added a SQLite fixture showing that two case
   aliases of one UUID at one timestamp collapse to the same public cursor;
   such ambiguous historical data needs normalization/deduplication first.
+
+## 2026-10-07: Public IDs and transactional quickstart
+
+- Isolated branch from approved master `ec405124`; source checkout left untouched.
+- Public ID aliases and random/parse constructors preserve underlying identity
+  and encoding. No broad `shared/*` API promotion or backend behavior change.
+- Added a PostgreSQL runtime quickstart under the existing example module; each
+  invocation owns a unique schema and uses embedded migrations. Commit and
+  callback rollback share pgx transaction context with `Put`. Integration tests
+  additionally exercise enqueue validation failure.
+- Business row/job invariants: successful callback commits both; callback error
+  after enqueue or Put error persists neither; failed calls return a zero ID.
+  No workers are started, so queue inspection cannot race with acknowledgement.
+- Remaining work is sequenced in `docs/tasks/outbox-audit-remaining.md`.
+- DataGrid owns the heavy Mac lane: live database/race/full checks deferred;
+  source and focused light checks only. No containers started or cleaned up.
+
+Validation for this bounded PR:
+
+- `go test ./outbox -count=1` passed after mock regeneration.
+- Focused `golangci-lint run --timeout=3m ./outbox/...`: zero issues.
+- Compile-only `go test` for `outbox/...` and all four backend module trees
+  with `-run '^$'` passed; no backend integration was executed.
+- `GOWORK=off go test ./outbox -run TestPublicID -count=1` passed.
+- PostgreSQL quickstart tagged integration compilation and standalone example
+  module compilation passed; `go vet -tags integration ./transactional` passed.
+- `TestBusinessWriteAndPutAtomicity` explicitly skipped without `OUTBOX_PG_DSN`.
+- Touched-file gofumpt/gci checks and `git diff --check` passed.
+- Live quickstart integration and `make check` remain pending lane coordination.

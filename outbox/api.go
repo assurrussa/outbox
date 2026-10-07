@@ -13,7 +13,7 @@ import (
 
 var _ Stats = (*Service)(nil)
 
-func (s *Service) Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error) {
+func (s *Service) Put(ctx context.Context, name, payload string, availableAt time.Time) (JobID, error) {
 	return s.PutVersioned(ctx, name, DefaultSchemaVersion, payload, availableAt)
 }
 
@@ -23,7 +23,7 @@ func (s *Service) PutVersioned(
 	schemaVersion SchemaVersion,
 	payload string,
 	availableAt time.Time,
-) (types.JobID, error) {
+) (JobID, error) {
 	capability := JobCapability{Name: name, SchemaVersion: schemaVersion}
 	if err := capability.Validate(); err != nil {
 		return types.JobIDNil, err

@@ -1,5 +1,22 @@
 # Runtime And Backend Contracts
 
+## Public Identifiers and Enqueue Transactions
+
+`outbox.JobID` and `outbox.MessageID` are aliases preserving existing type
+identity and text/JSON/SQL encoding. Use `NewJobID`, `NewMessageID`, `ParseJobID`
+and `ParseMessageID` through the supported core package. Parsers preserve the
+existing UUID parser behavior: a zero UUID parses, and `Validate()` rejects it.
+The zero value can be written as `outbox.JobID{}` or `outbox.MessageID{}`.
+No general stability guarantee is extended to `shared/*`.
+
+For PostgreSQL, a business write using `storage.GetTx(txCtx)` and `Put(txCtx, ...)`
+inside the same runtime's `Transactor().RunInTx` callback participate in the same
+pgx transaction. A callback error rolls back both. Only a successful transaction
+result confirms commit; an ID allocated inside the callback does not. Commit
+errors can be ambiguous and require host reconciliation. External handler effects
+remain outside this enqueue transaction and require consumer idempotency.
+See the [runnable quickstart](../examples/base-app-pgsql/transactional/README.md).
+
 ## Core Construction
 
 `outbox.New(...)` requires:

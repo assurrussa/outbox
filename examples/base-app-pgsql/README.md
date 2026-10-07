@@ -55,3 +55,8 @@ The app resolves DSN in this order:
 - `github.com/assurrussa/outbox/backends/mysql/...`
 - `github.com/assurrussa/outbox/backends/sqlite/...`
 - `github.com/assurrussa/outbox/backends/picodata/...`
+
+## Transactional business write
+
+See [transactional/README.md](transactional/README.md) for a runtime-based, isolated
+quickstart proving that a business insert and `Put` commit or roll back together.
