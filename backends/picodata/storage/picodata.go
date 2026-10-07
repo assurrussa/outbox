@@ -26,6 +26,8 @@ func (p *ClientPicoData) Pool() *picogo.Pool {
 	return p.pool
 }
 
+// TxPool returns the legacy best-effort callback runner. It does not begin,
+// commit or roll back a transaction and cannot provide atomic DLQ transitions.
 func (p *ClientPicoData) TxPool() *transaction.Manager {
 	return transaction.New(p.Pool())
 }

@@ -71,6 +71,12 @@ avoid presenting a throughput setting as a durability guarantee.
 
 ## 6. Picodata capability clarity
 
+Current separate bounded PR: close the newly owned pool when construction ping
+fails and clarify legacy transaction names in GoDoc/consumer docs. Synthetic
+tests cover ownership transfer/failure, callback context/error behavior and
+existing fail-closed construction limits without network fixtures. No client
+protocol, repository SQL, public signature or capability expansion.
+
 Make best-effort transaction limits and capability-storage support explicit in
 consumer docs/construction diagnostics. Preserve fail-closed atomic DLQ and
 unsupported fan-out/runtime boundaries. Test negative capability contracts;

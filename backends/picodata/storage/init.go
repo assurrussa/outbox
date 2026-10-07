@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/jackc/pgx/v5/pgxpool"
 	picogo "github.com/picodata/picodata-go"
 	picolog "github.com/picodata/picodata-go/logger"
 	strats "github.com/picodata/picodata-go/strategies"
-
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Option func(o *Options)
@@ -68,13 +67,28 @@ func Create(ctx context.Context, dsn string, opts ...Option) (*ClientPicoData, e
 		return nil, fmt.Errorf("picodata: unable to connect to database: %w", err)
 	}
 
-	if options.checkPing {
-		if err := pool.Ping(ctx); err != nil {
-			return nil, fmt.Errorf("picodata: unable to ping database: %w", err)
-		}
+	if err := checkPool(ctx, pool, options.checkPing); err != nil {
+		return nil, err
 	}
 
 	return newClient(pool), nil
+}
+
+// checkPool retains ownership until initialization succeeds. Only a successful
+// return transfers the newly created pool to the caller's client.
+func checkPool(ctx context.Context, pool interface {
+	Ping(context.Context) error
+	Close()
+}, enabled bool,
+) error {
+	if !enabled {
+		return nil
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return fmt.Errorf("picodata: unable to ping database: %w", err)
+	}
+	return nil
 }
 
 func WithDSN(dsn string) Option {

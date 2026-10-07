@@ -11,6 +11,10 @@ type Client interface {
 	Close() error
 }
 
+// ClientTransaction is the legacy client shape exposing a best-effort callback
+// runner. TxPool does not provide connection-pinned BEGIN/COMMIT/ROLLBACK or an
+// atomic business-write/enqueue boundary. The runner reports SupportsAtomicDLQ
+// as false; non-atomic DLQ requires explicit host opt-in.
 type ClientTransaction interface {
 	Client
 	TxPool() *transaction.Manager

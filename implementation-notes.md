@@ -1029,3 +1029,22 @@ count correction and must not be described as final-head CI. Default-branch
 automatic configuration remains until reviewed merge, so publication/transition
 may still produce an old-config run. Manual launch availability depends on the
 configuration reaching the default branch; no branch protection is bypassed.
+
+## 2026-10-07: Picodata construction cleanup and capability documentation
+
+Independent branch from merged master `b0b2b58`; no dependency on the unmerged
+SQLite durability PR. The constructor owns a newly created pool until optional
+ping succeeds (or remains disabled). Ping failure/cancellation must close that
+pool once and preserve the wrapped original error. Success/disabled ping retain
+the pool for caller-owned client cleanup. Use a private Ping/Close seam with an
+owned fake rather than replacing a global factory or changing the public client.
+
+Legacy transaction names retain signatures and behavior. GoDoc and consumer
+docs describe callback-only best-effort execution, no installed transaction,
+no rollback on callback error and no atomic business-write/enqueue boundary.
+WithTx selects an externally owned query executor only. Negative construction,
+single-row maximum and absent batch/fan-out capabilities remain fail-closed.
+Add synthetic tests for these boundaries, plus cleanup in the existing successful
+constructor test. No network protocol, SQL, dependency, migration or capability
+change. GoUploads owns the current heavy lane; source preparation only, with one
+necessary local gate deferred until an explicitly coordinated release.

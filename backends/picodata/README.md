@@ -70,6 +70,20 @@ The jobs repository is auto-detected for exact grouped queue stats.
 
 `Transactor` in Picodata backend is currently best-effort (no connection-pinned SQL transaction in current client API). To prevent accidental reliance on non-atomic DLQ transitions, `outbox.New` requires `outbox.WithAllowNonAtomicDLQ()` when configuring the Picodata transactor.
 
+The legacy names `ClientTransaction`, `ClientPicoData.TxPool`, `transaction.Manager`
+and `RunInTx` remain compatible. They expose `BestEffortRunner`: it invokes the
+callback with the supplied context and returns its error, without BEGIN,
+COMMIT, ROLLBACK or installing a transaction executor. A callback error cannot
+undo earlier writes, and business writes plus enqueue do not share an atomic
+commit through this runner. `transaction.WithTx` only selects a caller-owned
+query executor; it does not create or manage a transaction.
+
+`storage.Create` owns its new pool until initialization succeeds. A failed
+optional ping closes that pool before returning the wrapped ping error.
+Successful construction transfers pool ownership to the caller, which must
+close the client. `WithCheckPing(false)` preserves its existing behavior and
+does not establish database readiness.
+
 The repository exposes the required version-aware fenced reservation contract
 for exactly one job, no-attempt `DeferAt`, and version-preserving failed-job
 storage. It intentionally does not implement `BatchJobsRepository`, so
