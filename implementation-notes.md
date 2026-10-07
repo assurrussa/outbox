@@ -1069,3 +1069,13 @@ tests passed and touched storage/runtime lint reports zero issues. The one
 required local aggregate is `make check test-integration-sqlite`, adding the
 existing SQLite race integration target to validate fenced claims and
 transaction cleanup under the connection change; no containers are required.
+
+Final local aggregate `make check test-integration-sqlite` passed on exact source
+`8a2a7e1a772ce3a311d32c874842de8e233055bf`: formatting, core/backend vet,
+zero-issue core lint, core race/coverage, standalone backend tests, five example
+builds and SQLite integration race tests. SQLite integration has no service
+availability skip path and ran against test-owned temporary files. The heavy
+lane was explicitly released to GoUploads after completion; no background Go
+process, container or fixture remains from this gate. This evidence update is
+documentation only and reuses the passed source gate. Publication is a draft
+for parent review; no hosted CI dispatch/rerun, tag or deployment was performed.

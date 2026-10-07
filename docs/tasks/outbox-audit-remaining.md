@@ -51,7 +51,8 @@ sinks drop events without delivery changes. Deterministic tests cover single and
 batch storage/commit failures, heartbeat/fence loss, non-atomic DLQ, sink failure
 and public consumer wiring. One full `make check` passed on source `f43d990`,
 including core race/coverage, standalone backend tests and example builds.
-No containers were needed. Final review precedes merge. No replay implementation.
+No containers were needed. Parent review included the confirmed collection-count
+correction and manual-only CI transition; merged as `b0b2b58`. No replay implementation.
 
 ## 4. Safe replay
 
@@ -76,6 +77,12 @@ or durability guarantee is inferred from clean reopen tests. No schema changes.
 Replay remains pending owner semantics and whether host-owned authorization is
 sufficient. Picodata ping-failure cleanup and capability GoDoc are the next
 separate small item. Required SQLite final gates precede final review.
+
+Final local `make check test-integration-sqlite` passed on source `8a2a7e1`,
+including core race/coverage, standalone backend tests, example builds and
+SQLite integration race tests using owned temporary files. The heavy lane was
+released explicitly. Parent review/merge remains pending; no power-loss test,
+hosted CI dispatch, tag or deployment was performed.
 
 ## 6. Picodata capability clarity
 
