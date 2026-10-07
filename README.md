@@ -409,12 +409,13 @@ func (j *PublishJob) Handle(ctx context.Context, payload string) error {
 }
 ```
 
-For an ordinary error from a single-job `Handle`, the job remains reserved
-until its current persisted lease expires. There is no exponential-backoff
-policy for this path; the default initial reservation is five minutes, and
-protective renewals can extend it. Use `RetryAt` when the handler knows the next
-retry time. True handler batches have their own bounded retry behavior described
-[above](#true-handler-batches).
+With nil `RetryPolicy`, an ordinary error from a single-job `Handle` leaves the
+job reserved until its current persisted lease expires. The default initial
+reservation is five minutes, and protective renewals can extend it. Opt into
+`WithRetryPolicy` for retry scheduling independent of lease duration, including
+the exponential policy described [above](#optional-retry-scheduling). Use
+`RetryAt` when the handler knows the next retry time. True handler batches have
+their own default retry behavior described [above](#true-handler-batches).
 
 `Permanent` moves the owned job directly to DLQ. `RetryAt` atomically persists
 the next availability and releases the current lease; it never sleeps in a

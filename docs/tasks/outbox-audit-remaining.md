@@ -75,8 +75,8 @@ cleanup. Document filesystem/power-loss assumptions; no power-loss measurement
 or durability guarantee is inferred from clean reopen tests. No schema changes.
 
 Replay remains pending owner semantics and whether host-owned authorization is
-sufficient. Picodata ping-failure cleanup and capability GoDoc are the next
-separate small item, now prepared in PR #37. SQLite final gates and parent review are complete.
+sufficient. Picodata ping-failure cleanup and capability GoDoc are complete in
+PR #37. SQLite final gates and parent review are complete.
 
 Final local `make check test-integration-sqlite` passed on source `8a2a7e1`,
 including core race/coverage, standalone backend tests, example builds and
@@ -91,26 +91,31 @@ reproduction ran without skipping. Genuine memory compatibility remains intact.
 Reuse the earlier unrelated full gate. Parent independently approved the
 correction; merged as `ab4d5eb23f4a7ae7b1f95f57c0bb840f6f889692`.
 
-## 6. Picodata capability clarity
+## 6. Picodata capability clarity (merged PR #37)
 
-Current separate bounded PR: close the newly owned pool when construction ping
-fails and clarify legacy transaction names in GoDoc/consumer docs. Synthetic
+Implemented cleanup of the newly owned pool when construction ping fails and
+clarified legacy transaction names in GoDoc/consumer docs. Synthetic
 tests cover ownership transfer/failure, callback context/error behavior and
 existing fail-closed construction limits without network fixtures. No client
 protocol, repository SQL, public signature or capability expansion.
 
 One local `make check` passed on source `9744020`, including core race/coverage,
-standalone backend tests and all example builds. Parent review/merge remains
-pending. CPU lane returned explicitly; no Picodata container integration was
-needed for the unchanged network protocol and SQL.
+standalone backend tests and all example builds. Parent approved the source and
+documentation-only merge resolution; merged as
+`f4ec804674a2cc7108f87ee0d5434a06ec0a308e`. CPU lane returned explicitly; no
+Picodata container integration was needed for the unchanged network protocol
+and SQL.
 
-Make best-effort transaction limits and capability-storage support explicit in
+Best-effort transaction limits and capability-storage support are explicit in
 consumer docs/construction diagnostics. Preserve fail-closed atomic DLQ and
 unsupported fan-out/runtime boundaries. Test negative capability contracts;
 claim full transactional parity only when a connection-pinned atomic boundary
 is implemented and verified.
 
 ## 7. Large fan-out and fault/soak measurements
+
+This is optional characterization, separate from the documented
+[release-readiness gates](../../RELEASING.md), and awaits a measurement request.
 
 After correctness gates, measure large fan-out, worker/target skew, restart,
 lease loss, database outage and ambiguous acknowledgement on owned fixtures.
@@ -125,5 +130,6 @@ Run source and focused light checks during shared-lane contention. Schedule
 live integrations, race/full gates and fault/soak work only after lane
 coordination. Report exact commands and skips; compile-only tests do not prove
 transactional behavior. Open a draft PR for parent review after permitted
-checks, then complete pending gates before requesting merge. Continue the next
-item after branch coordination so dependent changes do not conflict.
+checks, then complete pending gates before requesting merge. Further
+implementation remains on hold pending replay owner decisions or a separately
+requested release; measurement work requires its own scope and lane coordination.
