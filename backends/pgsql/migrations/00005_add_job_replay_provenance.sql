@@ -21,6 +21,9 @@ create index outbox_job_replays_failed_job_index on outbox_job_replays (failed_j
 
 -- +goose Down
 -- +goose StatementBegin
+-- Acquire the destructive lock before reading emptiness. An in-flight first
+-- replay must commit/roll back before this transaction decides whether to drop.
+lock table outbox_job_replays in access exclusive mode;
 do $$
 begin
     if exists (select 1 from outbox_job_replays) then

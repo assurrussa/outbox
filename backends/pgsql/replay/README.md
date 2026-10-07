@@ -101,6 +101,11 @@ does not remove provenance or cause the same recorded request to recreate work.
 Do not treat this as a tamper-proof log against privileged direct SQL, table
 rewrites or arbitrary job-ID reuse.
 
+Down acquires an exclusive provenance-table lock before checking emptiness,
+inside goose's migration transaction. An in-flight first replay must finish
+before that decision; a newly committed record causes Down to fail and roll
+back. Migration DDL and goose version bookkeeping share the transaction.
+
 ## Local validation
 
 With an owned disposable PostgreSQL database:

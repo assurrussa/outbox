@@ -1207,3 +1207,31 @@ message. The corrective container was removed by recorded ID plus owner label,
 with zero remaining replay schemas; the lane was explicitly released. Final
 evidence/consumer-navigation edits are Markdown only. No full aggregate repeat,
 hosted CI launch, tag, deployment, production operation or retention mutation.
+
+## 2026-10-07: Replay downgrade concurrency review correction
+
+Independent PR39 review found that EXISTS before the destructive lock could
+see an empty journal while the first replay remained uncommitted. DROP would
+then wait, resume after that commit, and destroy its new provenance. Move
+ACCESS EXCLUSIVE acquisition before EXISTS in migration 00005 Down, with lock,
+check and DROP in the same migration transaction.
+
+Verified pinned goose v3.26.0 source: internal/sqlparser/parser.go defaults
+useTx=true (only NO TRANSACTION opts out); migration.go passes that flag to
+runSQLMigration; migration_sql.go uses one db.BeginTx for SQL statements and
+store.DeleteVersion, rolls back errors and commits both together. This migration
+has no NO TRANSACTION annotation.
+
+Add a deterministic real-PG interleaving: pause actual Replay at its pre-commit
+boundary after provenance insertion, confirm zero rows visible outside it,
+start actual goose Down on a distinct named connection, observe its ungranted
+AccessExclusiveLock blocked by that replay PID, then permit commit. Guarded Down
+must retain provenance, source, queued work and version 5. A test-owned copy
+with only the new lock removed must reproduce the original successful Down and
+lost committed provenance. A separate owned version-deletion trigger fails after
+DROP, proving DDL rolls back with version bookkeeping; empty Down then succeeds.
+Coordination uses channels and actual pg_locks/pg_blocking_pids, not elapsed
+sleeps. Cancellation cleanup joins all test goroutines before closing pools.
+Source-only while AuthHub RegistryUI has its reservation; only affected static
+and owned PG migration/replay gates are authorized, with prior full evidence
+retained. No production downgrade or broad check rerun.
