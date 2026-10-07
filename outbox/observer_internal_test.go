@@ -283,6 +283,70 @@ func TestObserverUnavailableSinkCannotAlterACK(t *testing.T) {
 	}
 }
 
+type observerCollectionRepo struct {
+	*executionBatchTestRepo
+	failTailRelease bool
+}
+
+func (r *observerCollectionRepo) ReleaseUnstartedJobsWithLease(
+	ctx context.Context, ids []JobID, token LeaseToken, now time.Time,
+) (int64, error) {
+	affected, err := r.executionBatchTestRepo.ReleaseUnstartedJobsWithLease(ctx, ids, token, now)
+	if r.failTailRelease && r.releaseCalls.Load() == 1 {
+		return 0, ErrLeaseLost
+	}
+	return affected, err
+}
+
+func TestObserverCollectionLossCountsKnownClaims(t *testing.T) {
+	for _, tailFailure := range []bool{false, true} {
+		name := "supplemental claim loss"
+		if tailFailure {
+			name = "byte-tail release loss"
+		}
+		t.Run(name, func(t *testing.T) {
+			events := make(chan RuntimeOutcome, 4)
+			repo := &observerCollectionRepo{executionBatchTestRepo: &executionBatchTestRepo{}, failTailRelease: tailFailure}
+			claims := 0
+			repo.findBatch = func(_ context.Context, _ JobCapability, token LeaseToken, _ int) ([]models.Job, error) {
+				claims++
+				if claims == 3 && !tailFailure {
+					return nil, ErrLeaseLost
+				}
+				job := executionBatchTestJob(testBatchJobName, token)
+				job.Payload = "a"
+				if claims == 3 {
+					job.Payload = "tail-too-large"
+				}
+				return []models.Job{job}, nil
+			}
+			service := newExecutionBatchTestService(repo, &executionBatchTestFailedRepo{}, &executionBatchTestTransactor{})
+			service.observer = events
+			service.MustRegisterBatchJob(&executionBatchTestHandler{
+				name: testBatchJobName,
+				handle: func(context.Context, []BatchJobItem) (BatchResult, error) {
+					t.Fatal("collection loss must prevent handler admission")
+					return BatchResult{}, nil
+				},
+			}, BatchConfig{MaxMessages: 4, MaxBytes: 3, MaxWait: time.Second})
+			processed, err := service.findAndProcessExecutionBatch(
+				t.Context(), logger.Discard(), JobCapability{Name: testBatchJobName, SchemaVersion: 1},
+			)
+			require.True(t, processed)
+			require.ErrorIs(t, err, ErrLeaseLost)
+			require.Equal(t, 3, claims)
+			require.Len(t, events, 1)
+			event := <-events
+			require.Equal(t, OutcomeLeaseLost, event.Kind)
+			require.Equal(t, 2, event.ClaimedJobs)
+			require.True(t, event.JobID.IsZero())
+			require.Zero(t, event.Capability)
+			require.Zero(t, event.Attempt)
+			require.Zero(t, repo.applyCalls.Load())
+		})
+	}
+}
+
 func newObserverTestService(t *testing.T, repo JobsRepository, tx Transactor, events chan RuntimeOutcome) *Service {
 	t.Helper()
 	service, err := New(

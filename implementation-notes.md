@@ -989,3 +989,16 @@ coverage, standalone backend tests, and all five example builds. No local live
 backend integration or container fixture was needed for this core-only change.
 The subsequent evidence update changes documentation only; reuse this source
 gate rather than repeat it. Heavy lane released before draft PR/final review.
+
+Final review found a collection-loss telemetry count bug: a supplemental claim
+could be added before a later fill error, but the observer retained the initial
+count. Capture the returned collection length before the fill-error branch and
+include selected rows already added to the lease manager before byte-tail
+release. This only corrects known group claim metadata; collection, admission,
+fencing and cleanup behavior remain unchanged. Deterministic regressions for
+supplemental claim loss and byte-tail release loss both reproduced `1` instead
+of `2` on the prior source, with no handler admission or persisted success.
+Source/focused validation precedes the coordinated final full gate; GoUploads
+currently owns the heavy lane. Prior-head CI does not validate this correction.
+Focused `go test ./outbox -run '^TestObserver' -count=1` passed after the fix;
+focused core lint reported zero issues, formatting and diff checks passed.

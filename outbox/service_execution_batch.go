@@ -100,13 +100,13 @@ func (s *Service) findAndProcessExecutionBatch(
 		registration.config,
 		jobs,
 	)
+	claimedJobs = len(filled)
 	if fillErr != nil {
 		processingFinished = true
 		heartbeatErr := manager.stopAndWait()
 		return true, errors.Join(fillErr, heartbeatErr, manager.releaseUnstarted(ctx))
 	}
 	selected := append([]models.Job(nil), filled...)
-	claimedJobs = len(selected)
 	sortExecutionBatchJobs(selected)
 	if err := manager.admit(batchCtx, s.drain); err != nil {
 		processingFinished = true
@@ -387,10 +387,11 @@ func (s *Service) fillExecutionBatch(
 		if err := manager.add(selected); err != nil {
 			return jobs, err
 		}
+		// Include rows already owned by the manager even if tail release fails.
+		jobs = append(jobs, selected...)
 		if err := s.releaseClaimedBatchTail(ctx, manager.leaseToken, tail); err != nil {
 			return jobs, err
 		}
-		jobs = append(jobs, selected...)
 		for _, job := range selected {
 			usedBytes += len(job.Payload)
 		}
