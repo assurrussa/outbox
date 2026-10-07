@@ -519,8 +519,9 @@ foreign keys enabled and NORMAL synchronization; standard runtime still owns
 one connection. `storage.WithSynchronousMode` and `runtime.Config.SynchronousMode`
 allow only NORMAL/FULL, with empty mode preserving NORMAL. Backend-owned settings
 override their DSN PRAGMAs; other DSN options remain intact. Initialization checks
-effective journal mode: WAL for files, legitimate `memory` (or explicitly OFF
-with no main database file) for memory databases.
+effective journal mode: WAL for files; both `memory` and explicitly OFF require
+SQLite to confirm no main database file. Journal mode alone does not prove that
+a database has no backing file.
 WAL/NORMAL can lose committed transactions after power/OS failure; FULL adds a
 commit sync, subject to storage/filesystem behavior. See the
 [SQLite durability contract](../backends/sqlite/README.md#durability-and-connection-settings).

@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -97,6 +98,30 @@ func TestMemoryJournalCompatibility(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestRejectsFileBackedMemoryJournal(t *testing.T) {
+	dsn := "file:" + filepath.Join(t.TempDir(), "memory-journal.db") +
+		"?vfs=unix-dotfile&_pragma=journal_mode(MEMORY)"
+	// Confirm the pinned driver's VFS retains MEMORY when WAL is requested.
+	// The backing file distinguishes this from a legitimate memory database.
+	db, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	var mode string
+	err = db.QueryRowContext(t.Context(), "PRAGMA journal_mode=WAL").Scan(&mode)
+	if err != nil && strings.Contains(err.Error(), "no such vfs") {
+		t.Skip("pinned SQLite driver has no unix-dotfile VFS on this platform")
+	}
+	require.NoError(t, err)
+	require.Equal(t, "memory", mode)
+	require.NoError(t, db.Close())
+	client, err := storage.Create(t.Context(), dsn)
+	if client != nil {
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+	}
+	require.Nil(t, client)
+	require.ErrorContains(t, err, `effective journal mode is "memory"`)
 }
 
 func TestSynchronousModeReopenAndRollback(t *testing.T) {

@@ -1079,3 +1079,20 @@ lane was explicitly released to GoUploads after completion; no background Go
 process, container or fixture remains from this gate. This evidence update is
 documentation only and reuses the passed source gate. Publication is a draft
 for parent review; no hosted CI dispatch/rerun, tag or deployment was performed.
+
+## 2026-10-07: SQLite review correction for file-backed MEMORY journals
+
+Independent PR review identified that effective journal mode MEMORY can also
+belong to a file when its VFS cannot enter WAL. Check the main database filename
+for both MEMORY and OFF; accept either only when it is empty. WAL still succeeds
+directly. Add an unconditional fake-backed MEMORY/file rejection and a real
+pinned-driver unix-dotfile VFS probe using an owned temporary file. The real
+probe skips only when the requested VFS does not exist on the platform, so do
+not claim that reproduction unless it executes. Genuine memory compatibility
+and exactly-once raw result close assertions remain required.
+
+Source is prepared while GoUploads owns the heavy lane; no correction tests have
+run yet. Coordinate only affected storage/runtime checks, lint and SQLite
+integration race tests after its explicit release; reuse prior unrelated gates.
+Picodata source remains saved on its independent branch and unpublished. Hold
+SQLite publication/merge until correction evidence and final review complete.

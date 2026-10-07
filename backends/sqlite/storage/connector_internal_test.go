@@ -14,11 +14,12 @@ func TestConnectorRejectsUnconfiguredConnection(t *testing.T) {
 	const (
 		unexpectedJournal = "unexpected journal"
 		offFileJournal    = "OFF file journal"
+		memoryFileJournal = "MEMORY file journal"
 	)
 	configurationErr := errors.New("owned configuration failure")
 	closeErr := errors.New("owned close failure")
 	for _, failure := range []string{
-		unexpectedJournal, offFileJournal, "journal query failure", "configuration and close failure",
+		unexpectedJournal, offFileJournal, memoryFileJournal, "journal query failure", "configuration and close failure",
 	} {
 		t.Run(failure, func(t *testing.T) {
 			conn := &connectorTestConn{journal: "wal"}
@@ -27,6 +28,8 @@ func TestConnectorRejectsUnconfiguredConnection(t *testing.T) {
 				conn.journal = "delete"
 			case offFileJournal:
 				conn.journal = "off"
+			case memoryFileJournal:
+				conn.journal = "memory"
 			case "journal query failure":
 				conn.queryErr = configurationErr
 			case "configuration and close failure":
@@ -42,6 +45,8 @@ func TestConnectorRejectsUnconfiguredConnection(t *testing.T) {
 				require.ErrorContains(t, err, `effective journal mode is "delete"`)
 			case offFileJournal:
 				require.ErrorContains(t, err, `effective journal mode is "off"`)
+			case memoryFileJournal:
+				require.ErrorContains(t, err, `effective journal mode is "memory"`)
 			default:
 				require.ErrorIs(t, err, configurationErr)
 			}

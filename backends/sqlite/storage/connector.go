@@ -61,14 +61,13 @@ func configureJournal(ctx context.Context, conn pragmaConnection) error {
 	if err != nil {
 		return err
 	}
-	// SQLite memory databases cannot use WAL. Retain their existing support
-	// without treating memory storage as durable file-backed WAL.
-	if mode == "wal" || mode == "memory" {
+	if mode == "wal" {
 		return nil
 	}
-	// WAL requests cannot replace an explicitly OFF journal on a memory DB.
-	// Preserve that existing DSN behavior only when SQLite confirms no file.
-	if mode == "off" {
+	// MEMORY and OFF are also valid for files when a VFS cannot use WAL.
+	// Preserve these legitimate memory-DB modes only when SQLite confirms
+	// there is no main database file; mode alone does not establish that.
+	if mode == "memory" || mode == "off" {
 		memory, err := hasNoMainDatabaseFile(ctx, conn)
 		if err != nil {
 			return err

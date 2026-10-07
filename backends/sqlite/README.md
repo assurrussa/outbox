@@ -110,9 +110,10 @@ No process-global connection hook is installed.
 
 Initialization checks the effective journal mode returned by SQLite. File
 databases must enter WAL; another effective mode returns an error. In-memory
-databases legitimately remain `memory` and are accepted; an explicitly OFF
-memory journal also retains its existing behavior when SQLite confirms no main
-database file. WAL requests cannot override memory journal modes. Neither is
+databases legitimately remain `memory`; this and an explicitly OFF memory
+journal are accepted only when SQLite confirms no main database file. MEMORY
+can also be a file journal mode, so its name alone is insufficient. WAL requests
+cannot override memory database journal modes. Neither is
 durable WAL storage. Plain `:memory:` belongs to one physical connection, so multiple
 connections or replacement can see separate/empty databases. Use a deliberate
 shared-memory URI and connection lifetime when memory sharing is needed.
