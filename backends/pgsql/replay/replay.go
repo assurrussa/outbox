@@ -169,12 +169,19 @@ func (r *Replayer) replay(ctx context.Context, request Request, admit Admission)
 	if !errors.Is(err, ErrReplayNotFound) {
 		return Result{}, err
 	}
+	baseline, err := r.sourceBaseline(ctx, &source)
+	if err != nil {
+		return Result{}, err
+	}
 	key, err := admit(ctx, source)
 	if err != nil {
 		return Result{}, fmt.Errorf("host admission: %w", err)
 	}
 	if strings.TrimSpace(key) == "" {
 		return Result{}, ErrNotAdmitted
+	}
+	if !baseline.RequestID.IsZero() && key != baseline.BusinessKey {
+		return Result{}, ErrRequestConflict
 	}
 	var active bool
 	err = r.db.QueryRow(ctx, "replay.active", `select exists (
@@ -189,6 +196,23 @@ func (r *Replayer) replay(ctx context.Context, request Request, admit Admission)
 		return Result{}, ErrSourceActive
 	}
 	return r.stage(ctx, request.RequestID, source, key)
+}
+
+func (r *Replayer) sourceBaseline(ctx context.Context, source *Source) (Record, error) {
+	baseline, err := r.record(ctx, "failed_job_id", source.FailedJobID)
+	if errors.Is(err, ErrReplayNotFound) {
+		return Record{}, nil
+	}
+	if err != nil {
+		return Record{}, err
+	}
+	// Each later request must preserve the first admitted operation/key. The
+	// failed-row lock serializes this check with every replay of that source.
+	source.OriginalDeduplicationKey = baseline.Source.OriginalDeduplicationKey
+	if *source != baseline.Source {
+		return Record{}, ErrRequestConflict
+	}
+	return baseline, nil
 }
 
 func validateSource(source Source) error {
@@ -278,11 +302,12 @@ func (r *Replayer) record(ctx context.Context, column string, id any) (Record, e
 		return Record{}, ErrNotConfigured
 	}
 	var record Record
-	// column is selected only by the two fixed internal callers above.
+	// column is selected only by fixed internal callers; failed_job_id selects
+	// a prior snapshot, all of which share the guarded operation/business key.
 	err := r.db.QueryRow(ctx, "replay.lookup", `select
 		request_id, job_id, failed_job_id, source_job_id, business_key, queue,
 		name, schema_version, payload, original_deduplication_key, created_at
-		from outbox_job_replays where `+column+`=$1`, id).Scan(
+		from outbox_job_replays where `+column+`=$1 limit 1`, id).Scan(
 		&record.RequestID, &record.JobID, &record.Source.FailedJobID, &record.Source.OriginalJobID,
 		&record.BusinessKey, &record.Source.Queue, &record.Source.Capability.Name,
 		&record.Source.Capability.SchemaVersion, &record.Source.Payload,

@@ -1180,3 +1180,19 @@ commit with zero confirmed result; cancellation => existing cleanup contract.
 Test live commit ambiguity and request concurrency on unique owned PostgreSQL
 schemas. AuthHub minpassword owns the current lane, then GoUploads' short
 cutoff correction; all Outbox work remains source-only until explicit release.
+
+After explicit GoUploads release, source `bb6a89e` passed touched-package
+integration-enabled lint (zero issues), owned PostgreSQL 18.6 replay race tests
+without skips, and one `make check` (core race/coverage, standalone backends,
+example builds). The first lint finding required the consumer example's empty
+Output marker; it was corrected before these passing gates. Narrow cleanup
+removed the recorded-ID/owner-label container and found zero replay schemas.
+The heavy lane was explicitly returned to AuthHub for its affected correction.
+
+Final source review strengthens the same failed-row invariant for distinct
+request IDs: they must preserve its first admitted operation/business key too,
+even after ACK. Existing row locking serializes the baseline check. Add changed
+key/operation assertions to the PG contract matrix. This correction is
+source-only until AuthHub explicitly releases; then repeat only affected replay
+lint, standalone consumer/unit checks and owned PG race validation. Preserve
+the earlier unrelated full readiness evidence; do not repeat its aggregate.

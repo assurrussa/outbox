@@ -66,6 +66,10 @@ the job. It never recreates acknowledged work. Reusing a request for another
 failed row, altered source operation or different business key fails closed.
 Admission can still reject a repeated request under current host policy.
 
+Later distinct requests for the same failed row must also preserve its first
+admitted operation and business key. Returning a new key fails closed even after
+ACK; it cannot redefine that source's business identity.
+
 A new request fails with `ErrSourceActive` while the original job or an earlier
 replay of that failed row remains in `jobs`, regardless of its availability or
 lease. After completion, a distinct intentionally admitted request may stage

@@ -289,6 +289,20 @@ func testReplayActiveSource(t *testing.T, f replayFixture) {
 	require.Zero(t, rejected)
 	f.absent(t, next)
 	f.ack(t, result.Record)
+	_, err = f.pool.Exec(t.Context(), "update jobs_failed set schema_version=3 where id=$1", source.FailedJobID)
+	require.NoError(t, err)
+	changedOperation, err := f.replayer.Replay(t.Context(), next, admitOriginal)
+	require.ErrorIs(t, err, replay.ErrRequestConflict)
+	require.Zero(t, changedOperation)
+	f.absent(t, next)
+	_, err = f.pool.Exec(t.Context(), "update jobs_failed set schema_version=2 where id=$1", source.FailedJobID)
+	require.NoError(t, err)
+	changedKey, err := f.replayer.Replay(t.Context(), next, func(context.Context, replay.Source) (string, error) {
+		return "new-business-effect", nil
+	})
+	require.ErrorIs(t, err, replay.ErrRequestConflict)
+	require.Zero(t, changedKey)
+	f.absent(t, next)
 	// A distinct admitted request is allowed after ACK, with the same effect
 	// key. It is an intentional retry, never an implicit request-ID change.
 	nextResult, err := f.replayer.Replay(t.Context(), next, admitOriginal)
