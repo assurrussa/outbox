@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 const (
@@ -89,7 +88,7 @@ func (c BatchConfig) normalize() (normalizedBatchConfig, error) {
 // BatchJobItem is one claimed job passed to a BatchJob. Items retain durable
 // queue order and expose the attempt number written by the claim transaction.
 type BatchJobItem struct {
-	JobID   types.JobID
+	JobID   JobID
 	Payload string
 	Attempt int
 }
@@ -97,7 +96,7 @@ type BatchJobItem struct {
 // BatchItemResult classifies one input job by its stable JobID. A nil Err
 // acknowledges the item; error dispositions control retry, defer, or DLQ.
 type BatchItemResult struct {
-	JobID types.JobID
+	JobID JobID
 	Err   error
 }
 
@@ -138,7 +137,7 @@ const (
 // DLQ records through its configured JobsFailedRepository in the same outer
 // transaction before the batch repository removes the active rows.
 type BatchJobOutcome struct {
-	JobID       types.JobID
+	JobID       JobID
 	Kind        BatchJobOutcomeKind
 	AvailableAt time.Time
 	Reason      string
@@ -199,7 +198,7 @@ type BoundedBatchJobsRepository interface {
 type DeferJobsRepository interface {
 	DeferJobWithLease(
 		ctx context.Context,
-		jobID types.JobID,
+		jobID JobID,
 		leaseToken LeaseToken,
 		now time.Time,
 		availableAt time.Time,
@@ -238,7 +237,7 @@ func validateBatchResult(input []BatchJobItem, result BatchResult) ([]error, err
 		)
 	}
 
-	positions := make(map[types.JobID]int, len(input))
+	positions := make(map[JobID]int, len(input))
 	for index, item := range input {
 		if item.JobID.IsZero() {
 			return nil, fmt.Errorf("%w: input %d has an empty JobID", ErrInvalidBatchResult, index)
@@ -250,7 +249,7 @@ func validateBatchResult(input []BatchJobItem, result BatchResult) ([]error, err
 	}
 
 	errs := make([]error, len(input))
-	seen := make(map[types.JobID]struct{}, len(result.Items))
+	seen := make(map[JobID]struct{}, len(result.Items))
 	for _, item := range result.Items {
 		position, ok := positions[item.JobID]
 		if !ok {

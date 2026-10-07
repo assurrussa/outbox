@@ -19,6 +19,18 @@ go get github.com/assurrussa/outbox@latest
 import "github.com/assurrussa/outbox/outbox"
 ```
 
+## Transactional enqueue and public IDs
+
+Use `outbox.JobID` and `outbox.MessageID` with `NewJobID`, `NewMessageID`,
+`ParseJobID`, and `ParseMessageID` from the supported core import path.
+Existing ID types and encodings remain compatible; consumers do not need
+`shared/types`.
+
+The [transactional PostgreSQL quickstart](examples/base-app-pgsql/transactional/README.md)
+shows a business write and `Put` committing or rolling back together using the
+existing runtime and transaction context. Handlers still need idempotent effects;
+this transaction boundary does not promise exactly once delivery.
+
 ## Core usage
 
 ```go

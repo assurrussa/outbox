@@ -802,3 +802,77 @@ Decisions made:
   unique by logical UUID value. Added a SQLite fixture showing that two case
   aliases of one UUID at one timestamp collapse to the same public cursor;
   such ambiguous historical data needs normalization/deduplication first.
+
+## 2026-10-07: Public IDs and transactional quickstart
+
+- Isolated branch from approved master `ec405124`; source checkout left untouched.
+- Public ID aliases and random/parse constructors preserve underlying identity
+  and encoding. No broad `shared/*` API promotion or backend behavior change.
+- Added a PostgreSQL runtime quickstart under the existing example module; each
+  invocation owns a unique schema and uses embedded migrations. Commit and
+  callback rollback share pgx transaction context with `Put`. Integration tests
+  additionally exercise enqueue persistence failure.
+- Business row/job invariants: successful callback commits both; callback error
+  after enqueue or Put error persists neither; failed calls return a zero ID.
+  No workers are started, so queue inspection cannot race with acknowledgement.
+- Remaining work is sequenced in `docs/tasks/outbox-audit-remaining.md`.
+- DataGrid owns the heavy Mac lane: live database/race/full checks deferred;
+  source and focused light checks only. No containers started or cleaned up.
+
+Validation for this bounded PR:
+
+- `go test ./outbox -count=1` passed after mock regeneration.
+- Focused `golangci-lint run --timeout=3m ./outbox/...`: zero issues.
+- Compile-only `go test` for `outbox/...` and all four backend module trees
+  with `-run '^$'` passed; no backend integration was executed.
+- `GOWORK=off go test ./outbox -run TestPublicID -count=1` passed.
+- PostgreSQL quickstart tagged integration compilation and standalone example
+  module compilation passed; `go vet -tags integration ./transactional` passed.
+- `TestBusinessWriteAndPutAtomicity` explicitly skipped without `OUTBOX_PG_DSN`.
+- Touched-file gofumpt/gci checks and `git diff --check` passed.
+- Live quickstart integration and `make check` remain pending lane coordination.
+
+## 2026-10-07: Quickstart enqueue-failure review correction
+
+The original integration scenario incorrectly assumed `Put` rejects an empty
+job name. Existing validation rejects nonpositive schema versions, not empty
+names. Replaced the scenario with a test-owned PostgreSQL CHECK constraint
+rejecting its payload and require SQLSTATE `23514` through error wrapping.
+The business insert succeeds first; the enqueue SQL fails and the test asserts
+that neither new row survives rollback and no usable job ID is returned.
+No public validation or runtime behavior changed. Live PostgreSQL verification
+remains deferred while DataGrid owns the heavy lane.
+
+The transaction docs now distinguish an outermost commit from nested callback-
+only reuse, and require propagating nested errors. The demo helper is called
+without an attached transaction. The example's live integration requires its
+explicit documented command; it is not part of `make check` or
+`make test-integration-pgsql`. Compile-only validation does not satisfy that gate.
+
+Correction validation: tagged quickstart compile-only check and tagged `go vet`
+passed using shared caches; `git diff --check` passed. Live database execution
+was not attempted while the heavy lane remains occupied.
+
+## 2026-10-07: Final bounded PR validation after lane handoff
+
+All requested gates passed on reviewed source `f7a5b7a`:
+
+- Explicit `go test -tags integration ./examples/base-app-pgsql/transactional
+  -count=1 -v` passed with no skips on an owned PostgreSQL 17.9 fixture. Commit,
+  callback rollback, and CHECK-constraint enqueue failure (SQLSTATE `23514`)
+  all passed.
+- `go run ./examples/base-app-pgsql/transactional` passed and printed the
+  confirmed business-row/job commit and rollback result.
+- Fixture inspection after both invocations found zero `outbox_quickstart_*`
+  schemas. The owned container and its disposable volumes were removed; no
+  owned container/network or background Go process remained.
+- Full `make check` passed with shared-cache overrides: formatting, vet, zero
+  lint issues, core race/coverage, standalone backend tests, and standalone
+  example builds. This does not claim the broader backend integration matrix.
+- Docker could not bind-mount this workspace through Compose. Only the failed
+  owned Compose fixture was removed; validation used a uniquely named owned
+  container without a host mount on local port 55483. No broad Docker cleanup.
+
+The heavy lane is released for the next sequential project window. Source is
+unchanged from reviewed head; this follow-up records evidence only. Draft PR
+remains for parent review/merge, with no tags, deployment, or feature expansion.

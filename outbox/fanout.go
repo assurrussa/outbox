@@ -31,7 +31,7 @@ var (
 
 // FanoutEvent is the immutable integration event copied into every delivery.
 type FanoutEvent struct {
-	ID            types.MessageID `json:"id"`
+	ID            MessageID       `json:"id"`
 	Topic         string          `json:"topic"`
 	SchemaVersion SchemaVersion   `json:"schemaVersion"`
 	Payload       json.RawMessage `json:"payload"`
@@ -49,9 +49,9 @@ type FanoutTarget struct {
 
 // FanoutDelivery is the stable payload handled by a target-specific worker.
 type FanoutDelivery struct {
-	ID     types.MessageID `json:"id"`
-	Event  FanoutEvent     `json:"event"`
-	Target FanoutTarget    `json:"target"`
+	ID     MessageID    `json:"id"`
+	Event  FanoutEvent  `json:"event"`
+	Target FanoutTarget `json:"target"`
 }
 
 type fanoutSnapshot struct {
@@ -66,11 +66,11 @@ func FanoutDeliveryJobName(kind, topic string) string {
 }
 
 // FanoutDeliveryID deterministically identifies one event/consumer delivery.
-func FanoutDeliveryID(eventID types.MessageID, kind, targetID string) types.MessageID {
+func FanoutDeliveryID(eventID MessageID, kind, targetID string) MessageID {
 	namespace := uuid.NewSHA1(uuid.NameSpaceOID, []byte("github.com/assurrussa/outbox/fanout"))
 	name := eventID.String() + "\x00" + kind + "\x00" + targetID
 
-	return types.MessageID(uuid.NewSHA1(namespace, []byte(name)))
+	return MessageID(uuid.NewSHA1(namespace, []byte(name)))
 }
 
 // DecodeFanoutDelivery validates a delivery payload before a consumer uses it.
@@ -107,7 +107,7 @@ func (s *Service) PutFanout(
 	event FanoutEvent,
 	targets []FanoutTarget,
 	availableAt time.Time,
-) (types.JobID, error) {
+) (JobID, error) {
 	if s.fanoutJobsRepo == nil {
 		return types.JobIDNil, ErrFanoutRepositoryNotConfigured
 	}
@@ -258,11 +258,11 @@ func validFanoutToken(value string, allowDot bool) bool {
 	return true
 }
 
-func fanoutEventDeduplicationKey(eventID types.MessageID) string {
+func fanoutEventDeduplicationKey(eventID MessageID) string {
 	return "fanout-event:" + eventID.String()
 }
 
-func fanoutDeliveryDeduplicationKey(deliveryID types.MessageID) string {
+func fanoutDeliveryDeduplicationKey(deliveryID MessageID) string {
 	return "fanout-delivery:" + deliveryID.String()
 }
 

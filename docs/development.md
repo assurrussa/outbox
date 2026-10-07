@@ -186,3 +186,16 @@ Do not set `GOMODCACHE=$PWD/tmp/gomodcache`: `go test ./...` will traverse that
 downloaded module tree and may start testing third-party packages.
 
 Do not commit `tmp/`; it is ignored.
+
+## Transactional Quickstart Check
+
+With a disposable PostgreSQL database and `OUTBOX_PG_DSN` set, run
+`go test -tags integration ./examples/base-app-pgsql/transactional -count=1`.
+The test owns a unique schema, covers commit/rollback/enqueue failure, and drops
+only that schema. Neither `make check` nor `make test-integration-pgsql` executes
+this example integration test; run the explicit command above after lane
+coordination. Without a DSN it skips. Compile without database access using
+`go test -tags integration ./examples/base-app-pgsql/transactional -run '^$'`.
+
+The sequenced remaining audit plan is in
+[tasks/outbox-audit-remaining.md](tasks/outbox-audit-remaining.md).
