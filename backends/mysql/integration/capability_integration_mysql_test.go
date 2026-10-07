@@ -200,8 +200,9 @@ func TestMySQLFanoutPartialPlanningRollsBackCompleteSet(t *testing.T) {
 	require.Equal(t, outbox.FanoutDispatcherJobName, jobs[0].Name)
 
 	time.Sleep(time.Second + 100*time.Millisecond)
-	retry := newMySQLFanoutService(t, ts.jobsRepo, ts.jobsRepo, ts.jobsFailedRepo, txManager)
-	require.NoError(t, runMySQLServiceFor(ctx, retry, 300*time.Millisecond))
+	retryRepo := &mysqlNotifyingAckRepo{Repo: ts.jobsRepo, acked: make(chan struct{})}
+	retry := newMySQLFanoutService(t, retryRepo, ts.jobsRepo, ts.jobsFailedRepo, &mysqlDelayCommitReturn{Transactor: txManager})
+	require.NoError(t, runMySQLServiceUntilAck(ctx, retry, retryRepo.acked))
 	jobs, err = ts.jobsRepo.All(ctx)
 	require.NoError(t, err)
 	require.Len(t, jobs, len(targets))
@@ -519,4 +520,64 @@ func TestMySQLTableNameValidation(t *testing.T) {
 	failedReserved, err := jobsfailedrepo.New(ts.db, jobsfailedrepo.WithFailedJobsTable("select"))
 	require.NoError(t, err)
 	require.NotNil(t, failedReserved)
+}
+
+// mysqlDelayCommitReturn models a slow response after durable fan-out commit.
+// The old fixed run deadline cancels before ACK even though deliveries exist.
+type mysqlDelayCommitReturn struct{ outbox.Transactor }
+
+func (*mysqlDelayCommitReturn) SupportsAtomicDLQ() bool { return true }
+
+func (m *mysqlDelayCommitReturn) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	if err := m.Transactor.RunInTx(ctx, fn); err != nil {
+		return err
+	}
+	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+// runMySQLServiceUntilAck joins Run before database inspection. The timeout is
+// a failure bound, never the success/completion condition.
+func runMySQLServiceUntilAck(ctx context.Context, svc *outbox.Service, acked <-chan struct{}) error {
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- svc.Run(runCtx) }()
+	select {
+	case <-acked:
+		cancel()
+		return <-done
+	case err := <-done:
+		if err != nil {
+			return err
+		}
+		select {
+		case <-acked:
+			return nil
+		default:
+		}
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
+		return errors.New("service stopped before dispatcher ACK")
+	}
+}
+
+type mysqlNotifyingAckRepo struct {
+	*jobsrepo.Repo
+	acked    chan struct{}
+	notified atomic.Bool
+}
+
+func (r *mysqlNotifyingAckRepo) DeleteJobWithLease(
+	ctx context.Context,
+	jobID types.JobID,
+	leaseToken outbox.LeaseToken,
+	now time.Time,
+) (int64, error) {
+	affected, err := r.Repo.DeleteJobWithLease(ctx, jobID, leaseToken, now)
+	if err == nil && affected == 1 && r.notified.CompareAndSwap(false, true) {
+		close(r.acked)
+	}
+	return affected, err
 }

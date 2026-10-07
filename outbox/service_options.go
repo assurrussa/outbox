@@ -25,6 +25,7 @@ type Options struct {
 	jobsFailedRepo       JobsFailedRepository
 	transactor           Transactor
 	allowNonAtomicDLQ    bool
+	retryPolicy          RetryPolicy
 	logger               logger.Logger
 }
 
@@ -222,4 +223,12 @@ func WithJobsFailedRepo(jobsFailedRepo JobsFailedRepository) OptOptionsSetter {
 	return func(o *Options) {
 		o.jobsFailedRepo = jobsFailedRepo
 	}
+}
+
+// WithRetryPolicy opts into persisted retry scheduling for counted failures.
+// Nil restores existing defaults: lease-expiry recovery for ordinary single
+// failures and bounded backoff for batch items. Reservation/lease duration is
+// unaffected. Explicit RetryAt wins, and MaxAttempts continues to bound retries.
+func WithRetryPolicy(policy RetryPolicy) OptOptionsSetter {
+	return func(o *Options) { o.retryPolicy = policy }
 }

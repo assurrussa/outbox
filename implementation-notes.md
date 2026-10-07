@@ -876,3 +876,72 @@ All requested gates passed on reviewed source `f7a5b7a`:
 The heavy lane is released for the next sequential project window. Source is
 unchanged from reviewed head; this follow-up records evidence only. Draft PR
 remains for parent review/merge, with no tags, deployment, or feature expansion.
+
+## 2026-10-07: Opt-in retry policy design
+
+New bounded branch starts from merged master `5195675`. The policy computes
+only a delay from public immutable attempt metadata (job ID, capability,
+claimed one-based attempt and error). Scheduling accepts an explicit `now`
+internally for deterministic tests; lease clocks/extension remain untouched.
+
+Transition matrix:
+- nil policy + ordinary single failure: existing lease-expiry recovery;
+- configured policy + ordinary retryable single/item failure: fenced persisted
+  reschedule from completion time, retaining the counted attempt;
+- RetryAt: explicit timestamp wins over policy, clamped to completion time;
+- success, Permanent, DeferAt, exhausted attempts or cancellation: existing
+  paths; no policy invocation;
+- true batch top-level failure: existing no-attempt capability defer/streak,
+  excluded from counted-attempt policy;
+- invalid negative delay or policy panic: fail closed, no retry mutation;
+- stale fence during reschedule: ErrLeaseLost; no attempt/fence bypass.
+
+Provide a small policy interface/function adapter and bounded exponential
+constructor with optional caller-supplied jitter. Jitter and custom policy
+callbacks must be concurrency-safe and promptly return; the runtime contains
+panics. Deterministic tests inject completion time and jitter without changing
+worker/lease clocks. No observer, replay, schema or backend change. Source/light
+checks only while GoUploads owns the heavy lane; request handoff before full
+check or containers. No repeated previously passed gates.
+
+Retry-policy source/light validation:
+- New deterministic policy and in-memory single/batch regressions passed.
+- Affected core package traversal `go test ./outbox -count=1` passed.
+- Focused source lint `golangci-lint run --timeout=3m ./outbox/...` passed with
+  zero issues after correcting new test formatting.
+- Self-review confirms only retry-time selection changes; default lease
+  recovery, batch no-attempt deferral, disposition/attempt precedence and
+  current fenced finalization remain in place. No backend/schema/facade edits.
+- `git diff --check` passed. One full `make check` is pending explicit lane
+  release; no full/race/container checks were started during GoUploads ownership.
+
+Retry-policy final gate: one authorized `make check` passed on unchanged source
+`ce9c08a`, using existing shared caches. Formatting, vet, zero lint issues, core
+race/coverage, all four standalone backend tests and standalone example builds
+passed. Checkout remained clean and no containers were used. Later lane
+reassignment does not require repeating this passed gate; final source evidence
+is reused exactly. This evidence-only update is the sole subsequent repo change.
+Draft PR is for one final parent review; no merge, tags, deploy or package
+publication is authorized in this task.
+
+## 2026-10-07: PR 34 MySQL fan-out completion regression
+
+CI head `80363f2` failed the unchanged partial-planning retry test: three
+committed deliveries remained beside the dispatcher at attempt 2 when its
+300ms run deadline cancelled before acknowledgement. The retry policy is nil
+and the successful dispatcher path is unchanged from baseline `5195675`.
+
+A controlled 500ms delay after durable fan-out commit reproduced the exact
+four-versus-three failure once on baseline `5195675` and once on candidate
+`80363f2`, both under race on owned MySQL 8.0.46. The fix is test-only: wait for
+a positive persisted dispatcher ACK, cancel and join Run, then keep the exact
+delivery-count and unique-delivery assertions. The 10s deadline bounds failure
+only. Retain the delayed commit response as a deterministic regression proving
+completion is not inferred from elapsed wall time. Runtime/CI workflow and
+rollback assertions remain unchanged.
+
+The fixed targeted test passed three consecutive race runs without skips.
+Fixture inspection found zero remaining TestMySQLSuite databases; the owned
+container/volumes and diagnostic baseline worktree were removed. Final CI on
+the new exact head is required before merge. Previously passed core/runtime
+source gates on `ce9c08a` are reused; no unrelated full local rerun.

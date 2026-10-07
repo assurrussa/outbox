@@ -23,14 +23,19 @@ effects. Consumers own effect idempotency and reconciliation of ambiguous commit
   zero fixture schemas; the owned container was removed. Neither `make check`
   nor `make test-integration-pgsql` executes the example integration test. No new retry, replay, observer, or backend behavior in this PR.
 
-## 2. Opt-in RetryPolicy independent of lease (next ready item)
+## 2. Opt-in RetryPolicy independent of lease (current bounded PR)
 
-Specify a backwards-compatible optional policy for retry scheduling; keep lease
-reservation/extension exclusively about ownership. Define attempt numbering,
-policy inputs, defaults, delay bounds, jitter/clock injection and cancellation
-before implementation. Keep permanent disposition, exhausted attempts, fencing,
-unknown capabilities and existing default scheduling behavior intact. Tests must
-prove legacy behavior and opt-in backoff without coupling delay to reserve time.
+Implemented a core policy interface/function adapter and bounded exponential
+constructor with optional injected jitter. Policy inputs are public job ID,
+capability, counted one-based attempt and error. RetryAt takes precedence;
+Permanent, DeferAt, exhaustion, success and cancellation bypass policy. True
+batch top-level errors retain existing no-attempt defer behavior. Nil policy
+preserves both existing single and batch defaults. Negative delay/panic fails
+closed. Completion-clock and jitter tests are deterministic; lease ownership,
+fencing and attempt accounting remain unchanged. Source/light gates precede
+heavy-lane handoff and one full check; no observer/replay implementation.
+One full `make check` passed on source `ce9c08a`, including core race/coverage,
+standalone backend tests and example builds. Ready for one final review.
 
 ## 3. Observer events for confirmed outcomes
 
