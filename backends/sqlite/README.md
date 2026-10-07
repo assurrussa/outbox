@@ -80,6 +80,54 @@ An enclosing caller-owned transaction remains under the caller's control.
 `GetQueueStats` uses one exact grouped scan of the active queue. The host owns
 its polling frequency; the backend adds no cache or projection table.
 
+## Durability And Connection Settings
+
+Every physical connection, including pool growth and discarded/expired
+replacements, receives the backend settings before it enters the pool:
+requested WAL journal mode, `busy_timeout=5000`, `foreign_keys=ON`, and
+`synchronous=NORMAL`. Storage pool defaults remain ten open/idle connections;
+the standard runtime remains one open/idle connection. Zero idle connections
+are supported for file databases and still receive initialization on each open.
+
+Choose synchronization explicitly through either construction surface:
+
+```go
+client, err := sqlitestorage.Create(ctx, dsn,
+    sqlitestorage.WithSynchronousMode(sqlitestorage.SynchronousFull))
+
+rt, err := sqliteruntime.Open(ctx, sqliteruntime.Config{
+    DSN: dsn, SynchronousMode: sqlitestorage.SynchronousFull,
+})
+```
+
+Import `backends/sqlite/runtime` as `sqliteruntime` for the second example.
+Empty mode preserves NORMAL; only the exported NORMAL/FULL values are accepted.
+Backend settings take precedence over DSN `_pragma` values for `journal_mode`,
+`synchronous`, `busy_timeout` and `foreign_keys`, matching the existing startup
+precedence consistently across connections. Other DSN parameters remain intact.
+The driver parses/applies the DSN first; invalid DSN options still return errors.
+No process-global connection hook is installed.
+
+Initialization checks the effective journal mode returned by SQLite. File
+databases must enter WAL; another effective mode returns an error. In-memory
+databases legitimately remain `memory`; this and an explicitly OFF memory
+journal are accepted only when SQLite confirms no main database file. MEMORY
+can also be a file journal mode, so its name alone is insufficient. WAL requests
+cannot override memory database journal modes. Neither is
+durable WAL storage. Plain `:memory:` belongs to one physical connection, so multiple
+connections or replacement can see separate/empty databases. Use a deliberate
+shared-memory URI and connection lifetime when memory sharing is needed.
+
+WAL/NORMAL preserves transaction consistency, but a committed transaction can
+roll back following power loss or an operating-system crash. WAL/FULL adds a
+commit synchronization operation; its durability depends on the filesystem,
+VFS and storage honoring synchronization. WAL requires local storage with its
+shared-memory requirements, not a network filesystem. See SQLite's
+[synchronization contract](https://www.sqlite.org/pragma.html#pragma_synchronous)
+and [WAL requirements](https://www.sqlite.org/wal.html). A clean reopen/rollback
+test proves those code paths, not survival of a power-loss event. The backend
+does not change filesystem policy or promise exactly once external effects.
+
 ## Migrations
 
 Recommended:

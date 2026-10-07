@@ -1029,3 +1029,80 @@ count correction and must not be described as final-head CI. Default-branch
 automatic configuration remains until reviewed merge, so publication/transition
 may still produce an old-config run. Manual launch availability depends on the
 configuration reaching the default branch; no branch protection is bypassed.
+
+## 2026-10-07: SQLite per-connection durability configuration
+
+Separate branch from merged master `b0b2b58`. Before repair, deterministic real
+SQLite tests reproduced foreign_keys=0, busy_timeout=0 and synchronous=2 on
+second, discarded replacement and zero-idle connections instead of the backend
+settings 1/5000/1. No timing assumptions or shared fixtures were needed.
+
+Use a database/sql Connector to configure each physical connection after the
+registered driver opens it. Retain that existing driver (including caller
+registered functions/collations); install no global hooks and do not rewrite
+the DSN. Backend-owned settings follow the driver-applied DSN configuration and
+therefore consistently take precedence for journal_mode, foreign_keys,
+busy_timeout and synchronous, matching prior startup precedence. Other DSN
+parameters survive; invalid driver DSN configuration still fails before the
+backend settings. Preserve WAL/NORMAL/five-second wait/foreign-keys-on defaults
+and existing storage/runtime pool limits. Typed NORMAL/FULL selection is opt-in.
+
+Read effective journal mode rather than treating successful PRAGMA execution
+as proof of WAL. Accept legitimate memory journals; file/WAL refusal fails with
+the observed mode. Failed connection initialization closes/discards its physical
+connection, retaining configuration and cleanup errors. Initial construction
+validates configuration even with ping disabled. Reopen/rollback tests do not
+simulate power failure; documentation states WAL/NORMAL and filesystem limits.
+
+Focused storage/runtime behavior tests passed. Touched-package lint is being
+completed; recursive lint also found existing unrelated transaction-test issues,
+which this bounded PR does not change. GoUploads confirmed heavy lane free and
+queued its validation after our one final local gate. No hosted CI dispatch,
+schema changes, Picodata implementation or replay mutations in this PR.
+
+Final source review also preserved an explicitly OFF memory journal: WAL cannot
+replace it, so allow it only after SQLite confirms no main database file; do
+not accept OFF file storage. An intermediate raw-row double close failed the
+memory regression, then was corrected by separating journal reading from
+validation, with exactly-one-close assertions. Final memory/connector focused
+tests passed and touched storage/runtime lint reports zero issues. The one
+required local aggregate is `make check test-integration-sqlite`, adding the
+existing SQLite race integration target to validate fenced claims and
+transaction cleanup under the connection change; no containers are required.
+
+Final local aggregate `make check test-integration-sqlite` passed on exact source
+`8a2a7e1a772ce3a311d32c874842de8e233055bf`: formatting, core/backend vet,
+zero-issue core lint, core race/coverage, standalone backend tests, five example
+builds and SQLite integration race tests. SQLite integration has no service
+availability skip path and ran against test-owned temporary files. The heavy
+lane was explicitly released to GoUploads after completion; no background Go
+process, container or fixture remains from this gate. This evidence update is
+documentation only and reuses the passed source gate. Publication is a draft
+for parent review; no hosted CI dispatch/rerun, tag or deployment was performed.
+
+## 2026-10-07: SQLite review correction for file-backed MEMORY journals
+
+Independent PR review identified that effective journal mode MEMORY can also
+belong to a file when its VFS cannot enter WAL. Check the main database filename
+for both MEMORY and OFF; accept either only when it is empty. WAL still succeeds
+directly. Add an unconditional fake-backed MEMORY/file rejection and a real
+pinned-driver unix-dotfile VFS probe using an owned temporary file. The real
+probe skips only when the requested VFS does not exist on the platform, so do
+not claim that reproduction unless it executes. Genuine memory compatibility
+and exactly-once raw result close assertions remain required.
+
+Source was prepared while GoUploads owned the heavy lane; correction checks
+were deferred. Coordinate only affected storage/runtime checks, lint and SQLite
+integration race tests after its explicit release; reuse prior unrelated gates.
+Picodata source remains saved on its independent branch and unpublished. Hold
+SQLite publication/merge until correction evidence and final review complete.
+
+GoUploads explicitly lent the idle CPU lane with its make scheduler paused and
+owned fixtures already cleaned. On correction source `5537c4d2339de098a480e5d8856c809e1aefdf71`,
+storage/runtime tests passed, touched-package lint reported zero issues and the
+existing SQLite integration race target passed. The real unix-dotfile VFS test
+ran without skipping on the pinned driver: a file-backed database retained
+MEMORY after a WAL request and the corrected backend rejected it. Genuine
+memory/MEMORY and memory/OFF cases passed. No unrelated full gate was repeated.
+This subsequent evidence edit changes documentation only. Picodata's one local
+gate follows sequentially, then the CPU lane returns explicitly to GoUploads.
