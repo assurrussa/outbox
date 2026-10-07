@@ -923,3 +923,25 @@ reassignment does not require repeating this passed gate; final source evidence
 is reused exactly. This evidence-only update is the sole subsequent repo change.
 Draft PR is for one final parent review; no merge, tags, deploy or package
 publication is authorized in this task.
+
+## 2026-10-07: PR 34 MySQL fan-out completion regression
+
+CI head `80363f2` failed the unchanged partial-planning retry test: three
+committed deliveries remained beside the dispatcher at attempt 2 when its
+300ms run deadline cancelled before acknowledgement. The retry policy is nil
+and the successful dispatcher path is unchanged from baseline `5195675`.
+
+A controlled 500ms delay after durable fan-out commit reproduced the exact
+four-versus-three failure once on baseline `5195675` and once on candidate
+`80363f2`, both under race on owned MySQL 8.0.46. The fix is test-only: wait for
+a positive persisted dispatcher ACK, cancel and join Run, then keep the exact
+delivery-count and unique-delivery assertions. The 10s deadline bounds failure
+only. Retain the delayed commit response as a deterministic regression proving
+completion is not inferred from elapsed wall time. Runtime/CI workflow and
+rollback assertions remain unchanged.
+
+The fixed targeted test passed three consecutive race runs without skips.
+Fixture inspection found zero remaining TestMySQLSuite databases; the owned
+container/volumes and diagnostic baseline worktree were removed. Final CI on
+the new exact head is required before merge. Previously passed core/runtime
+source gates on `ce9c08a` are reused; no unrelated full local rerun.
