@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+
 	"github.com/assurrussa/outbox/backends/picodata"
 	"github.com/assurrussa/outbox/backends/picodata/repositories"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
 )
 
 const defaultTableName = "outbox_jobs"
@@ -24,6 +25,9 @@ func WithJobsTable(tableName string) Option {
 	}
 }
 
+// Repo implements fenced single-job reservation, deferral and queue statistics.
+// It does not implement BatchJobsRepository or FanoutJobsRepository because the
+// current client lacks the required connection-pinned atomic boundary.
 type Repo struct {
 	client    picodata.Client
 	tableName string

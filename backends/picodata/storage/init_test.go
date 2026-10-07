@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	picodatalogger "github.com/picodata/picodata-go/logger"
 	"github.com/picodata/picodata-go/strategies"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/picodata/storage"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 func TestCreate(t *testing.T) {
@@ -28,5 +28,6 @@ func TestCreate(t *testing.T) {
 		storage.WithCheckPing(false),
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
 	assert.NotNil(t, pool)
 }

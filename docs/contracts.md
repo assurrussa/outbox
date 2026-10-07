@@ -535,6 +535,14 @@ backend does not expose the standard atomic runtime or fan-out contract.
 Existing migrations and schema-v1 defaults are preserved. Rows created before
 capability columns existed are interpreted as schema v1 with an empty lease.
 
+Picodata's legacy `ClientTransaction`, `TxPool`, `Manager` and `RunInTx` names
+expose a best-effort callback runner without BEGIN/COMMIT/ROLLBACK or an atomic
+business-write/enqueue boundary. `WithTx` selects a caller-owned executor only.
+The runner reports atomic DLQ unsupported; explicit non-atomic DLQ opt-in,
+single-row reservation and absent batch/fan-out/runtime capabilities remain
+unchanged. Storage construction closes its newly created pool on ping failure;
+successful construction transfers ownership to the caller.
+
 ## Transaction Callback Cleanup
 
 MySQL, SQLite, and PostgreSQL transaction managers commit only when the owned

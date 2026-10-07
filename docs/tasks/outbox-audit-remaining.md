@@ -62,7 +62,7 @@ create auditable work without bypassing current fencing or deleting evidence.
 Test duplicate requests, conflicting content, unsupported versions and crash
 boundaries. Clarify replay versus retry and host effect idempotency.
 
-## 5. SQLite durability configuration (current bounded PR)
+## 5. SQLite durability configuration (merged PR #36)
 
 Deterministic regressions reproduced missing connection-local settings on pool
 growth, discarded replacements and zero-idle pools. Configure each physical
@@ -76,21 +76,33 @@ or durability guarantee is inferred from clean reopen tests. No schema changes.
 
 Replay remains pending owner semantics and whether host-owned authorization is
 sufficient. Picodata ping-failure cleanup and capability GoDoc are the next
-separate small item. Required SQLite final gates precede final review.
+separate small item, now prepared in PR #37. SQLite final gates and parent review are complete.
 
 Final local `make check test-integration-sqlite` passed on source `8a2a7e1`,
 including core race/coverage, standalone backend tests, example builds and
 SQLite integration race tests using owned temporary files. The heavy lane was
-released explicitly. Parent review/merge remains pending; no power-loss test,
+released explicitly. No power-loss test,
 hosted CI dispatch, tag or deployment was performed.
 
 PR review correction requires no main database file for both effective MEMORY
 and OFF. On corrected source `5537c4d`, affected storage/runtime tests and lint
 plus SQLite integration race tests passed; the owned file/unix-dotfile MEMORY
 reproduction ran without skipping. Genuine memory compatibility remains intact.
-Reuse the earlier unrelated full gate; final parent review remains required.
+Reuse the earlier unrelated full gate. Parent independently approved the
+correction; merged as `ab4d5eb23f4a7ae7b1f95f57c0bb840f6f889692`.
 
 ## 6. Picodata capability clarity
+
+Current separate bounded PR: close the newly owned pool when construction ping
+fails and clarify legacy transaction names in GoDoc/consumer docs. Synthetic
+tests cover ownership transfer/failure, callback context/error behavior and
+existing fail-closed construction limits without network fixtures. No client
+protocol, repository SQL, public signature or capability expansion.
+
+One local `make check` passed on source `9744020`, including core race/coverage,
+standalone backend tests and all example builds. Parent review/merge remains
+pending. CPU lane returned explicitly; no Picodata container integration was
+needed for the unchanged network protocol and SQL.
 
 Make best-effort transaction limits and capability-storage support explicit in
 consumer docs/construction diagnostics. Preserve fail-closed atomic DLQ and
