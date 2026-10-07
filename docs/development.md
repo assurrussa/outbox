@@ -37,6 +37,21 @@ Run `make prepare` for generation, formatting, and lint fixes. Repeated core
 race stress and HTML coverage are explicit `make test-race-core` and
 `make cover-html` diagnostics.
 
+## PostgreSQL replay integration
+
+The PostgreSQL replay integration gate uses `OUTBOX_PG_DSN` for an owned
+disposable database and removes only its unique schema:
+
+```sh
+cd backends/pgsql
+go test -count=1 -tags integration -race ./replay
+```
+
+Set `OUTBOX_PG_DSN` before running it. An absent DSN skips the live contract test;
+`make check` does not prove replay transaction behavior. The existing PostgreSQL
+integration target includes this package, but its standard test configuration
+does not supply the replay DSN automatically.
+
 ## Hosted Checks
 
 The `Go` GitHub Actions workflow uses only `workflow_dispatch`. Each manual

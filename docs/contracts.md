@@ -468,6 +468,23 @@ unversioned failed-job interfaces and no deprecated aliases.
 Identical active or tombstone replay returns the original ID with
 `Created == false`; a mismatch returns `ErrIdempotencyConflict`.
 
+## PostgreSQL ordinary-job replay
+
+The backend-local [`replay` package](../backends/pgsql/replay/README.md) owns one
+transaction to stage fresh delivery work and retained request/source provenance.
+The host admits the exact original capability and confirms that the handler
+already consumes the original business-effect key. Payload, queue and schema
+version remain unchanged; source evidence is retained. The fresh JobID does not
+replace business identity. Repeated request IDs return the same record after
+ACK; admission runs again. Conflicting request/source/business-key reuse, active
+original/prior replay work, nested transactions and built-in fan-out fail closed.
+Failed or ambiguous commits return zero confirmed result; repeat the same
+request to resolve uncertainty. No API/pruning default deletes journal evidence,
+and migration Down refuses recorded requests. Authorization, effect idempotency,
+provenance access and destructive retention decisions remain host-owned. This
+does not establish exactly-once external effects or tamper-proof audit history.
+Other backends and generic runtime replay remain unsupported.
+
 ## Durable Fan-Out
 
 `WithFanoutJobsRepo(...)` enables the built-in `outbox.fanout.dispatch` v1
