@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+
 	"github.com/assurrussa/outbox/backends/sqlite"
 	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/sqlite/storage"
 	sqlitetx "github.com/assurrussa/outbox/backends/sqlite/storage/transaction"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Config struct {
@@ -23,6 +24,7 @@ type Config struct {
 	ReserveFor           time.Duration
 	ReservationBatchSize int
 	Logger               logger.Logger
+	SynchronousMode      storage.SynchronousMode
 }
 
 type Runtime struct {
@@ -47,6 +49,7 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 		storage.WithLogger(config.Logger),
 		storage.WithMaxOpenConns(1),
 		storage.WithMaxIdleConns(1),
+		storage.WithSynchronousMode(config.SynchronousMode),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("open outbox SQLite client: %w", err)

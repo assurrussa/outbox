@@ -513,6 +513,18 @@ an ambiguous BEGIN or unsuccessful cleanup discards the connection. Original
 and cleanup errors are preserved, while caller-owned transactions remain under
 caller control.
 
+SQLite configures every physical connection, including pool growth/replacement
+and zero-idle file pools. Defaults remain requested WAL, five-second busy wait,
+foreign keys enabled and NORMAL synchronization; standard runtime still owns
+one connection. `storage.WithSynchronousMode` and `runtime.Config.SynchronousMode`
+allow only NORMAL/FULL, with empty mode preserving NORMAL. Backend-owned settings
+override their DSN PRAGMAs; other DSN options remain intact. Initialization checks
+effective journal mode: WAL for files, legitimate `memory` (or explicitly OFF
+with no main database file) for memory databases.
+WAL/NORMAL can lose committed transactions after power/OS failure; FULL adds a
+commit sync, subject to storage/filesystem behavior. See the
+[SQLite durability contract](../backends/sqlite/README.md#durability-and-connection-settings).
+
 Picodata implements the same public slice contract but only for a single row
 and returns `1` from `MaxReservationBatchSize()`. Plural lease and release
 methods reject any slice whose length is not one. Its pool API still lacks a

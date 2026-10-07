@@ -39,7 +39,7 @@ standalone backend tests and example builds. Final head `ac64ee2` passed all
 nine CI checks after the MySQL test used confirmed ACK synchronization;
 merged as `aef520d`.
 
-## 3. Observer events for confirmed outcomes (current bounded PR)
+## 3. Observer events for confirmed outcomes (merged PR #35)
 
 Implemented an optional nonblocking channel observer with no-op nil default,
 caller-owned buffering/lifecycle and no runtime telemetry callbacks. Per-job
@@ -61,13 +61,21 @@ create auditable work without bypassing current fencing or deleting evidence.
 Test duplicate requests, conflicting content, unsupported versions and crash
 boundaries. Clarify replay versus retry and host effect idempotency.
 
-## 5. SQLite durability configuration
+## 5. SQLite durability configuration (current bounded PR)
 
-Document and expose deliberate durability/concurrency choices, connection-local
-PRAGMA application and validation; preserve defaults unless separately approved.
-Test reopened databases, rollback/crash behavior, busy handling and multi-
-connection configuration. State filesystem/WAL/synchronous assumptions and
-avoid presenting a throughput setting as a durability guarantee.
+Deterministic regressions reproduced missing connection-local settings on pool
+growth, discarded replacements and zero-idle pools. Configure each physical
+connection before pooling, preserve defaults and add explicit validated
+NORMAL/FULL synchronization through storage/runtime. Backend-owned PRAGMAs
+take precedence over DSN values; other parameters remain intact. Check effective
+WAL/memory journal mode without rejecting expected memory behavior. Cover
+reopen/rollback, mode validation, DSN precedence and configuration-failure
+cleanup. Document filesystem/power-loss assumptions; no power-loss measurement
+or durability guarantee is inferred from clean reopen tests. No schema changes.
+
+Replay remains pending owner semantics and whether host-owned authorization is
+sufficient. Picodata ping-failure cleanup and capability GoDoc are the next
+separate small item. Required SQLite final gates precede final review.
 
 ## 6. Picodata capability clarity
 

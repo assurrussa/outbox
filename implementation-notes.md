@@ -1029,3 +1029,43 @@ count correction and must not be described as final-head CI. Default-branch
 automatic configuration remains until reviewed merge, so publication/transition
 may still produce an old-config run. Manual launch availability depends on the
 configuration reaching the default branch; no branch protection is bypassed.
+
+## 2026-10-07: SQLite per-connection durability configuration
+
+Separate branch from merged master `b0b2b58`. Before repair, deterministic real
+SQLite tests reproduced foreign_keys=0, busy_timeout=0 and synchronous=2 on
+second, discarded replacement and zero-idle connections instead of the backend
+settings 1/5000/1. No timing assumptions or shared fixtures were needed.
+
+Use a database/sql Connector to configure each physical connection after the
+registered driver opens it. Retain that existing driver (including caller
+registered functions/collations); install no global hooks and do not rewrite
+the DSN. Backend-owned settings follow the driver-applied DSN configuration and
+therefore consistently take precedence for journal_mode, foreign_keys,
+busy_timeout and synchronous, matching prior startup precedence. Other DSN
+parameters survive; invalid driver DSN configuration still fails before the
+backend settings. Preserve WAL/NORMAL/five-second wait/foreign-keys-on defaults
+and existing storage/runtime pool limits. Typed NORMAL/FULL selection is opt-in.
+
+Read effective journal mode rather than treating successful PRAGMA execution
+as proof of WAL. Accept legitimate memory journals; file/WAL refusal fails with
+the observed mode. Failed connection initialization closes/discards its physical
+connection, retaining configuration and cleanup errors. Initial construction
+validates configuration even with ping disabled. Reopen/rollback tests do not
+simulate power failure; documentation states WAL/NORMAL and filesystem limits.
+
+Focused storage/runtime behavior tests passed. Touched-package lint is being
+completed; recursive lint also found existing unrelated transaction-test issues,
+which this bounded PR does not change. GoUploads confirmed heavy lane free and
+queued its validation after our one final local gate. No hosted CI dispatch,
+schema changes, Picodata implementation or replay mutations in this PR.
+
+Final source review also preserved an explicitly OFF memory journal: WAL cannot
+replace it, so allow it only after SQLite confirms no main database file; do
+not accept OFF file storage. An intermediate raw-row double close failed the
+memory regression, then was corrected by separating journal reading from
+validation, with exactly-one-close assertions. Final memory/connector focused
+tests passed and touched storage/runtime lint reports zero issues. The one
+required local aggregate is `make check test-integration-sqlite`, adding the
+existing SQLite race integration target to validate fenced claims and
+transaction cleanup under the connection change; no containers are required.
