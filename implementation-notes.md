@@ -981,3 +981,11 @@ Nil/full/unbuffered/closed sinks preserve confirmed ACK behavior; no observer
 generates errors that enter the delivery path. Privacy and ambient-transaction
 assumptions are explicit in the contract. Final required gate remains one full
 `make check`, without containers, before draft PR/final review.
+
+Validation: focused observer/option tests and lint passed. The single required
+`make check` passed on exact source `f43d9903b3923f2d903e0a06ec4c43d0a207d133`:
+read-only formatting, core/backend vet, core lint (zero issues), core race with
+coverage, standalone backend tests, and all five example builds. No local live
+backend integration or container fixture was needed for this core-only change.
+The subsequent evidence update changes documentation only; reuse this source
+gate rather than repeat it. Heavy lane released before draft PR/final review.

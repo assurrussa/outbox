@@ -116,8 +116,8 @@ notifications appear only after the entire finalization transaction succeeds;
 apply/commit errors, including ambiguous outcomes, never emit success. Ordinary
 legacy failures waiting for lease expiry produce no persisted-retry event.
 Atomic-DLQ capability is captured during construction; emission does not call
-external capability code again. Explicit non-atomic DLQ mode does not emit `OutcomeDLQCommitted`, even when its
-best-effort operations return successfully.
+external capability code again. Explicit non-atomic DLQ mode does not emit
+`OutcomeDLQCommitted`, even when its best-effort operations return successfully.
 
 Run workers outside any caller-owned database transaction. Successful nested
 `RunInTx` calls only reuse an existing transaction and cannot confirm its commit.
