@@ -31,6 +31,15 @@ shows a business write and `Put` committing or rolling back together using the
 existing runtime and transaction context. Handlers still need idempotent effects;
 this transaction boundary does not promise exactly once delivery.
 
+## Optional retry scheduling
+
+`outbox.WithRetryPolicy(policy)` opts into scheduling ordinary counted failures
+independently of lease duration. Use `NewExponentialRetryPolicy(base, maximum,
+jitter)` or a `RetryPolicyFunc`; explicit `RetryAt` and attempt limits retain
+precedence. Nil policy preserves existing single/batch defaults. See the
+[retry contract](docs/contracts.md#opt-in-counted-attempt-retry-scheduling) for
+batch boundaries, callback requirements and jitter behavior.
+
 ## Core usage
 
 ```go

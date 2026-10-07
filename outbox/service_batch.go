@@ -538,7 +538,11 @@ func (s *Service) processBatchJob(
 				return s.dlqBatch(finalizeCtx, manager.repo, job, fmt.Sprintf("max attempts exceeded: %v", handleErr))
 			})
 		default:
-			if availableAt, ok := RetryTime(handleErr); ok {
+			if _, explicit := RetryTime(handleErr); explicit || s.retryPolicy != nil {
+				availableAt, err := s.retryTime(job, handleErr, time.Now().UTC(), 0)
+				if err != nil {
+					return true, err
+				}
 				return true, manager.finalize(ctx, job.ID, func(finalizeCtx context.Context) error {
 					return s.rescheduleLeased(finalizeCtx, job, availableAt)
 				})

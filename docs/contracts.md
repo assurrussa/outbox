@@ -49,6 +49,48 @@ batch size `1`, and the named default logger. Validation bounds are:
 auto-detection. Fan-out is never auto-detected; it remains an explicit
 `WithFanoutJobsRepo(...)` opt-in.
 
+## Opt-in Counted-Attempt Retry Scheduling
+
+`WithRetryPolicy(policy)` changes scheduling for ordinary retryable single-job
+failures and true batch item failures. `RetryPolicy.RetryDelay(RetryAttempt)`
+receives public job ID, capability, persisted one-based attempt and handler error;
+it receives no payload, lease state or unstable shared model. The runtime adds
+its returned delay to completion time and reschedules with the current fence.
+Delay zero allows immediate retry; negative delays or callback panics return
+`ErrRetryPolicy`, stop the worker and leave claims for recovery without retry
+mutation. Policy callbacks must promptly return and support concurrent workers.
+
+A nil policy preserves defaults: ordinary single failures wait for lease expiry;
+ordinary true batch items use existing 100ms doubling backoff capped at 30s.
+`RetryAt` overrides the policy, and `Permanent`, `DeferAt`, exhausted attempts,
+success and cancellation do not invoke it. Top-level batch errors retain their
+existing no-attempt defer/capability streak; the counted-attempt policy is not
+called for those errors. Retry scheduling never changes lease reservation,
+extension, ownership, attempt limits, or fence requirements.
+
+`NewExponentialRetryPolicy(baseDelay, maxDelay, jitter)` requires positive bounds
+with `baseDelay <= maxDelay`, doubles from the first attempt and caps the delay
+without duration overflow. Nil jitter is deterministic. Optional caller-supplied
+jitter receives the capped delay, and its output is capped again at `maxDelay`;
+negative output fails closed. Callers own the jitter source and its concurrency
+safety. Custom policies can choose any nonnegative representable duration.
+
+For example, construct a policy and pass it to core `outbox.New` along with the
+existing required dependencies:
+
+```go
+policy, err := outbox.NewExponentialRetryPolicy(time.Second, time.Minute, nil)
+if err != nil {
+    return err
+}
+options = append(options, outbox.WithRetryPolicy(policy))
+svc, err := outbox.New(options...)
+```
+
+Backend facade configuration remains unchanged; configure this option through
+core service construction. Atomic enqueue and retry scheduling do not guarantee
+exactly once external effects; handlers still own effect idempotency.
+
 ## Registration And Version Identity
 
 Jobs implement:
@@ -135,8 +177,10 @@ Per-job outcomes are fenced:
   one transaction;
 - reaching `MaxAttempts()` takes precedence over `RetryAt` and uses the same
   versioned DLQ transaction;
-- an ordinary retriable error leaves that job reserved until its current lease
-  expires and the worker continues with the next claimed row.
+- with no retry policy, an ordinary retriable error leaves that job reserved
+  until its current lease expires and the worker continues with the next row;
+- an opt-in retry policy instead persists a fenced retry time and clears the
+  lease while retaining the counted attempt.
 
 Before any per-job ACK, retry, defer, or DLQ finalization, all outstanding leases
 cover one shared five-second deadline plus a one-second margin. Renewal and

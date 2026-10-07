@@ -577,14 +577,11 @@ func (s *Service) finishExecutionBatch(
 			outcome = dlqExecutionBatchOutcome(input.jobs[index], fmt.Sprintf("max attempts exceeded: %v", itemErr))
 		default:
 			outcome.Kind = BatchJobOutcomeRetry
-			if retryAt, explicit := RetryTime(itemErr); explicit {
-				outcome.AvailableAt = retryAt.UTC()
-			} else {
-				outcome.AvailableAt = now.Add(batchAttemptBackoff(input.jobs[index].Attempts))
+			availableAt, err := s.retryTime(input.jobs[index], itemErr, now, batchAttemptBackoff(input.jobs[index].Attempts))
+			if err != nil {
+				return err
 			}
-			if outcome.AvailableAt.Before(now) {
-				outcome.AvailableAt = now
-			}
+			outcome.AvailableAt = availableAt
 		}
 		outcomes[index] = outcome
 		if itemErr != nil {

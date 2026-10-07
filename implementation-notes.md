@@ -876,3 +876,41 @@ All requested gates passed on reviewed source `f7a5b7a`:
 The heavy lane is released for the next sequential project window. Source is
 unchanged from reviewed head; this follow-up records evidence only. Draft PR
 remains for parent review/merge, with no tags, deployment, or feature expansion.
+
+## 2026-10-07: Opt-in retry policy design
+
+New bounded branch starts from merged master `5195675`. The policy computes
+only a delay from public immutable attempt metadata (job ID, capability,
+claimed one-based attempt and error). Scheduling accepts an explicit `now`
+internally for deterministic tests; lease clocks/extension remain untouched.
+
+Transition matrix:
+- nil policy + ordinary single failure: existing lease-expiry recovery;
+- configured policy + ordinary retryable single/item failure: fenced persisted
+  reschedule from completion time, retaining the counted attempt;
+- RetryAt: explicit timestamp wins over policy, clamped to completion time;
+- success, Permanent, DeferAt, exhausted attempts or cancellation: existing
+  paths; no policy invocation;
+- true batch top-level failure: existing no-attempt capability defer/streak,
+  excluded from counted-attempt policy;
+- invalid negative delay or policy panic: fail closed, no retry mutation;
+- stale fence during reschedule: ErrLeaseLost; no attempt/fence bypass.
+
+Provide a small policy interface/function adapter and bounded exponential
+constructor with optional caller-supplied jitter. Jitter and custom policy
+callbacks must be concurrency-safe and promptly return; the runtime contains
+panics. Deterministic tests inject completion time and jitter without changing
+worker/lease clocks. No observer, replay, schema or backend change. Source/light
+checks only while GoUploads owns the heavy lane; request handoff before full
+check or containers. No repeated previously passed gates.
+
+Retry-policy source/light validation:
+- New deterministic policy and in-memory single/batch regressions passed.
+- Affected core package traversal `go test ./outbox -count=1` passed.
+- Focused source lint `golangci-lint run --timeout=3m ./outbox/...` passed with
+  zero issues after correcting new test formatting.
+- Self-review confirms only retry-time selection changes; default lease
+  recovery, batch no-attempt deferral, disposition/attempt precedence and
+  current fenced finalization remain in place. No backend/schema/facade edits.
+- `git diff --check` passed. One full `make check` is pending explicit lane
+  release; no full/race/container checks were started during GoUploads ownership.
