@@ -34,6 +34,8 @@ preserves both existing single and batch defaults. Negative delay/panic fails
 closed. Completion-clock and jitter tests are deterministic; lease ownership,
 fencing and attempt accounting remain unchanged. Source/light gates precede
 heavy-lane handoff and one full check; no observer/replay implementation.
+One full `make check` passed on source `ce9c08a`, including core race/coverage,
+standalone backend tests and example builds. Ready for one final review.
 
 ## 3. Observer events for confirmed outcomes
 

@@ -914,3 +914,12 @@ Retry-policy source/light validation:
   current fenced finalization remain in place. No backend/schema/facade edits.
 - `git diff --check` passed. One full `make check` is pending explicit lane
   release; no full/race/container checks were started during GoUploads ownership.
+
+Retry-policy final gate: one authorized `make check` passed on unchanged source
+`ce9c08a`, using existing shared caches. Formatting, vet, zero lint issues, core
+race/coverage, all four standalone backend tests and standalone example builds
+passed. Checkout remained clean and no containers were used. Later lane
+reassignment does not require repeating this passed gate; final source evidence
+is reused exactly. This evidence-only update is the sole subsequent repo change.
+Draft PR is for one final parent review; no merge, tags, deploy or package
+publication is authorized in this task.
