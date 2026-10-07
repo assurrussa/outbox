@@ -84,6 +84,12 @@ SQLite integration race tests using owned temporary files. The heavy lane was
 released explicitly. Parent review/merge remains pending; no power-loss test,
 hosted CI dispatch, tag or deployment was performed.
 
+PR review correction requires no main database file for both effective MEMORY
+and OFF. On corrected source `5537c4d`, affected storage/runtime tests and lint
+plus SQLite integration race tests passed; the owned file/unix-dotfile MEMORY
+reproduction ran without skipping. Genuine memory compatibility remains intact.
+Reuse the earlier unrelated full gate; final parent review remains required.
+
 ## 6. Picodata capability clarity
 
 Make best-effort transaction limits and capability-storage support explicit in

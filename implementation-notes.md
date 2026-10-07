@@ -1091,8 +1091,18 @@ probe skips only when the requested VFS does not exist on the platform, so do
 not claim that reproduction unless it executes. Genuine memory compatibility
 and exactly-once raw result close assertions remain required.
 
-Source is prepared while GoUploads owns the heavy lane; no correction tests have
-run yet. Coordinate only affected storage/runtime checks, lint and SQLite
+Source was prepared while GoUploads owned the heavy lane; correction checks
+were deferred. Coordinate only affected storage/runtime checks, lint and SQLite
 integration race tests after its explicit release; reuse prior unrelated gates.
 Picodata source remains saved on its independent branch and unpublished. Hold
 SQLite publication/merge until correction evidence and final review complete.
+
+GoUploads explicitly lent the idle CPU lane with its make scheduler paused and
+owned fixtures already cleaned. On correction source `5537c4d2339de098a480e5d8856c809e1aefdf71`,
+storage/runtime tests passed, touched-package lint reported zero issues and the
+existing SQLite integration race target passed. The real unix-dotfile VFS test
+ran without skipping on the pinned driver: a file-backed database retained
+MEMORY after a WAL request and the corrected backend rejected it. Genuine
+memory/MEMORY and memory/OFF cases passed. No unrelated full gate was repeated.
+This subsequent evidence edit changes documentation only. Picodata's one local
+gate follows sequentially, then the CPU lane returns explicitly to GoUploads.
