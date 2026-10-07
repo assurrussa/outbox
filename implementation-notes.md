@@ -945,3 +945,87 @@ Fixture inspection found zero remaining TestMySQLSuite databases; the owned
 container/volumes and diagnostic baseline worktree were removed. Final CI on
 the new exact head is required before merge. Previously passed core/runtime
 source gates on `ce9c08a` are reused; no unrelated full local rerun.
+
+## 2026-10-07: Persisted-outcome observer design
+
+Separate branch from merged master `aef520d`. Use an optional best-effort channel
+sink, not runtime-executed telemetry callbacks: nonblocking sends, no owned
+observer goroutines/queues, no-op nil default. Callers own bounded buffering,
+consumption, telemetry errors/panics and channel shutdown after Run joins.
+Closed sinks are contained and full sinks drop events; concurrent caller close
+is outside the ownership contract. Values contain only public identifiers,
+capability, counted attempt, UTC timestamps and outcome kind, never payload,
+lease token, handler error/reason text or caller context values.
+
+Transition matrix:
+- ACK/retry/defer events only after successful fenced repository mutation;
+- DLQ committed only after successful atomic transactor return, never inside
+  its callback; no committed-DLQ event for explicitly non-atomic DLQ mode;
+- true batch outcomes only after all mutations and outer transaction succeed;
+- failed/ambiguous persistence or failed commit: no success event;
+- ErrLeaseLost: one group-level event at reservation operation exit, without
+  asserting individual row ownership loss; no per-job false ACK/retry/DLQ;
+- ordinary legacy retry leaving the lease to expire: no persisted-retry event;
+- channel full/closed/nil: no delivery/lease/error behavior change.
+
+No external callback runs in a worker or lease critical section. The observer
+is telemetry, not a durable audit log or replay mechanism; no exactly-once
+notification promise. Configure through core construction; backend facade/API
+and schemas remain unchanged. Add deterministic single/batch persistence and
+commit-failure regressions, then the required one full check and final review.
+
+Atomic-DLQ capability is cached during option validation, preserving the
+existing construction decision and avoiding external capability callbacks from
+telemetry emission. New deterministic observer/option regressions passed.
+Nil/full/unbuffered/closed sinks preserve confirmed ACK behavior; no observer
+generates errors that enter the delivery path. Privacy and ambient-transaction
+assumptions are explicit in the contract. Final required gate remains one full
+`make check`, without containers, before draft PR/final review.
+
+Validation: focused observer/option tests and lint passed. The single required
+`make check` passed on exact source `f43d9903b3923f2d903e0a06ec4c43d0a207d133`:
+read-only formatting, core/backend vet, core lint (zero issues), core race with
+coverage, standalone backend tests, and all five example builds. No local live
+backend integration or container fixture was needed for this core-only change.
+The subsequent evidence update changes documentation only; reuse this source
+gate rather than repeat it. Heavy lane released before draft PR/final review.
+
+Final review found a collection-loss telemetry count bug: a supplemental claim
+could be added before a later fill error, but the observer retained the initial
+count. Capture the returned collection length before the fill-error branch and
+include selected rows already added to the lease manager before byte-tail
+release. This only corrects known group claim metadata; collection, admission,
+fencing and cleanup behavior remain unchanged. Deterministic regressions for
+supplemental claim loss and byte-tail release loss both reproduced `1` instead
+of `2` on the prior source, with no handler admission or persisted success.
+Source/focused validation precedes the coordinated final full gate; GoUploads
+currently owns the heavy lane. Prior-head CI does not validate this correction.
+Focused `go test ./outbox -run '^TestObserver' -count=1` passed after the fix;
+focused core lint reported zero issues, formatting and diff checks passed.
+
+After GoUploads released the heavy lane, one final local `make check` passed on
+exact corrected source `01a879d5e1994ccf4aec00860fcd7303bbd11b99`: formatting,
+core/backend vet, zero-issue lint, core race/coverage, standalone backend tests
+and all five example builds. No fixture or container was started. This subsequent
+evidence update changes documentation only and reuses that passed source gate.
+The correction remains unpushed: automatic CI publication requires separate
+parent coordination under the user's GitHub Actions minutes constraint. No
+workflow settings or dispatches were changed. Heavy lane released again.
+
+## 2026-10-07: Explicit manual-only CI transition
+
+User explicitly authorized manual CI, with automatic launches requiring
+separate agreement. Change only the `Go` workflow's trigger block from push/PR
+to `workflow_dispatch`; retain jobs, commands, matrices, runner settings and
+the absence of manual inputs. Inventory contains one workflow and no
+workflow_run, schedule, workflow_call or alternate automatic path. Each manual
+launch retains the same nine jobs and therefore still consumes runner minutes.
+No workflow dispatch/rerun or cancellation is authorized or performed here.
+
+Validate YAML and exact unchanged job content locally. Reuse the final passed
+`make check` on observer source `01a879d`; this transition changes no Go source
+or check commands. Earlier green nine-job CI at `e2b5c6c` predates the collection
+count correction and must not be described as final-head CI. Default-branch
+automatic configuration remains until reviewed merge, so publication/transition
+may still produce an old-config run. Manual launch availability depends on the
+configuration reaching the default branch; no branch protection is bypassed.

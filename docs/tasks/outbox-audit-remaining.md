@@ -6,7 +6,7 @@ Each item is a separate reviewable PR. Merge/release approval remains separate.
 Atomic enqueue and fenced acknowledgement do not promise exactly once external
 effects. Consumers own effect idempotency and reconciliation of ambiguous commits.
 
-## 1. Public identifiers and transactional quickstart (this PR)
+## 1. Public identifiers and transactional quickstart (merged PR #33)
 
 - Expose `outbox.JobID` / `outbox.MessageID` aliases, random constructors and
   parsers without requiring consumers to import unstable `shared/types`.
@@ -23,7 +23,7 @@ effects. Consumers own effect idempotency and reconciliation of ambiguous commit
   zero fixture schemas; the owned container was removed. Neither `make check`
   nor `make test-integration-pgsql` executes the example integration test. No new retry, replay, observer, or backend behavior in this PR.
 
-## 2. Opt-in RetryPolicy independent of lease (current bounded PR)
+## 2. Opt-in RetryPolicy independent of lease (merged PR #34)
 
 Implemented a core policy interface/function adapter and bounded exponential
 constructor with optional injected jitter. Policy inputs are public job ID,
@@ -35,15 +35,23 @@ closed. Completion-clock and jitter tests are deterministic; lease ownership,
 fencing and attempt accounting remain unchanged. Source/light gates precede
 heavy-lane handoff and one full check; no observer/replay implementation.
 One full `make check` passed on source `ce9c08a`, including core race/coverage,
-standalone backend tests and example builds. Ready for one final review.
+standalone backend tests and example builds. Final head `ac64ee2` passed all
+nine CI checks after the MySQL test used confirmed ACK synchronization;
+merged as `aef520d`.
 
-## 3. Observer events for confirmed outcomes
+## 3. Observer events for confirmed outcomes (current bounded PR)
 
-Define events after successful persisted claim/finalization or transaction
-commit, with separate failed/ambiguous persistence diagnostics. Do not label a
-handler return as acknowledged delivery. Specify ordering, bounded callback
-cost, panic isolation, metadata/redaction and shutdown ownership. Test failed
-ack/retry/DLQ and stale tokens; observers must not alter worker correctness.
+Implemented an optional nonblocking channel observer with no-op nil default,
+caller-owned buffering/lifecycle and no runtime telemetry callbacks. Per-job
+ACK, retry/defer and atomic DLQ events follow successful persistence; true batch
+events follow the whole transaction. Failed or ambiguous commits emit no
+success. Lease loss is one group-level signal, not individual ownership proof.
+Metadata excludes payloads, tokens and error/reason/context data. Full/closed
+sinks drop events without delivery changes. Deterministic tests cover single and
+batch storage/commit failures, heartbeat/fence loss, non-atomic DLQ, sink failure
+and public consumer wiring. One full `make check` passed on source `f43d990`,
+including core race/coverage, standalone backend tests and example builds.
+No containers were needed. Final review precedes merge. No replay implementation.
 
 ## 4. Safe replay
 

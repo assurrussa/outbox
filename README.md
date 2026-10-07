@@ -40,6 +40,14 @@ precedence. Nil policy preserves existing single/batch defaults. See the
 [retry contract](docs/contracts.md#opt-in-counted-attempt-retry-scheduling) for
 batch boundaries, callback requirements and jitter behavior.
 
+## Optional outcome telemetry
+
+`outbox.WithObserver(events)` configures a best-effort, nonblocking channel of
+confirmed persistence outcomes: ACK, retry/defer, atomic DLQ commit, and group
+lease loss. Nil disables observation. Events exclude payloads, lease tokens and
+error text; full sinks drop events. See the [observer contract](docs/contracts.md#optional-persisted-outcome-observer)
+for transaction boundaries, channel ownership and lifecycle requirements.
+
 ## Core usage
 
 ```go

@@ -360,8 +360,13 @@ func (s *Service) findAndProcessBatch(
 	ctx context.Context,
 	log logger.Logger,
 	capabilities []JobCapability,
-) error {
+) (retErr error) {
+	claimedJobs := 0
+	if s.observer != nil {
+		defer func() { s.observeLeaseLoss(retErr, claimedJobs) }()
+	}
 	jobs, leaseToken, err := s.claimBatch(ctx, capabilities)
+	claimedJobs = len(jobs)
 	if err != nil {
 		return err
 	}
@@ -582,6 +587,7 @@ func (s *Service) deferLeased(ctx context.Context, job models.Job, availableAt t
 	}
 
 	s.pauseBatchCapability(JobCapability{Name: job.Name, SchemaVersion: job.SchemaVersion}, availableAt)
+	s.observeJobOutcome(job, OutcomeDeferPersisted, availableAt)
 	return nil
 }
 
@@ -603,6 +609,7 @@ func (s *Service) ackBatch(
 		return ErrLeaseLost
 	}
 
+	s.observeJobOutcome(job, OutcomeACKConfirmed, time.Time{})
 	return nil
 }
 
@@ -612,7 +619,7 @@ func (s *Service) dlqBatch(
 	job models.Job,
 	reason string,
 ) error {
-	return s.transactor.RunInTx(ctx, func(txCtx context.Context) error {
+	err := s.transactor.RunInTx(ctx, func(txCtx context.Context) error {
 		if _, err := s.jobsFailedRepo.CreateFailedJobVersioned(
 			txCtx,
 			job.ID,
@@ -639,6 +646,10 @@ func (s *Service) dlqBatch(
 
 		return nil
 	})
+	if err == nil {
+		s.observeJobOutcome(job, OutcomeDLQCommitted, time.Time{})
+	}
+	return err
 }
 
 func (s *Service) rescheduleLeased(ctx context.Context, job models.Job, availableAt time.Time) error {
@@ -660,5 +671,6 @@ func (s *Service) rescheduleLeased(ctx context.Context, job models.Job, availabl
 		return ErrLeaseLost
 	}
 
+	s.observeJobOutcome(job, OutcomeRetryPersisted, availableAt)
 	return nil
 }
