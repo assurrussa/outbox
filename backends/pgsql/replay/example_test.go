@@ -34,4 +34,5 @@ func ExampleReplayer_Replay() {
 			})
 	}
 	_ = stage
+	// Output:
 }
