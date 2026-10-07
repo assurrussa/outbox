@@ -17,9 +17,11 @@ effects. Consumers own effect idempotency and reconciliation of ambiguous commit
 - Prove successful commit, callback rollback after enqueue, and enqueue failure;
   use unique owned schemas and no broad fixture cleanup.
 - Gate: consumer compilation/regressions and quickstart integration execution.
-  Live integration remains pending while the shared heavy Mac lane is owned by
-  DataGrid. Run the explicit example integration command in its README; neither
-  `make check` nor `make test-integration-pgsql` executes that test. No new retry, replay, observer, or backend behavior in this PR.
+  Completed on reviewed source `f7a5b7a` after lane handoff: explicit live
+  example integration passed without skips on owned PostgreSQL 17.9, the
+  runnable command passed, and full `make check` passed. Both invocations left
+  zero fixture schemas; the owned container was removed. Neither `make check`
+  nor `make test-integration-pgsql` executes the example integration test. No new retry, replay, observer, or backend behavior in this PR.
 
 ## 2. Opt-in RetryPolicy independent of lease (next ready item)
 

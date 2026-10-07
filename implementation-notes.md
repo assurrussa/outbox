@@ -852,3 +852,27 @@ explicit documented command; it is not part of `make check` or
 Correction validation: tagged quickstart compile-only check and tagged `go vet`
 passed using shared caches; `git diff --check` passed. Live database execution
 was not attempted while the heavy lane remains occupied.
+
+## 2026-10-07: Final bounded PR validation after lane handoff
+
+All requested gates passed on reviewed source `f7a5b7a`:
+
+- Explicit `go test -tags integration ./examples/base-app-pgsql/transactional
+  -count=1 -v` passed with no skips on an owned PostgreSQL 17.9 fixture. Commit,
+  callback rollback, and CHECK-constraint enqueue failure (SQLSTATE `23514`)
+  all passed.
+- `go run ./examples/base-app-pgsql/transactional` passed and printed the
+  confirmed business-row/job commit and rollback result.
+- Fixture inspection after both invocations found zero `outbox_quickstart_*`
+  schemas. The owned container and its disposable volumes were removed; no
+  owned container/network or background Go process remained.
+- Full `make check` passed with shared-cache overrides: formatting, vet, zero
+  lint issues, core race/coverage, standalone backend tests, and standalone
+  example builds. This does not claim the broader backend integration matrix.
+- Docker could not bind-mount this workspace through Compose. Only the failed
+  owned Compose fixture was removed; validation used a uniquely named owned
+  container without a host mount on local port 55483. No broad Docker cleanup.
+
+The heavy lane is released for the next sequential project window. Source is
+unchanged from reviewed head; this follow-up records evidence only. Draft PR
+remains for parent review/merge, with no tags, deployment, or feature expansion.
