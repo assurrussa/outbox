@@ -945,3 +945,39 @@ Fixture inspection found zero remaining TestMySQLSuite databases; the owned
 container/volumes and diagnostic baseline worktree were removed. Final CI on
 the new exact head is required before merge. Previously passed core/runtime
 source gates on `ce9c08a` are reused; no unrelated full local rerun.
+
+## 2026-10-07: Persisted-outcome observer design
+
+Separate branch from merged master `aef520d`. Use an optional best-effort channel
+sink, not runtime-executed telemetry callbacks: nonblocking sends, no owned
+observer goroutines/queues, no-op nil default. Callers own bounded buffering,
+consumption, telemetry errors/panics and channel shutdown after Run joins.
+Closed sinks are contained and full sinks drop events; concurrent caller close
+is outside the ownership contract. Values contain only public identifiers,
+capability, counted attempt, UTC timestamps and outcome kind, never payload,
+lease token, handler error/reason text or caller context values.
+
+Transition matrix:
+- ACK/retry/defer events only after successful fenced repository mutation;
+- DLQ committed only after successful atomic transactor return, never inside
+  its callback; no committed-DLQ event for explicitly non-atomic DLQ mode;
+- true batch outcomes only after all mutations and outer transaction succeed;
+- failed/ambiguous persistence or failed commit: no success event;
+- ErrLeaseLost: one group-level event at reservation operation exit, without
+  asserting individual row ownership loss; no per-job false ACK/retry/DLQ;
+- ordinary legacy retry leaving the lease to expire: no persisted-retry event;
+- channel full/closed/nil: no delivery/lease/error behavior change.
+
+No external callback runs in a worker or lease critical section. The observer
+is telemetry, not a durable audit log or replay mechanism; no exactly-once
+notification promise. Configure through core construction; backend facade/API
+and schemas remain unchanged. Add deterministic single/batch persistence and
+commit-failure regressions, then the required one full check and final review.
+
+Atomic-DLQ capability is cached during option validation, preserving the
+existing construction decision and avoiding external capability callbacks from
+telemetry emission. New deterministic observer/option regressions passed.
+Nil/full/unbuffered/closed sinks preserve confirmed ACK behavior; no observer
+generates errors that enter the delivery path. Privacy and ambient-transaction
+assumptions are explicit in the contract. Final required gate remains one full
+`make check`, without containers, before draft PR/final review.

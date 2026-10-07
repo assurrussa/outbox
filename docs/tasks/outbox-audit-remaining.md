@@ -37,13 +37,18 @@ heavy-lane handoff and one full check; no observer/replay implementation.
 One full `make check` passed on source `ce9c08a`, including core race/coverage,
 standalone backend tests and example builds. Ready for one final review.
 
-## 3. Observer events for confirmed outcomes
+## 3. Observer events for confirmed outcomes (current bounded PR)
 
-Define events after successful persisted claim/finalization or transaction
-commit, with separate failed/ambiguous persistence diagnostics. Do not label a
-handler return as acknowledged delivery. Specify ordering, bounded callback
-cost, panic isolation, metadata/redaction and shutdown ownership. Test failed
-ack/retry/DLQ and stale tokens; observers must not alter worker correctness.
+Implemented an optional nonblocking channel observer with no-op nil default,
+caller-owned buffering/lifecycle and no runtime telemetry callbacks. Per-job
+ACK, retry/defer and atomic DLQ events follow successful persistence; true batch
+events follow the whole transaction. Failed or ambiguous commits emit no
+success. Lease loss is one group-level signal, not individual ownership proof.
+Metadata excludes payloads, tokens and error/reason/context data. Full/closed
+sinks drop events without delivery changes. Deterministic tests cover single and
+batch storage/commit failures, heartbeat/fence loss, non-atomic DLQ, sink failure
+and public consumer wiring. Required gates and one final review precede merge.
+No replay implementation.
 
 ## 4. Safe replay
 

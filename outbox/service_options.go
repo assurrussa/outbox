@@ -25,7 +25,9 @@ type Options struct {
 	jobsFailedRepo       JobsFailedRepository
 	transactor           Transactor
 	allowNonAtomicDLQ    bool
+	atomicDLQ            bool
 	retryPolicy          RetryPolicy
+	observer             Observer
 	logger               logger.Logger
 }
 
@@ -67,11 +69,12 @@ func (o *Options) Validate() error {
 	if o.transactor == nil {
 		return errors.New("nil transactor")
 	}
-	if tc, ok := o.transactor.(TransactionCapabilities); !ok {
-		if !o.allowNonAtomicDLQ {
-			return ErrTransactionCapabilitiesRequired
-		}
-	} else if !tc.SupportsAtomicDLQ() && !o.allowNonAtomicDLQ {
+	tc, supportsCapabilities := o.transactor.(TransactionCapabilities)
+	o.atomicDLQ = supportsCapabilities && tc.SupportsAtomicDLQ()
+	if !supportsCapabilities && !o.allowNonAtomicDLQ {
+		return ErrTransactionCapabilitiesRequired
+	}
+	if supportsCapabilities && !o.atomicDLQ && !o.allowNonAtomicDLQ {
 		return ErrNonAtomicDLQUnsupported
 	}
 	if o.logger == nil {

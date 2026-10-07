@@ -91,6 +91,59 @@ Backend facade configuration remains unchanged; configure this option through
 core service construction. Atomic enqueue and retry scheduling do not guarantee
 exactly once external effects; handlers still own effect idempotency.
 
+## Optional Persisted-Outcome Observer
+
+`WithObserver(events)` accepts a send-only `Observer` channel of `RuntimeOutcome`
+values. Nil is the default no-op. Configure it during core service construction;
+backend facade configuration is unchanged. Notifications describe successful
+configured storage/transaction returns, rather than handler completion:
+
+- `OutcomeACKConfirmed`: fenced delete returned exactly one affected row;
+- `OutcomeRetryPersisted`: fenced retry schedule persisted and released the lease;
+- `OutcomeDeferPersisted`: a no-attempt defer persisted, compensating the claimed
+  attempt; the event's `Attempt` is the admitted one-based attempt;
+- `OutcomeDLQCommitted`: failed-row creation and fenced active-row deletion
+  completed and the atomic transaction returned successfully;
+- `OutcomeLeaseLost`: a reservation operation exited with `ErrLeaseLost`,
+  including heartbeat or finalization fence loss. This is a group-level signal,
+  not proof that every row was stolen. `ClaimedJobs` counts known group claims
+  (zero if unknown); all per-job identity/attempt/availability fields are zero.
+
+Per-job events contain public job ID, capability, admitted attempt, UTC observation
+and availability times. ACK/DLQ availability is zero. They carry no raw payload,
+lease token, handler error/reason text, or caller context values. Batch per-job
+notifications appear only after the entire finalization transaction succeeds;
+apply/commit errors, including ambiguous outcomes, never emit success. Ordinary
+legacy failures waiting for lease expiry produce no persisted-retry event.
+Atomic-DLQ capability is captured during construction; emission does not call
+external capability code again. Explicit non-atomic DLQ mode does not emit `OutcomeDLQCommitted`, even when its
+best-effort operations return successfully.
+
+Run workers outside any caller-owned database transaction. Successful nested
+`RunInTx` calls only reuse an existing transaction and cannot confirm its commit.
+The observer relies on repositories and atomic transactors honoring their
+contracts; it does not independently verify database durability or external
+handler effects. Notification does not promise exactly once delivery.
+
+Sends are nonblocking. Full sinks drop events; an unbuffered sink receives only
+when a consumer is ready. A closed-sink send panic is contained and the event
+is dropped. Keep the sink open throughout `Run`; callers must not race a channel
+close with active senders. Close only after `Run` joins its workers. The runtime
+owns no observer goroutine or queue and never executes consumer callbacks, so
+consumer latency, errors and callback panics cannot enter a finalization path.
+Callers own consumer goroutines, cancellation/joining, and telemetry error/panic
+handling. This best-effort stream is not a durable audit log or replay API;
+it has no total ordering across workers and events may be dropped.
+
+```go
+events := make(chan outbox.RuntimeOutcome, 128)
+options = append(options, outbox.WithObserver(events))
+svc, err := outbox.New(options...) // Include the existing required dependencies.
+```
+
+Consume `events` in caller-owned code while `svc.Run` is active, then join Run
+and close/drain the channel according to the application's lifecycle.
+
 ## Registration And Version Identity
 
 Jobs implement:

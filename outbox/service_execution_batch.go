@@ -55,7 +55,11 @@ func (s *Service) findAndProcessExecutionBatch(
 	ctx context.Context,
 	log logger.Logger,
 	capability JobCapability,
-) (bool, error) {
+) (processed bool, retErr error) {
+	claimedJobs := 0
+	if s.observer != nil {
+		defer func() { s.observeLeaseLoss(retErr, claimedJobs) }()
+	}
 	s.mu.RLock()
 	registration, ok := s.batchJobs[capability]
 	s.mu.RUnlock()
@@ -68,6 +72,7 @@ func (s *Service) findAndProcessExecutionBatch(
 	}
 
 	jobs, leaseToken, err := s.claimInitialExecutionBatch(ctx, repo, capability, registration.config)
+	claimedJobs = len(jobs)
 	if errors.Is(err, ErrNoJobs) {
 		return false, nil
 	}
@@ -101,6 +106,7 @@ func (s *Service) findAndProcessExecutionBatch(
 		return true, errors.Join(fillErr, heartbeatErr, manager.releaseUnstarted(ctx))
 	}
 	selected := append([]models.Job(nil), filled...)
+	claimedJobs = len(selected)
 	sortExecutionBatchJobs(selected)
 	if err := manager.admit(batchCtx, s.drain); err != nil {
 		processingFinished = true
@@ -620,7 +626,7 @@ func (s *Service) applyExecutionBatchOutcomes(
 	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
 	defer cancel()
 	deadline, _ := finalizeCtx.Deadline()
-	return manager.finalizeAll(finalizeCtx, deadline.Add(batchFinalizationMargin), func() error {
+	err := manager.finalizeAll(finalizeCtx, deadline.Add(batchFinalizationMargin), func() error {
 		return s.transactor.RunInTx(finalizeCtx, func(txCtx context.Context) error {
 			if err := s.createExecutionBatchDLQRecords(txCtx, jobs, outcomes); err != nil {
 				return err
@@ -640,6 +646,10 @@ func (s *Service) applyExecutionBatchOutcomes(
 			return nil
 		})
 	})
+	if err == nil {
+		s.observeBatchOutcomes(jobs, outcomes)
+	}
+	return err
 }
 
 func executionBatchFinalizationTimeout(outcomes []BatchJobOutcome) time.Duration {
