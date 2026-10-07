@@ -478,6 +478,8 @@ version remain unchanged; source evidence is retained. The fresh JobID does not
 replace business identity. Repeated request IDs return the same record after
 ACK; admission runs again. Conflicting request/source/business-key reuse, active
 original/prior replay work, nested transactions and built-in fan-out fail closed.
+Distinct requests for the same failed row also preserve its first admitted
+operation/business key, even after ACK.
 Failed or ambiguous commits return zero confirmed result; repeat the same
 request to resolve uncertainty. No API/pruning default deletes journal evidence,
 and migration Down refuses recorded requests. Authorization, effect idempotency,

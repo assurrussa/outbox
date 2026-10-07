@@ -210,7 +210,8 @@ func testReplayEvidence(t *testing.T, f replayFixture) {
 	require.Zero(t, count)
 	_, err = f.pool.Exec(t.Context(), "delete from jobs_failed where id=$1", source.FailedJobID)
 	require.Error(t, err, "replayed failed evidence cannot be deleted")
-	require.Error(t, migrator.RunEmbedded(t.Context(), f.sqlDB, logger.Discard(), migrator.WithCommand("down")))
+	require.ErrorContains(t, migrator.RunEmbedded(t.Context(), f.sqlDB, logger.Discard(), migrator.WithCommand("down")),
+		"replay provenance exists")
 	_, err = f.replayer.ByRequestID(t.Context(), request.RequestID)
 	require.NoError(t, err, "guarded Down retained provenance")
 }
