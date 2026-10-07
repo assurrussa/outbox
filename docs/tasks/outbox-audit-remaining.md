@@ -77,6 +77,11 @@ tests cover ownership transfer/failure, callback context/error behavior and
 existing fail-closed construction limits without network fixtures. No client
 protocol, repository SQL, public signature or capability expansion.
 
+One local `make check` passed on source `9744020`, including core race/coverage,
+standalone backend tests and all example builds. Parent review/merge remains
+pending. CPU lane returned explicitly; no Picodata container integration was
+needed for the unchanged network protocol and SQL.
+
 Make best-effort transaction limits and capability-storage support explicit in
 consumer docs/construction diagnostics. Preserve fail-closed atomic DLQ and
 unsupported fan-out/runtime boundaries. Test negative capability contracts;

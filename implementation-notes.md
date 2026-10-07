@@ -1048,3 +1048,15 @@ Add synthetic tests for these boundaries, plus cleanup in the existing successfu
 constructor test. No network protocol, SQL, dependency, migration or capability
 change. GoUploads owns the current heavy lane; source preparation only, with one
 necessary local gate deferred until an explicitly coordinated release.
+
+GoUploads explicitly lent its idle CPU slot with the owned make scheduler
+paused, anonymous downloads continuing and PG/MinIO fixtures already cleaned.
+SQLite's affected correction gates ran first on its own branch. Picodata's one
+`make check` then passed on source `9744020be4be2230195a7f39208c939a5108b5be`:
+formatting, core/backend vet, zero-issue core lint, core race/coverage, standalone
+backend tests (including new Picodata ownership/consumer capability tests) and
+five example builds. No protocol/SQL behavior changed, so no Picodata container
+integration was added. The CPU lane was explicitly returned after completion;
+no background Go process or fixture remains from this gate. This evidence
+update changes documentation only. Draft publication precedes parent review;
+no hosted CI dispatch/rerun, capability expansion, tag or deployment.
