@@ -1011,3 +1011,21 @@ evidence update changes documentation only and reuses that passed source gate.
 The correction remains unpushed: automatic CI publication requires separate
 parent coordination under the user's GitHub Actions minutes constraint. No
 workflow settings or dispatches were changed. Heavy lane released again.
+
+## 2026-10-07: Explicit manual-only CI transition
+
+User explicitly authorized manual CI, with automatic launches requiring
+separate agreement. Change only the `Go` workflow's trigger block from push/PR
+to `workflow_dispatch`; retain jobs, commands, matrices, runner settings and
+the absence of manual inputs. Inventory contains one workflow and no
+workflow_run, schedule, workflow_call or alternate automatic path. Each manual
+launch retains the same nine jobs and therefore still consumes runner minutes.
+No workflow dispatch/rerun or cancellation is authorized or performed here.
+
+Validate YAML and exact unchanged job content locally. Reuse the final passed
+`make check` on observer source `01a879d`; this transition changes no Go source
+or check commands. Earlier green nine-job CI at `e2b5c6c` predates the collection
+count correction and must not be described as final-head CI. Default-branch
+automatic configuration remains until reviewed merge, so publication/transition
+may still produce an old-config run. Manual launch availability depends on the
+configuration reaching the default branch; no branch protection is bypassed.

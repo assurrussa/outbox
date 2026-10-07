@@ -37,6 +37,22 @@ Run `make prepare` for generation, formatting, and lint fixes. Repeated core
 race stress and HTML coverage are explicit `make test-race-core` and
 `make cover-html` diagnostics.
 
+## Hosted Checks
+
+The `Go` GitHub Actions workflow uses only `workflow_dispatch`. Each manual
+launch retains the existing nine jobs: core, four backend unit jobs and four
+backend integration jobs. Pushes, pull requests and schedules do not request
+runs under this configuration. Automatic CI requires separate agreement;
+manual launches still consume hosted runner minutes.
+
+Once this workflow configuration is on the default branch, maintainers can
+select **Actions → Go → Run workflow** and choose the branch to validate.
+See [GitHub's manual workflow instructions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+While the transition is only in a PR, the default branch retains its old
+automatic configuration; a transition event may still start an old-config run.
+Already-started runs are not cancelled by editing triggers. Keep validation
+evidence tied to its exact source revision and preserve required branch checks.
+
 ## Benchmarks
 
 ```sh
