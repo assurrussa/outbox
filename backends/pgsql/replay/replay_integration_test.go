@@ -138,7 +138,8 @@ func (f replayFixture) ack(t *testing.T, record replay.Record) {
 	t.Helper()
 	now := time.Now().UTC().Add(time.Second)
 	token := types.NewLeaseToken()
-	jobs, err := f.jobs.FindAndReserveJobsForCapability(t.Context(), now, now.Add(time.Minute), token, record.Source.Capability, 1000)
+	jobs, err := f.jobs.FindAndReserveJobsForCapability(
+		t.Context(), now, now.Add(time.Minute), token, record.Source.Capability, 1000)
 	require.NoError(t, err)
 	found := false
 	for _, job := range jobs {
@@ -268,7 +269,8 @@ func testReplayAdmission(t *testing.T, f replayFixture) {
 func testReplayActiveSource(t *testing.T, f replayFixture) {
 	t.Helper()
 	source := f.source(t, "order.created")
-	_, err := f.pool.Exec(t.Context(), `insert into jobs (id,name,schema_version,queue,payload,attempts,available_at,reserved_at,lease_token)
+	_, err := f.pool.Exec(t.Context(), `insert into jobs (
+		id,name,schema_version,queue,payload,attempts,available_at,reserved_at,lease_token)
 		values ($1,$2,$3,$4,$5,4,now()+interval '1 day',now()+interval '1 day',$6)`, source.OriginalJobID, source.Capability.Name,
 		source.Capability.SchemaVersion, source.Queue, source.Payload, types.NewLeaseToken())
 	require.NoError(t, err)
@@ -309,10 +311,14 @@ func testReplayConflict(t *testing.T, f replayFixture) {
 	rejected, err := f.replayer.Replay(t.Context(), conflict, admitOriginal)
 	require.ErrorIs(t, err, replay.ErrRequestConflict)
 	require.Zero(t, rejected)
-	rejected, err = f.replayer.Replay(t.Context(), request, func(context.Context, replay.Source) (string, error) { return "new-effect", nil })
+	rejected, err = f.replayer.Replay(t.Context(), request, func(context.Context, replay.Source) (string, error) {
+		return "new-effect", nil
+	})
 	require.ErrorIs(t, err, replay.ErrRequestConflict)
 	require.Zero(t, rejected)
-	rejected, err = f.replayer.Replay(t.Context(), request, func(context.Context, replay.Source) (string, error) { return "", errUnsupportedHandler })
+	rejected, err = f.replayer.Replay(t.Context(), request, func(context.Context, replay.Source) (string, error) {
+		return "", errUnsupportedHandler
+	})
 	require.ErrorIs(t, err, errUnsupportedHandler)
 	require.Zero(t, rejected)
 	_, err = f.pool.Exec(t.Context(), "update jobs_failed set payload='altered' where id=$1", source.FailedJobID)
@@ -325,7 +331,8 @@ func testReplayConflict(t *testing.T, f replayFixture) {
 	f.ack(t, result.Record)
 	// Retained original-key hint remains usable if the host prunes its old
 	// ordinary enqueue tombstone. Journal request identity still survives.
-	_, err = f.pool.Exec(t.Context(), "delete from outbox_job_idempotency_keys where job_id=$1 or job_id=$2", source.OriginalJobID, result.Record.JobID)
+	_, err = f.pool.Exec(t.Context(), "delete from outbox_job_idempotency_keys where job_id=$1 or job_id=$2",
+		source.OriginalJobID, result.Record.JobID)
 	require.NoError(t, err)
 	repeat, err := f.replayer.Replay(t.Context(), request, admitOriginal)
 	require.NoError(t, err)
