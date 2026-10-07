@@ -18,7 +18,8 @@ effects. Consumers own effect idempotency and reconciliation of ambiguous commit
   use unique owned schemas and no broad fixture cleanup.
 - Gate: consumer compilation/regressions and quickstart integration execution.
   Live integration remains pending while the shared heavy Mac lane is owned by
-  DataGrid. No new retry, replay, observer, or backend behavior in this PR.
+  DataGrid. Run the explicit example integration command in its README; neither
+  `make check` nor `make test-integration-pgsql` executes that test. No new retry, replay, observer, or backend behavior in this PR.
 
 ## 2. Opt-in RetryPolicy independent of lease (next ready item)
 

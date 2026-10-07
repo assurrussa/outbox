@@ -8,6 +8,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestBusinessWriteAndPutAtomicity(t *testing.T) {
@@ -37,12 +39,20 @@ func TestBusinessWriteAndPutAtomicity(t *testing.T) {
 	if err := runtime.Client().DB().Pool().QueryRow(ctx, "SELECT payload FROM jobs WHERE id=$1::uuid", id.String()).Scan(&payload); err != nil || payload != "committed" {
 		t.Fatalf("committed job: payload=%q err=%v", payload, err)
 	}
+	// This test-owned constraint makes Put fail in PostgreSQL after the
+	// business insert. Empty job names are accepted by the existing API.
+	if _, err := runtime.Client().DB().Pool().Exec(ctx,
+		"ALTER TABLE jobs ADD CONSTRAINT quickstart_reject_payload CHECK (payload <> 'Put persistence failure')",
+	); err != nil {
+		t.Fatal(err)
+	}
 	for _, scenario := range []struct {
 		name, jobName string
 		abort         error
+		wantSQLState  string
 	}{
-		{"callback rollback", "order.created", errDemoRollback},
-		{"Put validation failure", "", nil},
+		{"callback rollback", "order.created", errDemoRollback, ""},
+		{"Put persistence failure", "order.created", nil, "23514"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			id, err := writeOrder(ctx, runtime, scenario.name, scenario.jobName, scenario.abort)
@@ -51,6 +61,12 @@ func TestBusinessWriteAndPutAtomicity(t *testing.T) {
 			}
 			if scenario.abort != nil && !errors.Is(err, scenario.abort) {
 				t.Fatalf("rollback cause lost: %v", err)
+			}
+			if scenario.wantSQLState != "" {
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.Code != scenario.wantSQLState {
+					t.Fatalf("expected enqueue check-constraint failure, got %v", err)
+				}
 			}
 			if err := assertCounts(ctx, runtime, 1, 1); err != nil {
 				t.Fatal(err)

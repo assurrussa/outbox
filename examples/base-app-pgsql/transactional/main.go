@@ -56,8 +56,10 @@ func run(ctx context.Context, dsn string) (err error) {
 	return nil
 }
 
-// writeOrder returns an ID only after RunInTx confirms commit. Always pass txCtx
-// to Put; passing the outer ctx would enqueue outside the business transaction.
+// The demo calls writeOrder without a surrounding transaction, so successful
+// RunInTx confirms commit. Nested calls reuse the existing transaction without
+// committing; their errors must propagate to the outer callback. Always pass
+// txCtx to Put; passing the outer ctx would enqueue independently.
 func writeOrder(ctx context.Context, runtime *pgruntime.Runtime, orderID, jobName string, abort error) (outbox.JobID, error) {
 	var jobID outbox.JobID
 	err := runtime.Transactor().RunInTx(ctx, func(txCtx context.Context) error {

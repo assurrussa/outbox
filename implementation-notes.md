@@ -811,7 +811,7 @@ Decisions made:
 - Added a PostgreSQL runtime quickstart under the existing example module; each
   invocation owns a unique schema and uses embedded migrations. Commit and
   callback rollback share pgx transaction context with `Put`. Integration tests
-  additionally exercise enqueue validation failure.
+  additionally exercise enqueue persistence failure.
 - Business row/job invariants: successful callback commits both; callback error
   after enqueue or Put error persists neither; failed calls return a zero ID.
   No workers are started, so queue inspection cannot race with acknowledgement.
@@ -831,3 +831,24 @@ Validation for this bounded PR:
 - `TestBusinessWriteAndPutAtomicity` explicitly skipped without `OUTBOX_PG_DSN`.
 - Touched-file gofumpt/gci checks and `git diff --check` passed.
 - Live quickstart integration and `make check` remain pending lane coordination.
+
+## 2026-10-07: Quickstart enqueue-failure review correction
+
+The original integration scenario incorrectly assumed `Put` rejects an empty
+job name. Existing validation rejects nonpositive schema versions, not empty
+names. Replaced the scenario with a test-owned PostgreSQL CHECK constraint
+rejecting its payload and require SQLSTATE `23514` through error wrapping.
+The business insert succeeds first; the enqueue SQL fails and the test asserts
+that neither new row survives rollback and no usable job ID is returned.
+No public validation or runtime behavior changed. Live PostgreSQL verification
+remains deferred while DataGrid owns the heavy lane.
+
+The transaction docs now distinguish an outermost commit from nested callback-
+only reuse, and require propagating nested errors. The demo helper is called
+without an attached transaction. The example's live integration requires its
+explicit documented command; it is not part of `make check` or
+`make test-integration-pgsql`. Compile-only validation does not satisfy that gate.
+
+Correction validation: tagged quickstart compile-only check and tagged `go vet`
+passed using shared caches; `git diff --check` passed. Live database execution
+was not attempted while the heavy lane remains occupied.

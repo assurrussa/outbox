@@ -11,8 +11,11 @@ No general stability guarantee is extended to `shared/*`.
 
 For PostgreSQL, a business write using `storage.GetTx(txCtx)` and `Put(txCtx, ...)`
 inside the same runtime's `Transactor().RunInTx` callback participate in the same
-pgx transaction. A callback error rolls back both. Only a successful transaction
-result confirms commit; an ID allocated inside the callback does not. Commit
+pgx transaction. An error returned by the outermost callback rolls back both.
+Only successful completion of the outermost `RunInTx` confirms commit; an ID
+allocated inside a callback does not. Nested `RunInTx` calls reuse the attached
+transaction and execute their callback without committing or rolling back.
+Propagate nested errors to the outermost callback to trigger rollback. Commit
 errors can be ambiguous and require host reconciliation. External handler effects
 remain outside this enqueue transaction and require consumer idempotency.
 See the [runnable quickstart](../examples/base-app-pgsql/transactional/README.md).

@@ -35,8 +35,11 @@ err := runtime.Transactor().RunInTx(ctx, func(txCtx context.Context) error {
 Use the same runtime/database and pass `txCtx` to every participating operation.
 The repository uses the pgx transaction carried by that context. `Put` outside
 this boundary enqueues independently; an allocated ID inside the callback is
-not evidence of a committed job. The helper returns a usable ID only when
-`RunInTx` succeeds. A commit error must be reconciled according to the host's
+not evidence of a committed job. This demo calls the helper without an attached
+transaction, so its successful outermost `RunInTx` confirms commit. A nested
+`RunInTx` only executes its callback in the existing transaction; success does
+not confirm commit, and nested errors must propagate to the outermost callback
+for rollback. A commit error must be reconciled according to the host's
 business idempotency contract; a connection failure can leave commit outcome
 uncertain.
 
@@ -46,7 +49,7 @@ consumer. Handlers can run again after a crash or lost acknowledgement and
 must make external effects idempotent. Atomic enqueue does not promise exactly
 once delivery or atomically commit external effects.
 
-Integration regression (same fixture ownership, plus `Put` validation failure):
+Integration regression (same fixture ownership, plus `Put` persistence failure):
 
 ```sh
 go test -tags integration ./examples/base-app-pgsql/transactional -count=1
