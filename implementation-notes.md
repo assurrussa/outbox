@@ -1196,3 +1196,14 @@ key/operation assertions to the PG contract matrix. This correction is
 source-only until AuthHub explicitly releases; then repeat only affected replay
 lint, standalone consumer/unit checks and owned PG race validation. Preserve
 the earlier unrelated full readiness evidence; do not repeat its aggregate.
+
+AuthHub explicitly returned the short corrective window. On final code/test
+source `ee0e8b0670b52cb24cd69b47edff60cbea5021dd`, integration-enabled replay lint
+reported zero issues, `GOWORK=off go test -count=1 ./replay` passed against the
+unchanged published core dependency, and the owned PostgreSQL 18.6 replay race
+contract passed without skips. Changed capability/key under a distinct request
+after ACK failed closed; the Down test confirmed the actual retention guard
+message. The corrective container was removed by recorded ID plus owner label,
+with zero remaining replay schemas; the lane was explicitly released. Final
+evidence/consumer-navigation edits are Markdown only. No full aggregate repeat,
+hosted CI launch, tag, deployment, production operation or retention mutation.

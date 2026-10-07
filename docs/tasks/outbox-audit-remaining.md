@@ -54,7 +54,7 @@ including core race/coverage, standalone backend tests and example builds.
 No containers were needed. Parent review included the confirmed collection-count
 correction and manual-only CI transition; merged as `b0b2b58`. No replay implementation.
 
-## 4. Safe replay (approved bounded PostgreSQL implementation)
+## 4. Safe replay (implemented; draft review)
 
 Owner approved retrying the same business operation, preserving its identity
 and failed record, without intentionally creating a new effect. Host-owned
@@ -73,6 +73,17 @@ requests, unsupported inputs, admission, source activity, persistence rollback,
 commit-response ambiguity before/after commit, retained evidence and guarded
 migration Down. Source preparation precedes a coordinated owned PostgreSQL
 gate and one necessary local readiness aggregate; draft review follows checks.
+
+Implemented the [`replay` API and consumer contract](../../backends/pgsql/replay/README.md)
+plus additive migration `00005`. Source `bb6a89e` passed one full `make check`
+and the live PostgreSQL 18.6 replay race contract without skips. Final identity
+guard on source `ee0e8b0` also pins distinct requests to the first admitted
+operation/business key; affected integration lint (zero issues), standalone
+consumer/unit tests and live PG race contract passed. Reuse unchanged full-gate
+constituents instead of repeating the aggregate. Both narrowly owned containers
+were removed with zero leftover replay schemas; lane explicitly released.
+Publication is a draft for independent parent review; no tag/deploy or hosted
+CI dispatch. Next ready action is review/merge, not automatic measurement work.
 
 ## 5. SQLite durability configuration (merged PR #36)
 
