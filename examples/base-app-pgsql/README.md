@@ -60,3 +60,8 @@ The app resolves DSN in this order:
 
 See [transactional/README.md](transactional/README.md) for a runtime-based, isolated
 quickstart proving that a business insert and `Put` commit or roll back together.
+
+## True-batch consumer
+
+See [batch/README.md](batch/README.md) for an isolated multi-item handler example
+that waits for durable completion before shutting down.
