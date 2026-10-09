@@ -1277,3 +1277,19 @@ this candidate yet; the coordinated cloud validation lane must run formatting,
 standalone backend tests, affected lint/vet and the real PostgreSQL race cases
 with OUTBOX_PG_DSN set to its owned disposable fixture. Missing-DSN skips do not
 constitute PostgreSQL evidence. No CI trigger, release, tag or deployment change.
+
+
+### Validation correction: preserve existing capability-name semantics
+
+The first canonical `make check` on source `00d7cd02` under real Go 1.27.2
+failed in `TestSQLTxPutterValidatesBeforeQuery/empty_capability`: the new test
+expected an error that the published contract does not require. Verified
+`outbox/capability.go` at both core v0.16.0 and the current source: Validate
+rejects only nonpositive SchemaVersion. The existing jobs schema allows empty
+names and the pgx unique producer already delegates to that same validation.
+
+Remove the incorrect rejection case and add positive unit plus PostgreSQL
+cross-producer empty-name identity regressions. Production code, SQL and core
+validation stay unchanged. This correction has only a stdin formatting check;
+tests must run in the coordinated cloud lane. The canonical aggregate remains
+failed until validated again, and real PostgreSQL gates have not yet run.

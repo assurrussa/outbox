@@ -144,6 +144,33 @@ func TestSQLTxPutterUniqueParityAndRetainedIdentity(t *testing.T) {
 	f.counts(t, 0, 1, 2)
 }
 
+func TestSQLTxPutterEmptyNameParity(t *testing.T) {
+	f := openSQLTxFixture(t)
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	pgxResult, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "pgx-empty", "", 1, "payload", at)
+	require.NoError(t, err)
+	require.True(t, pgxResult.Created)
+
+	tx, putter := f.begin(t)
+	replayed, err := putter.PutVersionedUnique(t.Context(), "pgx-empty", "", 1, "payload", at)
+	require.NoError(t, err)
+	require.False(t, replayed.Created)
+	require.Equal(t, pgxResult.JobID, replayed.JobID)
+	sqlResult, err := putter.PutVersionedUnique(t.Context(), "sql-empty", "", 1, "payload", at)
+	require.NoError(t, err)
+	require.True(t, sqlResult.Created)
+	require.NoError(t, tx.Commit())
+
+	pgxReplay, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "sql-empty", "", 1, "payload", at)
+	require.NoError(t, err)
+	require.False(t, pgxReplay.Created)
+	require.Equal(t, sqlResult.JobID, pgxReplay.JobID)
+	job, err := f.jobs.GetByID(t.Context(), sqlResult.JobID)
+	require.NoError(t, err)
+	require.Empty(t, job.Name)
+	f.counts(t, 0, 2, 2)
+}
+
 func TestSQLTxPutterWrongSchemaFailsWithoutFallback(t *testing.T) {
 	f := openSQLTxFixture(t)
 	tx, putter := f.begin(t)

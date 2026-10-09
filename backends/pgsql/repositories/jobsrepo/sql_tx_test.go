@@ -85,7 +85,6 @@ func TestSQLTxPutterValidatesBeforeQuery(t *testing.T) {
 		version               coreoutbox.SchemaVersion
 	}{
 		{name: "empty key", capability: "event", version: 1},
-		{name: "empty capability", key: "key", version: 1},
 		{name: "zero version", key: "key", capability: "event"},
 		{name: "negative version", key: "key", capability: "event", version: -1},
 	} {
@@ -101,6 +100,26 @@ func TestSQLTxPutterValidatesBeforeQuery(t *testing.T) {
 			require.Zero(t, state.rollbacks)
 		})
 	}
+}
+
+func TestSQLTxPutterPreservesEmptyCapabilityName(t *testing.T) {
+	// Published capability validation requires a positive version, not a name.
+	// Keep this producer compatible with the existing pgx repository contract.
+	capability := coreoutbox.JobCapability{Name: "", SchemaVersion: 1}
+	require.NoError(t, capability.Validate())
+	tx, state := newSQLTxTestTransaction(t)
+	putter, err := NewSQLTxPutter(tx)
+	require.NoError(t, err)
+	result, err := putter.PutVersionedUnique(
+		t.Context(), "empty-name", capability.Name, capability.SchemaVersion, "payload", time.Now(),
+	)
+	require.NoError(t, err)
+	require.True(t, result.Created)
+	require.False(t, result.JobID.IsZero())
+	require.Equal(t, 1, state.queries)
+	require.Empty(t, state.args[4].Value)
+	require.Zero(t, state.commits)
+	require.Zero(t, state.rollbacks)
 }
 
 func TestSQLTxPutterPreservesErrors(t *testing.T) {
