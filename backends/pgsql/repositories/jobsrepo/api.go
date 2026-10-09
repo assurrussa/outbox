@@ -204,7 +204,6 @@ func (r *Repo) CreateJobVersionedUniqueBatch(
 	return results, nil
 }
 
-
 func (r *Repo) PruneJobIdempotencyKeys(
 	ctx context.Context,
 	before time.Time,

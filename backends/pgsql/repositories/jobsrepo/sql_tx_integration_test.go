@@ -276,4 +276,4 @@ func (f sqlTxFixture) counts(t *testing.T, business, jobs, keys int) {
 type sqlTxFixtureClient struct{ engine storage.DBEngine }
 
 func (c sqlTxFixtureClient) DB() storage.DBEngine { return c.engine }
-func (sqlTxFixtureClient) Close() error          { return nil }
+func (sqlTxFixtureClient) Close() error           { return nil }

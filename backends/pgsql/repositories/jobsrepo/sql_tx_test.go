@@ -150,10 +150,10 @@ func TestSQLTxPutterHonorsContext(t *testing.T) {
 
 type sqlTxTestState struct {
 	connections, begins, queries, commits, rollbacks, rowsClosed int
-	query                                                       string
-	args                                                        []driver.NamedValue
-	queryErr, scanErr                                           error
-	noRows                                                      bool
+	query                                                        string
+	args                                                         []driver.NamedValue
+	queryErr, scanErr                                            error
+	noRows                                                       bool
 }
 
 func newSQLTxTestTransaction(t *testing.T) (*sql.Tx, *sqlTxTestState) {

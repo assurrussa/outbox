@@ -105,4 +105,3 @@ func jobFingerprint(
 
 	return hex.EncodeToString(digest[:])
 }
-
