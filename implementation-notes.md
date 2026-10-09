@@ -1246,3 +1246,34 @@ version 4. Cleanup removed the recorded-ID/owner-labelled container with zero
 replay schemas left. Lane explicitly returned to RegistryUI; no Go/fixture
 remains. Prior full gate evidence is preserved without rerun. Subsequent changes
 are evidence Markdown and the existing draft update only.
+
+
+## 2026-10-09: Caller-owned PostgreSQL database/sql unique staging
+
+Add the bounded `jobsrepo.NewSQLTxPutter(*sql.Tx)` producer requested for an
+existing Inbox/business transaction. Concrete transaction binding prevents
+implicit pgx-context/pool fallback. Construction only rejects nil; it does not
+issue SQL. The adapter never opens, begins, commits, rolls back or changes
+search_path. Hosts own valid PostgreSQL transaction/database/schema selection,
+savepoints, commit outcome and relay binding. A valid schema in the wrong
+database cannot be detected by this adapter.
+
+Extract the existing single-event validation, CTE, fingerprint and result/error
+handling into one private helper used by both producers; batch fingerprinting
+uses the same unchanged function. No schema, dependency, interface, worker or
+pgx transaction-manager change. Existing pgx calls retain their operation name
+and SQL arguments; SQL no-row conflicts map to the existing identity sentinel.
+
+Tests cover nil/zero producers, input rejection before SQL, driver/scan/context
+errors, exact arguments, one caller connection/transaction and no finalization.
+Owned-schema PostgreSQL tests cover business/job/key visibility before commit,
+commit and rollback, sql.ErrTxDone, pgx/SQL idempotency parity, all fingerprint
+conflict fields, post-ACK replay, wrong search_path without fallback, statement
+failure rollback and caller savepoint recovery. The SQL test pool has one
+connection; separate pgx observers verify visibility.
+
+Source-only preparation through repository connectors. No checks have run for
+this candidate yet; the coordinated cloud validation lane must run formatting,
+standalone backend tests, affected lint/vet and the real PostgreSQL race cases
+with OUTBOX_PG_DSN set to its owned disposable fixture. Missing-DSN skips do not
+constitute PostgreSQL evidence. No CI trigger, release, tag or deployment change.
