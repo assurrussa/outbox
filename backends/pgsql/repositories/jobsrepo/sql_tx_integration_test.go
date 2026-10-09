@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -21,10 +24,9 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlclient"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
-	"github.com/assurrussa/outbox/shared/types"
 )
+
+const sqlTxTestSQLName = "sql.event"
 
 func TestSQLTxPutterAtomicCommitAndRollback(t *testing.T) {
 	for _, commit := range []bool{false, true} {
@@ -79,20 +81,20 @@ func TestSQLTxPutterAtomicCommitAndRollback(t *testing.T) {
 func TestSQLTxPutterUniqueParityAndRetainedIdentity(t *testing.T) {
 	f := openSQLTxFixture(t)
 	at := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
-	pgxResult, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "pgx-first", "pgx.event", 1, "payload", at)
+	pgxResult, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "pgx-first", "pgx.event", 1, sqlTxTestPayload, at)
 	require.NoError(t, err)
 
 	tx, putter := f.begin(t)
 	replayed, err := putter.PutVersionedUnique(
-		t.Context(), "pgx-first", "pgx.event", 1, "payload", at.In(time.FixedZone("same-instant", 7200)),
+		t.Context(), "pgx-first", "pgx.event", 1, sqlTxTestPayload, at.In(time.FixedZone("same-instant", 7200)),
 	)
 	require.NoError(t, err)
 	require.False(t, replayed.Created)
 	require.Equal(t, pgxResult.JobID, replayed.JobID)
-	first, err := putter.PutVersionedUnique(t.Context(), "sql-first", "sql.event", 2, "payload", at)
+	first, err := putter.PutVersionedUnique(t.Context(), "sql-first", sqlTxTestSQLName, 2, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.True(t, first.Created)
-	repeated, err := putter.PutVersionedUnique(t.Context(), "sql-first", "sql.event", 2, "payload", at)
+	repeated, err := putter.PutVersionedUnique(t.Context(), "sql-first", sqlTxTestSQLName, 2, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.False(t, repeated.Created)
 	require.Equal(t, first.JobID, repeated.JobID)
@@ -103,10 +105,10 @@ func TestSQLTxPutterUniqueParityAndRetainedIdentity(t *testing.T) {
 		payload string
 		at      time.Time
 	}{
-		{name: "other.event", version: 2, payload: "payload", at: at},
-		{name: "sql.event", version: 3, payload: "payload", at: at},
-		{name: "sql.event", version: 2, payload: "different", at: at},
-		{name: "sql.event", version: 2, payload: "payload", at: at.Add(time.Microsecond)},
+		{name: "other.event", version: 2, payload: sqlTxTestPayload, at: at},
+		{name: sqlTxTestSQLName, version: 3, payload: sqlTxTestPayload, at: at},
+		{name: sqlTxTestSQLName, version: 2, payload: "different", at: at},
+		{name: sqlTxTestSQLName, version: 2, payload: sqlTxTestPayload, at: at.Add(time.Microsecond)},
 	} {
 		conflict, err := putter.PutVersionedUnique(
 			t.Context(), "sql-first", changed.name, changed.version, changed.payload, changed.at,
@@ -117,7 +119,7 @@ func TestSQLTxPutterUniqueParityAndRetainedIdentity(t *testing.T) {
 	// A logical identity conflict does not finalize or abort the owner's transaction.
 	require.NoError(t, tx.Commit())
 	f.counts(t, 0, 2, 2)
-	pgxReplay, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "sql-first", "sql.event", 2, "payload", at)
+	pgxReplay, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "sql-first", sqlTxTestSQLName, 2, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.False(t, pgxReplay.Created)
 	require.Equal(t, first.JobID, pgxReplay.JobID)
@@ -126,7 +128,7 @@ func TestSQLTxPutterUniqueParityAndRetainedIdentity(t *testing.T) {
 	now := time.Now().UTC()
 	claimed, err := f.jobs.FindAndReserveJobsForCapabilities(
 		t.Context(), now, now.Add(time.Minute), token,
-		[]coreoutbox.JobCapability{{Name: "sql.event", SchemaVersion: 2}}, 1,
+		[]coreoutbox.JobCapability{{Name: sqlTxTestSQLName, SchemaVersion: 2}}, 1,
 	)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
@@ -136,7 +138,7 @@ func TestSQLTxPutterUniqueParityAndRetainedIdentity(t *testing.T) {
 	require.Equal(t, int64(1), affected)
 
 	tx, putter = f.begin(t)
-	afterACK, err := putter.PutVersionedUnique(t.Context(), "sql-first", "sql.event", 2, "payload", at)
+	afterACK, err := putter.PutVersionedUnique(t.Context(), "sql-first", sqlTxTestSQLName, 2, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.False(t, afterACK.Created)
 	require.Equal(t, first.JobID, afterACK.JobID)
@@ -147,21 +149,21 @@ func TestSQLTxPutterUniqueParityAndRetainedIdentity(t *testing.T) {
 func TestSQLTxPutterEmptyNameParity(t *testing.T) {
 	f := openSQLTxFixture(t)
 	at := time.Now().UTC().Truncate(time.Microsecond)
-	pgxResult, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "pgx-empty", "", 1, "payload", at)
+	pgxResult, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "pgx-empty", "", 1, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.True(t, pgxResult.Created)
 
 	tx, putter := f.begin(t)
-	replayed, err := putter.PutVersionedUnique(t.Context(), "pgx-empty", "", 1, "payload", at)
+	replayed, err := putter.PutVersionedUnique(t.Context(), "pgx-empty", "", 1, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.False(t, replayed.Created)
 	require.Equal(t, pgxResult.JobID, replayed.JobID)
-	sqlResult, err := putter.PutVersionedUnique(t.Context(), "sql-empty", "", 1, "payload", at)
+	sqlResult, err := putter.PutVersionedUnique(t.Context(), "sql-empty", "", 1, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.True(t, sqlResult.Created)
 	require.NoError(t, tx.Commit())
 
-	pgxReplay, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "sql-empty", "", 1, "payload", at)
+	pgxReplay, err := f.jobs.CreateJobVersionedUniqueResult(t.Context(), "sql-empty", "", 1, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.False(t, pgxReplay.Created)
 	require.Equal(t, sqlResult.JobID, pgxReplay.JobID)
@@ -176,7 +178,7 @@ func TestSQLTxPutterWrongSchemaFailsWithoutFallback(t *testing.T) {
 	tx, putter := f.begin(t)
 	_, err := tx.ExecContext(t.Context(), "set local search_path to pg_catalog")
 	require.NoError(t, err)
-	result, err := putter.PutVersionedUnique(t.Context(), "wrong-schema", "event", 1, "payload", time.Now())
+	result, err := putter.PutVersionedUnique(t.Context(), "wrong-schema", sqlTxTestEventName, 1, sqlTxTestPayload, time.Now())
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
 	require.Equal(t, "42P01", pgErr.Code)
@@ -192,7 +194,7 @@ func TestSQLTxPutterConstraintFailureRollsBackWithBusinessWrite(t *testing.T) {
 	tx, putter := f.begin(t)
 	_, err = tx.ExecContext(t.Context(), "insert into business_effects (id) values (1)")
 	require.NoError(t, err)
-	result, err := putter.PutVersionedUnique(t.Context(), "rejected", "event", 1, "reject", time.Now())
+	result, err := putter.PutVersionedUnique(t.Context(), "rejected", sqlTxTestEventName, 1, "reject", time.Now())
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
 	require.Equal(t, "23514", pgErr.Code)
@@ -210,14 +212,14 @@ func TestSQLTxPutterCallerControlsSavepoints(t *testing.T) {
 	_, err = tx.ExecContext(t.Context(), "savepoint business_attempt")
 	require.NoError(t, err)
 	at := time.Now().UTC()
-	discarded, err := putter.PutVersionedUnique(t.Context(), "discarded", "event", 1, "payload", at)
+	discarded, err := putter.PutVersionedUnique(t.Context(), "discarded", sqlTxTestEventName, 1, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.True(t, discarded.Created)
 	_, err = tx.ExecContext(t.Context(), "rollback to savepoint business_attempt")
 	require.NoError(t, err)
 	_, err = tx.ExecContext(t.Context(), "release savepoint business_attempt")
 	require.NoError(t, err)
-	retained, err := putter.PutVersionedUnique(t.Context(), "retained", "event", 1, "payload", at)
+	retained, err := putter.PutVersionedUnique(t.Context(), "retained", sqlTxTestEventName, 1, sqlTxTestPayload, at)
 	require.NoError(t, err)
 	require.True(t, retained.Created)
 	require.NoError(t, tx.Commit())

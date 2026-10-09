@@ -1,4 +1,4 @@
-package jobsrepo
+package jobsrepo_test
 
 import (
 	"context"
@@ -9,18 +9,24 @@ import (
 	"testing"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/stretchr/testify/require"
 
-	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
+)
+
+const (
+	sqlTxTestEventName = "event"
+	sqlTxTestPayload   = "payload"
 )
 
 func TestSQLTxPutterRequiresTransaction(t *testing.T) {
-	putter, err := NewSQLTxPutter(nil)
+	putter, err := jobsrepo.NewSQLTxPutter(nil)
 	require.Error(t, err)
 	require.Nil(t, putter)
 
-	for _, invalid := range []*SQLTxPutter{nil, {}} {
-		result, err := invalid.PutVersionedUnique(t.Context(), "key", "event", 1, "payload", time.Now())
+	for _, invalid := range []*jobsrepo.SQLTxPutter{nil, {}} {
+		result, err := invalid.PutVersionedUnique(t.Context(), "key", sqlTxTestEventName, 1, sqlTxTestPayload, time.Now())
 		require.Error(t, err)
 		require.Zero(t, result)
 	}
@@ -34,7 +40,7 @@ func TestSQLTxPutterUsesOnlyCallerTransaction(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			tx, state := newSQLTxTestTransaction(t)
-			putter, err := NewSQLTxPutter(tx)
+			putter, err := jobsrepo.NewSQLTxPutter(tx)
 			require.NoError(t, err)
 			require.Zero(t, state.queries)
 
@@ -53,7 +59,8 @@ func TestSQLTxPutterUsesOnlyCallerTransaction(t *testing.T) {
 			require.Len(t, state.args, 9)
 			require.Equal(t, "identity", state.args[0].Value)
 			require.Equal(t, result.JobID.String(), state.args[1].Value)
-			require.Equal(t, jobFingerprint("event.created", 2, "exact payload", at), state.args[2].Value)
+			// Compatibility vector for the exact capability, payload and UTC availability above.
+			require.Equal(t, "c4500334bb030541334ecc005be3702039f638334addfc34f391a2c2557a5c6c", state.args[2].Value)
 			require.Equal(t, "event.created", state.args[4].Value)
 			require.Equal(t, int64(2), state.args[5].Value)
 			require.Equal(t, "exact payload", state.args[6].Value)
@@ -69,7 +76,7 @@ func TestSQLTxPutterUsesOnlyCallerTransaction(t *testing.T) {
 				require.Zero(t, state.commits)
 				require.Equal(t, 1, state.rollbacks)
 			}
-			ended, err := putter.PutVersionedUnique(t.Context(), "next", "event.created", 2, "payload", at)
+			ended, err := putter.PutVersionedUnique(t.Context(), "next", "event.created", 2, sqlTxTestPayload, at)
 			require.ErrorIs(t, err, sql.ErrTxDone)
 			require.Zero(t, ended)
 			require.Equal(t, 1, state.queries)
@@ -84,15 +91,15 @@ func TestSQLTxPutterValidatesBeforeQuery(t *testing.T) {
 		name, key, capability string
 		version               coreoutbox.SchemaVersion
 	}{
-		{name: "empty key", capability: "event", version: 1},
-		{name: "zero version", key: "key", capability: "event"},
-		{name: "negative version", key: "key", capability: "event", version: -1},
+		{name: "empty key", capability: sqlTxTestEventName, version: 1},
+		{name: "zero version", key: "key", capability: sqlTxTestEventName},
+		{name: "negative version", key: "key", capability: sqlTxTestEventName, version: -1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tx, state := newSQLTxTestTransaction(t)
-			putter, err := NewSQLTxPutter(tx)
+			putter, err := jobsrepo.NewSQLTxPutter(tx)
 			require.NoError(t, err)
-			result, err := putter.PutVersionedUnique(t.Context(), test.key, test.capability, test.version, "payload", time.Now())
+			result, err := putter.PutVersionedUnique(t.Context(), test.key, test.capability, test.version, sqlTxTestPayload, time.Now())
 			require.Error(t, err)
 			require.Zero(t, result)
 			require.Zero(t, state.queries)
@@ -108,10 +115,10 @@ func TestSQLTxPutterPreservesEmptyCapabilityName(t *testing.T) {
 	capability := coreoutbox.JobCapability{Name: "", SchemaVersion: 1}
 	require.NoError(t, capability.Validate())
 	tx, state := newSQLTxTestTransaction(t)
-	putter, err := NewSQLTxPutter(tx)
+	putter, err := jobsrepo.NewSQLTxPutter(tx)
 	require.NoError(t, err)
 	result, err := putter.PutVersionedUnique(
-		t.Context(), "empty-name", capability.Name, capability.SchemaVersion, "payload", time.Now(),
+		t.Context(), "empty-name", capability.Name, capability.SchemaVersion, sqlTxTestPayload, time.Now(),
 	)
 	require.NoError(t, err)
 	require.True(t, result.Created)
@@ -139,9 +146,9 @@ func TestSQLTxPutterPreservesErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			tx, state := newSQLTxTestTransaction(t)
 			state.queryErr, state.scanErr, state.noRows = test.queryErr, test.scanErr, test.noRows
-			putter, err := NewSQLTxPutter(tx)
+			putter, err := jobsrepo.NewSQLTxPutter(tx)
 			require.NoError(t, err)
-			result, err := putter.PutVersionedUnique(t.Context(), "key", "event", 1, "payload", time.Now())
+			result, err := putter.PutVersionedUnique(t.Context(), "key", sqlTxTestEventName, 1, sqlTxTestPayload, time.Now())
 			require.ErrorIs(t, err, test.want)
 			require.Zero(t, result)
 			require.Equal(t, 1, state.queries)
@@ -155,11 +162,11 @@ func TestSQLTxPutterPreservesErrors(t *testing.T) {
 
 func TestSQLTxPutterHonorsContext(t *testing.T) {
 	tx, state := newSQLTxTestTransaction(t)
-	putter, err := NewSQLTxPutter(tx)
+	putter, err := jobsrepo.NewSQLTxPutter(tx)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	result, err := putter.PutVersionedUnique(ctx, "key", "event", 1, "payload", time.Now())
+	result, err := putter.PutVersionedUnique(ctx, "key", sqlTxTestEventName, 1, sqlTxTestPayload, time.Now())
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, result)
 	require.Zero(t, state.queries)
@@ -191,7 +198,7 @@ type sqlTxTestConnector struct{ state *sqlTxTestState }
 
 func (c sqlTxTestConnector) Connect(context.Context) (driver.Conn, error) {
 	c.state.connections++
-	return sqlTxTestConn{state: c.state}, nil
+	return sqlTxTestConn(c), nil
 }
 
 func (sqlTxTestConnector) Driver() driver.Driver { return sqlTxTestDriver{} }
@@ -212,7 +219,7 @@ func (sqlTxTestConn) Close() error { return nil }
 
 func (c sqlTxTestConn) Begin() (driver.Tx, error) {
 	c.state.begins++
-	return sqlTxTestTransaction{state: c.state}, nil
+	return sqlTxTestTransaction(c), nil
 }
 
 func (c sqlTxTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {

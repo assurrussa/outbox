@@ -1293,3 +1293,25 @@ cross-producer empty-name identity regressions. Production code, SQL and core
 validation stay unchanged. This correction has only a stdin formatting check;
 tests must run in the coordinated cloud lane. The canonical aggregate remains
 failed until validated again, and real PostgreSQL gates have not yet run.
+
+
+### Scoped lint correction after successful test continuation
+
+On source `c74e6439`, PostgreSQL and Picodata standalone tests, all five
+example builds and integration-tag PostgreSQL vet passed. Backend lint found
+ten issues in the new SQLTx test/example files plus sixty unrelated baseline
+findings. Correct only the new files; keep production code and shared SQL
+unchanged, and leave unrelated findings for their own work.
+
+Use the external test package and a fixed exact fingerprint compatibility
+vector instead of reaching into the private helper. Retain the live PostgreSQL
+cross-producer and all fingerprint-field parity checks. Deduplicate test
+literals, use equivalent test-driver struct conversions, and order imports
+as standard/default/backend-local module. The executable example retains its
+normal existing-transaction staging closure and demonstrates deterministic
+nil rejection without database I/O; the README's success-path guidance stays.
+
+Source verification used stdin gofumpt, gci with the backend module prefix
+equivalent to localmodule, and gofmt. No tests or lint were run in this source
+correction. Resume affected package/example tests, tagged vet and scoped lint
+in the validation environment. Owned PostgreSQL race tests remain unrun.
