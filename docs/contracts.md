@@ -20,6 +20,17 @@ errors can be ambiguous and require host reconciliation. External handler effect
 remain outside this enqueue transaction and require consumer idempotency.
 See the [runnable quickstart](../examples/base-app-pgsql/transactional/README.md).
 
+For a caller-owned PostgreSQL `database/sql` transaction,
+`jobsrepo.NewSQLTxPutter(tx)` implements `UniqueVersionedPutter` using only that
+concrete `*sql.Tx`. It shares the pgx repository's unique-job statement and
+fingerprint, including retained tombstones and conflict behavior. It has no
+pool fallback or transaction lifecycle operations. The caller owns the intended
+database/search_path, migrations through 00004, savepoints and finalization.
+A successful put is provisional until that caller confirms commit; rollback
+removes the new job and key together. Nil transactions fail construction;
+driver, cancellation and finished-transaction errors remain wrapped.
+See the [database/sql producer contract](../backends/pgsql/README.md#staging-in-an-existing-databasesql-transaction).
+
 ## Core Construction
 
 `outbox.New(...)` requires:

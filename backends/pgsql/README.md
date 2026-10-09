@@ -114,6 +114,56 @@ jobs sequentially.
 `GetQueueStats` uses one exact grouped scan of the active queue. The host owns
 its polling frequency; the backend adds no cache or projection table.
 
+## Staging in an existing database/sql transaction
+
+For a host that already owns a PostgreSQL `*sql.Tx`, use
+`jobsrepo.NewSQLTxPutter(tx)`. It implements `outbox.UniqueVersionedPutter`
+without creating a client, opening a connection, starting another transaction,
+or taking commit/rollback ownership. The existing pgx runtime and
+`storage.WithTx` behavior are unchanged.
+
+```go
+func stageOutbound(ctx context.Context, tx *sql.Tx, eventID string, availableAt time.Time) error {
+	producer, err := jobsrepo.NewSQLTxPutter(tx)
+	if err != nil {
+		return err
+	}
+	_, err = producer.PutVersionedUnique(
+		ctx, eventID, "message.accepted", 1, `{"message_id":"message-17"}`,
+		availableAt,
+	)
+	return err
+}
+```
+
+Call this from the host's business/Inbox transaction with its existing context
+and transaction. Propagate staging errors to that transaction owner; it owns
+commit, rollback and savepoints. A returned job ID or `Created=true` is only
+a staged result until the owner confirms commit. A rollback removes both the
+new job and its idempotency key. Resolve ambiguous commits by retrying the same
+identity and unchanged content.
+
+The transaction must come from `database/sql` using a PostgreSQL driver, with
+the intended database and trusted `search_path` already configured. Apply the
+embedded migrations (at least through `00004_add_job_deduplication.sql`) in that
+same schema. The adapter uses the transaction's existing schema resolution;
+it never issues `SET`, selects a different schema or falls back to a pool.
+It cannot detect that a valid Outbox schema belongs to the wrong business
+database, so the caller owns this binding. Keep the binding fixed while staging
+and configure the relay for the same database/schema.
+
+Nil transactions fail construction. Ended transactions, driver/SQL errors and
+context cancellation are returned from the put operation with their original
+errors preserved for `errors.Is`/`errors.As`. The adapter is a producer only,
+not a relay transactor. Do not wrap it in the pgx transaction manager.
+
+Single-event SQL and fingerprinting are shared with the existing pgx repository:
+the immutable identity covers exact name, schema version, payload and UTC
+availability instant. Identical replays return the original ID with
+`Created=false`, including after ACK; changed content returns
+`outbox.ErrIdempotencyConflict`. Retain the idempotency registry for the host's
+full replay/audit window, and reuse the same availability instant on retries.
+
 ## Ordinary-job replay
 
 The opt-in [`replay` package](replay/README.md) stages an explicitly admitted
