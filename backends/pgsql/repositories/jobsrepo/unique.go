@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/georgysavva/scany/v2/pgxscan"
 
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 func createUniqueJob(
