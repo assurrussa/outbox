@@ -1315,3 +1315,24 @@ Source verification used stdin gofumpt, gci with the backend module prefix
 equivalent to localmodule, and gofmt. No tests or lint were run in this source
 correction. Resume affected package/example tests, tagged vet and scoped lint
 in the validation environment. Owned PostgreSQL race tests remain unrun.
+
+## 2026-10-10: Recipient effect and process-kill recovery fixture
+
+Add one SQLite integration test for the delivery side-effect/ACK boundary,
+complementing the existing dispatcher lost-ACK tests. The parent owns two
+WAL/FULL temporary files, an eight-target event and a bounded child worker.
+A test-only repository wrapper allows dispatcher ACK, then pauses delivery ACK
+after the separate recipient ledger/business counter has committed. Kill the
+worker process, reopen both files, and restart the real service without editing
+leases. Assert the persisted lease is live at restart, the retried handler
+starts after that deadline, exact targets/payloads, one duplicate committed recipient attempt,
+one business effect per delivery, queue drain and empty DLQ. Recipient identity
+and business mutation share one recipient transaction; Outbox still provides
+at-least-once delivery, not arbitrary exactly-once external effects.
+
+No production code, API, dependency, migration or workflow change. No fanout
+capacity or database-server-outage claim. The own working environment supports
+format/source review but cannot create Go build temporaries. Publish only as a
+draft after independent review; validate through the existing manual Go workflow
+before merge. The fixture guide records commands and interpretation; runtime
+validation must be reported separately for the exact tested commit.
