@@ -91,3 +91,64 @@ to this sink. This baseline is characterization only: no optimization or new
 fanout API is justified solely by these synthetic samples. A storage-backed
 workload with owned fixtures, application acceptance criteria and explicit
 resource budgets is a separate next measurement if needed.
+
+## Recorded baseline: 2026-10-10
+
+[Manual run 89](https://github.com/assurrussa/outbox/actions/runs/38029640414)
+passed on clean tracked source `2ad4da37468f97a11edcd7e9004c6dfc87d51439`.
+The runner used Go 1.26.8, Ubuntu 24.04.5, an AMD EPYC 9V45 virtual CPU
+(4 logical CPUs exposed; `GOMAXPROCS=1`), and 16,766,410,752 bytes of host memory.
+`GOMEMLIMIT=256MiB` remained the soft runtime budget. This is one hosted machine
+session, not independent hardware replication.
+
+Each cell summarizes five samples of five measured operations. Time range is
+min–max across those sample averages, not an individual-operation distribution.
+Allocation columns are medians; full allocation ranges are in the manifest.
+
+| Targets | Phase | Median ms/event | Sample range ms/event | Median B/event | Median allocations/event |
+|---:|---|---:|---:|---:|---:|
+| 10 | enqueue | 0.013022 | 0.011768–0.024421 | 7,144 | 36 |
+| 10 | dispatch | 0.068722 | 0.058392–0.075255 | 46,417 | 265 |
+| 1,000 | enqueue | 0.291155 | 0.286274–0.351171 | 301,024 | 2,018 |
+| 1,000 | dispatch | 5.373204 | 5.223944–5.450621 | 4,183,528 | 24,039 |
+| 10,000 | enqueue | 3.900252 | 3.300382–4.100137 | 2,976,420 | 20,054 |
+| 10,000 | dispatch | 58.612782 | 57.568998–59.339580 | 43,042,256 | 240,138 |
+
+At 10,000 targets the dispatcher passed exactly 10,000 delivery payloads totaling
+12,870,000 encoded bytes to the sink per event. Its approximately 43 MB of
+allocated bytes per event is cumulative allocation churn, not retained heap or
+RSS. The large enqueue sample's B/event varied from 2,714,659 to 2,976,420;
+reporting only the median must not erase that variability. No peak-memory
+measurement or hard memory-limit claim is made.
+
+This establishes a reference for the current core implementation. It does not
+identify an application SLO breach or a production bottleneck, and no optimization
+was made. Storage commit cost and real recipient work remain unmeasured here.
+
+### Validation and raw evidence
+
+- PASS: exact fanout correctness selection under race; six one-iteration race
+  smoke rows; `go vet ./outbox`; new-code golangci-lint 2.14.0 with zero issues;
+  all 30 non-race samples; independent final source review.
+- PASS: local source formatting via gofmt, gofumpt 0.11.0 and gci 0.14.0
+  (local formatting toolchain Go 1.27.2); measured toolchain was Go 1.26.8.
+- SKIPPED: full core and backend job groups, exactly as the true selector
+  requires. Retain unchanged correctness evidence from master `267ace7` and
+  PR42/run88. This run is not a new full `make check` or backend-capacity pass.
+- NOT_RUN: database-backed fanout load, recipient load, soak, fault-at-load,
+  multi-machine replication and peak RSS. No release or deployment.
+
+Four artifact text files preserved byte-for-byte (including trailing newlines),
+plus a derived summary manifest:
+
+- [Non-race samples](fanout-planning-20261010/benchmark.txt)
+- [Source and environment](fanout-planning-20261010/environment.txt)
+- [Focused correctness](fanout-planning-20261010/correctness.txt)
+- [Race smoke, excluded from measurements](fanout-planning-20261010/race-smoke.txt)
+- [Machine-readable provenance and summary](fanout-planning-20261010/manifest.json)
+
+GitHub artifact `11662066097` had ZIP SHA-256
+`e2087cb02b67d28d7e06977248672bbfbe2ac0294853a95953205b42b9cf2b0b`,
+verified after download. The repository copies keep the evidence beyond the
+artifact's 30-day retention. Subsequent evidence-only commits retain this
+source's successful checks; benchmark/production/workflow bytes are unchanged.
