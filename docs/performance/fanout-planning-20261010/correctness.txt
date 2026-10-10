@@ -1,0 +1,2 @@
+go: downloading go.uber.org/mock v0.6.0
+ok  	github.com/assurrussa/outbox/outbox	1.259s

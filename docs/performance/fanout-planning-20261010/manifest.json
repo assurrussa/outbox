@@ -1,0 +1,254 @@
+{
+  "schema": 1,
+  "date_utc": "2026-10-10",
+  "repository": "assurrussa/outbox",
+  "source_sha": "2ad4da37468f97a11edcd7e9004c6dfc87d51439",
+  "source_tree": "91e6cbc6df9029837773e8620fee173040201909",
+  "tracked_dirty": false,
+  "patch": "",
+  "run_url": "https://github.com/assurrussa/outbox/actions/runs/38029640414",
+  "run_id": 38029640414,
+  "job_id": 114147684135,
+  "pr_url": "https://github.com/assurrussa/outbox/pull/43",
+  "event": "workflow_dispatch",
+  "fanout_baseline_only": true,
+  "artifact": {
+    "id": 11662066097,
+    "sha256": "e2087cb02b67d28d7e06977248672bbfbe2ac0294853a95953205b42b9cf2b0b"
+  },
+  "environment": {
+    "go": "go1.26.8",
+    "os": "Ubuntu 24.04.5",
+    "runner_image": "ubuntu-24.04 20261004.327.1",
+    "goos": "linux",
+    "goarch": "amd64",
+    "goamd64": "v1",
+    "cgo_enabled": "1",
+    "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+    "exposed_cpus": 4,
+    "memory_bytes": 16766410752,
+    "GOMAXPROCS": 1,
+    "GOMEMLIMIT": "256MiB (soft)"
+  },
+  "commands": {
+    "correctness": "go test -race -count=1 -run '^Test(PutFanout|Fanout)' ./outbox",
+    "race_smoke": "timeout --kill-after=10s 180s go test -race -run '^$' -bench '^BenchmarkFanoutPlanning$' -benchtime=1x -count=1 -cpu=1 ./outbox",
+    "vet": "go vet ./outbox",
+    "lint": "golangci-lint v2.14.0 run --timeout=5m --new-from-rev=267ace7aa462d66ed0253572bbf66dd66b4d1976 ./outbox/...",
+    "baseline": "timeout --kill-after=10s 120s go test -run '^$' -bench '^BenchmarkFanoutPlanning$' -benchmem -benchtime=5x -count=5 -cpu=1 ./outbox"
+  },
+  "checks": {
+    "source_review": "PASS, no blocking findings",
+    "formatting": "PASS: gofmt, gofumpt v0.11.0, gci v0.14.0 (local Go1.27.2)",
+    "focused_correctness": "PASS",
+    "race_smoke": "PASS, 6 rows, not timing evidence",
+    "vet": "PASS",
+    "new_code_lint": "PASS, 0 issues",
+    "baseline": "PASS, 30 samples of 5 iterations",
+    "full_core": "SKIPPED, unchanged constituent evidence retained",
+    "backend_unit": "SKIPPED, unchanged constituent evidence retained",
+    "backend_integration": "SKIPPED, unchanged constituent evidence retained"
+  },
+  "summary": [
+    {
+      "targets": 10,
+      "phase": "enqueue",
+      "samples": 5,
+      "iterations_per_sample": 5,
+      "stats": {
+        "ns/op": {
+          "median": 13022,
+          "min": 11768,
+          "max": 24421
+        },
+        "B/op": {
+          "median": 7144,
+          "min": 7144,
+          "max": 7144
+        },
+        "allocs/op": {
+          "median": 36,
+          "min": 36,
+          "max": 36
+        },
+        "encoded-B/op": {
+          "median": 1868,
+          "min": 1868,
+          "max": 1868
+        },
+        "repo-calls/op": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        }
+      }
+    },
+    {
+      "targets": 10,
+      "phase": "dispatch",
+      "samples": 5,
+      "iterations_per_sample": 5,
+      "stats": {
+        "ns/op": {
+          "median": 68722,
+          "min": 58392,
+          "max": 75255
+        },
+        "B/op": {
+          "median": 46417,
+          "min": 46417,
+          "max": 46417
+        },
+        "allocs/op": {
+          "median": 265,
+          "min": 265,
+          "max": 265
+        },
+        "encoded-B/op": {
+          "median": 12870,
+          "min": 12870,
+          "max": 12870
+        },
+        "repo-calls/op": {
+          "median": 10,
+          "min": 10,
+          "max": 10
+        }
+      }
+    },
+    {
+      "targets": 1000,
+      "phase": "enqueue",
+      "samples": 5,
+      "iterations_per_sample": 5,
+      "stats": {
+        "ns/op": {
+          "median": 291155,
+          "min": 286274,
+          "max": 351171
+        },
+        "B/op": {
+          "median": 301024,
+          "min": 301024,
+          "max": 301024
+        },
+        "allocs/op": {
+          "median": 2018,
+          "min": 2018,
+          "max": 2018
+        },
+        "encoded-B/op": {
+          "median": 66218,
+          "min": 66218,
+          "max": 66218
+        },
+        "repo-calls/op": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        }
+      }
+    },
+    {
+      "targets": 1000,
+      "phase": "dispatch",
+      "samples": 5,
+      "iterations_per_sample": 5,
+      "stats": {
+        "ns/op": {
+          "median": 5373204,
+          "min": 5223944,
+          "max": 5450621
+        },
+        "B/op": {
+          "median": 4183528,
+          "min": 4183528,
+          "max": 4183528
+        },
+        "allocs/op": {
+          "median": 24039,
+          "min": 24039,
+          "max": 24039
+        },
+        "encoded-B/op": {
+          "median": 1287000,
+          "min": 1287000,
+          "max": 1287000
+        },
+        "repo-calls/op": {
+          "median": 1000,
+          "min": 1000,
+          "max": 1000
+        }
+      }
+    },
+    {
+      "targets": 10000,
+      "phase": "enqueue",
+      "samples": 5,
+      "iterations_per_sample": 5,
+      "stats": {
+        "ns/op": {
+          "median": 3900252,
+          "min": 3300382,
+          "max": 4100137
+        },
+        "B/op": {
+          "median": 2976420,
+          "min": 2714659,
+          "max": 2976420
+        },
+        "allocs/op": {
+          "median": 20054,
+          "min": 20050,
+          "max": 20054
+        },
+        "encoded-B/op": {
+          "median": 651218,
+          "min": 651218,
+          "max": 651218
+        },
+        "repo-calls/op": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        }
+      }
+    },
+    {
+      "targets": 10000,
+      "phase": "dispatch",
+      "samples": 5,
+      "iterations_per_sample": 5,
+      "stats": {
+        "ns/op": {
+          "median": 58612782,
+          "min": 57568998,
+          "max": 59339580
+        },
+        "B/op": {
+          "median": 43042256,
+          "min": 43042177,
+          "max": 43043340
+        },
+        "allocs/op": {
+          "median": 240138,
+          "min": 240137,
+          "max": 240143
+        },
+        "encoded-B/op": {
+          "median": 12870000,
+          "min": 12870000,
+          "max": 12870000
+        },
+        "repo-calls/op": {
+          "median": 10000,
+          "min": 10000,
+          "max": 10000
+        }
+      }
+    }
+  ],
+  "scope": "Synthetic core enqueue/dispatch preparation with a counting sink. No database, durable capacity, worker, recipient, p95/p99 or peak-memory claim.",
+  "release_or_deployment": false
+}

@@ -2,9 +2,15 @@ name: Go
 
 on:
   workflow_dispatch:
+    inputs:
+      fanout_baseline_only:
+        description: Run only the bounded synthetic fanout baseline and its focused checks
+        type: boolean
+        default: false
 
 jobs:
   core:
+    if: ${{ !inputs.fanout_baseline_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +27,7 @@ jobs:
         run: go test -race -v ./...
 
   backends-unit:
+    if: ${{ !inputs.fanout_baseline_only }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -41,6 +48,7 @@ jobs:
         run: go test -v ./...
 
   backends-integration:
+    if: ${{ !inputs.fanout_baseline_only }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -79,3 +87,69 @@ jobs:
       - name: Stop integration services
         if: always() && matrix.profile != ''
         run: docker compose down --remove-orphans
+
+  fanout-baseline:
+    if: ${{ inputs.fanout_baseline_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOMEMLIMIT: 256MiB
+      GOMAXPROCS: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Record source and environment
+        shell: bash
+        run: |
+          mkdir -p fanout-evidence
+          {
+            git rev-parse HEAD
+            git status --short --untracked-files=no
+            git diff --binary
+            sha256sum outbox/fanout.go outbox/fanout_benchmark_test.go go.mod go.sum go.work
+            go version
+            go env GOOS GOARCH GOVERSION GOAMD64 CGO_ENABLED
+            printf 'GOMEMLIMIT=%s GOMAXPROCS=%s\n' "$GOMEMLIMIT" "$GOMAXPROCS"
+            uname -a
+            lscpu
+            free -b
+          } > fanout-evidence/environment.txt
+          cat fanout-evidence/environment.txt
+
+      - name: Focused fanout correctness
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -count=1 -run '^Test(PutFanout|Fanout)' ./outbox 2>&1 | tee fanout-evidence/correctness.txt
+          timeout --kill-after=10s 180s go test -race -run '^$' -bench '^BenchmarkFanoutPlanning$' -benchtime=1x -count=1 -cpu=1 ./outbox 2>&1 | tee fanout-evidence/race-smoke.txt
+
+      - name: Vet fanout package
+        run: go vet ./outbox
+
+      - name: Lint added benchmark
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.14.0
+          args: --timeout=5m --new-from-rev=267ace7aa462d66ed0253572bbf66dd66b4d1976 ./outbox/...
+
+      - name: Bounded fanout planning baseline
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout --kill-after=10s 120s go test -run '^$' -bench '^BenchmarkFanoutPlanning$' -benchmem -benchtime=5x -count=5 -cpu=1 ./outbox 2>&1 | tee fanout-evidence/benchmark.txt
+
+      - name: Preserve raw evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanout-planning-${{ github.sha }}
+          path: fanout-evidence/
+          retention-days: 30

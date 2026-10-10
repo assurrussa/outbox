@@ -1,0 +1,36 @@
+goos: linux
+goarch: amd64
+pkg: github.com/assurrussa/outbox/outbox
+cpu: AMD EPYC 9V45 96-Core Processor                
+BenchmarkFanoutPlanning/targets=10/enqueue 	       5	     24421 ns/op	      1868 encoded-B/op	      2442 ns/target	         1.000 repo-calls/op	        10.00 targets/op	    7144 B/op	      36 allocs/op
+BenchmarkFanoutPlanning/targets=10/enqueue 	       5	     15924 ns/op	      1868 encoded-B/op	      1592 ns/target	         1.000 repo-calls/op	        10.00 targets/op	    7144 B/op	      36 allocs/op
+BenchmarkFanoutPlanning/targets=10/enqueue 	       5	     11768 ns/op	      1868 encoded-B/op	      1177 ns/target	         1.000 repo-calls/op	        10.00 targets/op	    7144 B/op	      36 allocs/op
+BenchmarkFanoutPlanning/targets=10/enqueue 	       5	     13022 ns/op	      1868 encoded-B/op	      1302 ns/target	         1.000 repo-calls/op	        10.00 targets/op	    7144 B/op	      36 allocs/op
+BenchmarkFanoutPlanning/targets=10/enqueue 	       5	     12611 ns/op	      1868 encoded-B/op	      1261 ns/target	         1.000 repo-calls/op	        10.00 targets/op	    7144 B/op	      36 allocs/op
+BenchmarkFanoutPlanning/targets=10/dispatch         	       5	     75255 ns/op	     12870 encoded-B/op	      7526 ns/target	        10.00 repo-calls/op	        10.00 targets/op	   46417 B/op	     265 allocs/op
+BenchmarkFanoutPlanning/targets=10/dispatch         	       5	     58392 ns/op	     12870 encoded-B/op	      5839 ns/target	        10.00 repo-calls/op	        10.00 targets/op	   46417 B/op	     265 allocs/op
+BenchmarkFanoutPlanning/targets=10/dispatch         	       5	     62326 ns/op	     12870 encoded-B/op	      6233 ns/target	        10.00 repo-calls/op	        10.00 targets/op	   46417 B/op	     265 allocs/op
+BenchmarkFanoutPlanning/targets=10/dispatch         	       5	     69699 ns/op	     12870 encoded-B/op	      6970 ns/target	        10.00 repo-calls/op	        10.00 targets/op	   46417 B/op	     265 allocs/op
+BenchmarkFanoutPlanning/targets=10/dispatch         	       5	     68722 ns/op	     12870 encoded-B/op	      6872 ns/target	        10.00 repo-calls/op	        10.00 targets/op	   46417 B/op	     265 allocs/op
+BenchmarkFanoutPlanning/targets=1000/enqueue        	       5	    351171 ns/op	     66218 encoded-B/op	       351.2 ns/target	         1.000 repo-calls/op	      1000 targets/op	  301024 B/op	    2018 allocs/op
+BenchmarkFanoutPlanning/targets=1000/enqueue        	       5	    301771 ns/op	     66218 encoded-B/op	       301.8 ns/target	         1.000 repo-calls/op	      1000 targets/op	  301024 B/op	    2018 allocs/op
+BenchmarkFanoutPlanning/targets=1000/enqueue        	       5	    286274 ns/op	     66218 encoded-B/op	       286.3 ns/target	         1.000 repo-calls/op	      1000 targets/op	  301024 B/op	    2018 allocs/op
+BenchmarkFanoutPlanning/targets=1000/enqueue        	       5	    291155 ns/op	     66218 encoded-B/op	       291.2 ns/target	         1.000 repo-calls/op	      1000 targets/op	  301024 B/op	    2018 allocs/op
+BenchmarkFanoutPlanning/targets=1000/enqueue        	       5	    286614 ns/op	     66218 encoded-B/op	       286.6 ns/target	         1.000 repo-calls/op	      1000 targets/op	  301024 B/op	    2018 allocs/op
+BenchmarkFanoutPlanning/targets=1000/dispatch       	       5	   5373204 ns/op	   1287000 encoded-B/op	      5373 ns/target	      1000 repo-calls/op	      1000 targets/op	 4183528 B/op	   24039 allocs/op
+BenchmarkFanoutPlanning/targets=1000/dispatch       	       5	   5268735 ns/op	   1287000 encoded-B/op	      5269 ns/target	      1000 repo-calls/op	      1000 targets/op	 4183528 B/op	   24039 allocs/op
+BenchmarkFanoutPlanning/targets=1000/dispatch       	       5	   5379724 ns/op	   1287000 encoded-B/op	      5380 ns/target	      1000 repo-calls/op	      1000 targets/op	 4183528 B/op	   24039 allocs/op
+BenchmarkFanoutPlanning/targets=1000/dispatch       	       5	   5450621 ns/op	   1287000 encoded-B/op	      5451 ns/target	      1000 repo-calls/op	      1000 targets/op	 4183528 B/op	   24039 allocs/op
+BenchmarkFanoutPlanning/targets=1000/dispatch       	       5	   5223944 ns/op	   1287000 encoded-B/op	      5224 ns/target	      1000 repo-calls/op	      1000 targets/op	 4183528 B/op	   24039 allocs/op
+BenchmarkFanoutPlanning/targets=10000/enqueue       	       5	   3300382 ns/op	    651218 encoded-B/op	       330.0 ns/target	         1.000 repo-calls/op	     10000 targets/op	 2714659 B/op	   20050 allocs/op
+BenchmarkFanoutPlanning/targets=10000/enqueue       	       5	   4100137 ns/op	    651218 encoded-B/op	       410.0 ns/target	         1.000 repo-calls/op	     10000 targets/op	 2976420 B/op	   20054 allocs/op
+BenchmarkFanoutPlanning/targets=10000/enqueue       	       5	   3920557 ns/op	    651218 encoded-B/op	       392.1 ns/target	         1.000 repo-calls/op	     10000 targets/op	 2976420 B/op	   20054 allocs/op
+BenchmarkFanoutPlanning/targets=10000/enqueue       	       5	   3893273 ns/op	    651218 encoded-B/op	       389.3 ns/target	         1.000 repo-calls/op	     10000 targets/op	 2976420 B/op	   20054 allocs/op
+BenchmarkFanoutPlanning/targets=10000/enqueue       	       5	   3900252 ns/op	    651218 encoded-B/op	       390.0 ns/target	         1.000 repo-calls/op	     10000 targets/op	 2976420 B/op	   20054 allocs/op
+BenchmarkFanoutPlanning/targets=10000/dispatch      	       5	  58376682 ns/op	  12870000 encoded-B/op	      5838 ns/target	     10000 repo-calls/op	     10000 targets/op	43042256 B/op	  240138 allocs/op
+BenchmarkFanoutPlanning/targets=10000/dispatch      	       5	  58612782 ns/op	  12870000 encoded-B/op	      5861 ns/target	     10000 repo-calls/op	     10000 targets/op	43042211 B/op	  240137 allocs/op
+BenchmarkFanoutPlanning/targets=10000/dispatch      	       5	  59339580 ns/op	  12870000 encoded-B/op	      5934 ns/target	     10000 repo-calls/op	     10000 targets/op	43042177 B/op	  240137 allocs/op
+BenchmarkFanoutPlanning/targets=10000/dispatch      	       5	  57568998 ns/op	  12870000 encoded-B/op	      5757 ns/target	     10000 repo-calls/op	     10000 targets/op	43043340 B/op	  240143 allocs/op
+BenchmarkFanoutPlanning/targets=10000/dispatch      	       5	  58791589 ns/op	  12870000 encoded-B/op	      5879 ns/target	     10000 repo-calls/op	     10000 targets/op	43043147 B/op	  240140 allocs/op
+PASS
+ok  	github.com/assurrussa/outbox/outbox	2.242s

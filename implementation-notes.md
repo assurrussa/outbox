@@ -1336,3 +1336,33 @@ format/source review but cannot create Go build temporaries. Publish only as a
 draft after independent review; validate through the existing manual Go workflow
 before merge. The fixture guide records commands and interpretation; runtime
 validation must be reported separately for the exact tested commit.
+
+## 2026-10-10: Bounded synthetic fanout planning baseline
+
+Existing fanout correctness fixtures use small target sets; the sole existing
+benchmark characterizes execution scheduling, not fanout cardinality. Add one
+core benchmark with fixed synthetic 10/1,000/10,000 target inputs and a 1 KiB
+event. Separate enqueue preparation from dispatcher materialization; reuse the
+existing callback test transactor and discard emitted deliveries after counting.
+Exact identity/content/order preflight is excluded from timed samples. Do not
+infer storage, worker, recipient, capacity, tail-latency or peak-memory results.
+
+The manual Go workflow gains an opt-in baseline-only selector, default false,
+with fixed iteration/time budgets, focused race/vet/new-code lint, and raw
+source/environment evidence. No automatic triggers, production code, dependency,
+API, database fixture or optimization changes. The own working environment can
+format/review source but cannot create Go build temporaries; runtime evidence
+must come from the explicitly selected manual hosted lane for the exact head.
+Reuse prior unchanged correctness constituents rather than repeating heavy
+backend/full-suite gates for this benchmark-only source addition.
+
+Manual focused run 89 passed on source `2ad4da37468f97a11edcd7e9004c6dfc87d51439`
+with Go 1.26.8: selected fanout race tests, all six race smoke rows, vet,
+zero-issue new-code lint and 30 bounded non-race samples. Existing full-core
+and backend job groups were correctly skipped. The exact artifact was retrieved
+and SHA-256 verified; preserve its four raw text files and summary manifest.
+At 10,000 targets, median enqueue preparation was 3.900252 ms/event and dispatcher
+materialization was 58.612782 ms/event, with median allocation churn 2,976,420
+and 43,042,256 bytes/event respectively. These are synthetic sink costs, not
+storage/recipient capacity or peak memory. Subsequent changes are evidence-only;
+retain the exact source gate and prior unchanged correctness constituents.

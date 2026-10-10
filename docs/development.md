@@ -54,19 +54,21 @@ does not supply the replay DSN automatically.
 
 ## Hosted Checks
 
-The `Go` GitHub Actions workflow uses only `workflow_dispatch`. Each manual
-launch retains the existing nine jobs: core, four backend unit jobs and four
-backend integration jobs. Pushes, pull requests and schedules do not request
-runs under this configuration. Automatic CI requires separate agreement;
-manual launches still consume hosted runner minutes.
+The `Go` GitHub Actions workflow uses only `workflow_dispatch`. With the default
+`fanout_baseline_only=false`, each manual launch retains the existing nine jobs:
+core, four backend unit jobs and four backend integration jobs. Setting the
+input to `true` runs only the bounded fanout planning baseline and its focused
+checks; a successful baseline-only run is not a full-suite pass. Pushes, pull
+requests and schedules do not request runs. Automatic CI requires separate
+agreement; manual launches still consume hosted runner minutes.
 
 Once this workflow configuration is on the default branch, maintainers can
 select **Actions → Go → Run workflow** and choose the branch to validate.
 See [GitHub's manual workflow instructions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-While the transition is only in a PR, the default branch retains its old
-automatic configuration; a transition event may still start an old-config run.
-Already-started runs are not cancelled by editing triggers. Keep validation
-evidence tied to its exact source revision and preserve required branch checks.
+Verify the selected branch and input values before launching a focused run.
+Already-started runs are not cancelled by editing workflow definitions. Keep
+validation evidence tied to its exact source revision and preserve required
+branch checks.
 
 ## Benchmarks
 
@@ -98,6 +100,12 @@ It records source checksums, tool versions, raw samples and the comparison.
 Run after source checks and without concurrent tests or load campaigns. Compare
 per-job metrics and report statistical uncertainty; an improvement in core
 does not prove an improvement in database-backed throughput.
+
+The separate [synthetic fanout planning baseline](performance/fanout-planning-baseline.md)
+measures enqueue preparation and dispatcher materialization at 10, 1,000 and
+10,000 recipients, with bounded fixed-iteration commands and explicit sink-only
+limits. Prefer its focused command when characterizing fanout rather than
+repeating the complete execution-path matrix.
 
 ## Integration Services
 

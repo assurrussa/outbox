@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/assurrussa/outbox/outbox
+cpu: AMD EPYC 9V45 96-Core Processor                
+BenchmarkFanoutPlanning/targets=10/enqueue 	       1	    130838 ns/op	      1868 encoded-B/op	     13084 ns/target	         1.000 repo-calls/op	        10.00 targets/op	   15432 B/op	      67 allocs/op
+BenchmarkFanoutPlanning/targets=10/dispatch         	       1	    752595 ns/op	     12870 encoded-B/op	     75260 ns/target	        10.00 repo-calls/op	        10.00 targets/op	   74328 B/op	     326 allocs/op
+BenchmarkFanoutPlanning/targets=1000/enqueue        	       1	   4194014 ns/op	     66218 encoded-B/op	      4194 ns/target	         1.000 repo-calls/op	      1000 targets/op	  712096 B/op	    3031 allocs/op
+BenchmarkFanoutPlanning/targets=1000/dispatch       	       1	  45651849 ns/op	   1287000 encoded-B/op	     45652 ns/target	      1000 repo-calls/op	      1000 targets/op	 6439544 B/op	   28884 allocs/op
+BenchmarkFanoutPlanning/targets=10000/enqueue       	       1	  47163739 ns/op	    651218 encoded-B/op	      4716 ns/target	         1.000 repo-calls/op	     10000 targets/op	 6232624 B/op	   29926 allocs/op
+BenchmarkFanoutPlanning/targets=10000/dispatch      	       1	 487021389 ns/op	  12870000 encoded-B/op	     48702 ns/target	     10000 repo-calls/op	     10000 targets/op	66404368 B/op	  289841 allocs/op
+PASS
+ok  	github.com/assurrussa/outbox/outbox	3.327s
