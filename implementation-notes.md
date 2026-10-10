@@ -1366,3 +1366,27 @@ materialization was 58.612782 ms/event, with median allocation churn 2,976,420
 and 43,042,256 bytes/event respectively. These are synthetic sink costs, not
 storage/recipient capacity or peak memory. Subsequent changes are evidence-only;
 retain the exact source gate and prior unchanged correctness constituents.
+
+
+## 2026-10-10: PostgreSQL connection-outage recovery fixture
+
+Add a bounded integration regression using only the existing suite-owned
+PostgreSQL database. Immediately before the first real fenced ACK, disable
+connections to that unique database and terminate only its sessions. Verify the
+real repository ACK fails, Run reports failure, and all eight persisted jobs
+survive. Restore availability, reuse the same pool/service, explicitly restart
+Run as the host would, and verify complete identity/payload reconciliation,
+lease-respecting retry, exactly one repeated handler invocation, empty queue
+and empty DLQ. A fresh bounded control connection restores availability on
+failure before the existing fixture cleanup. Shared server and sibling test
+databases are not stopped or altered.
+
+No production behavior, dependency, schema or workflow changes. This proves
+connection outage/reconnection only after its runtime gate passes; server
+process restart, external-effect durability and sustained soak are separate.
+The existing manual PostgreSQL integration lane includes the new test without
+new infrastructure. Source formatting is available in dot; Go compilation and
+race execution require that existing hosted lane because local build temporary
+creation is blocked. Preserve prior unchanged coverage and report exact runtime
+results separately. See docs/postgresql-connection-recovery.md for the command
+and interpretation.
