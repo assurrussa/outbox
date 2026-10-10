@@ -1,5 +1,12 @@
 # Performance evidence
 
+## Synthetic fanout planning
+
+The [bounded fanout baseline](performance/fanout-planning-baseline.md) separates
+core enqueue preparation and dispatcher materialization at synthetic recipient
+counts 10 / 1,000 / 10,000, using a fixed 1 KiB event and a counting sink.
+It reports time and allocations, not database or whole-system delivery capacity.
+
 ## Core lease scheduling
 
 The [2026-09-05 lease-bound comparison](performance/lease-bound-20260905.md)
