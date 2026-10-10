@@ -196,3 +196,12 @@ historical/custom data. Repository-generated IDs already satisfy this contract.
 
 The new listing orders by `LOWER(id)`. A custom index on raw text IDs may not
 satisfy that normalized ordering; inspect the query plan for large listings.
+
+## Recipient process-crash recovery fixture
+
+The [recipient process-crash fixture](../../docs/recipient-process-recovery.md)
+kills an owned worker after a separate recipient effect commits and before
+queue ACK, then reopens both SQLite files and reconciles backlog recovery.
+It runs in `make test-integration-sqlite`. This bounded correctness test does
+not establish power-loss durability, large-fanout capacity or exactly-once
+arbitrary external effects.
