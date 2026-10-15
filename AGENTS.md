@@ -166,7 +166,7 @@ make test-integration-picodata
 Release-oriented backend checks:
 
 ```sh
-make release-readiness-backends CORE_VERSION=v0.16.0
+make release-readiness-backends CORE_VERSION=v0.17.0
 ```
 
 Formatting and generated mocks:
