@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
-	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/types"
+	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 )
 
 func TestPicodataRejectsReservationBatchAboveOne(t *testing.T) {

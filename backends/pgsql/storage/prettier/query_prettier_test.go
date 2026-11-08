@@ -1,4 +1,4 @@
-package prettier
+package prettier //nolint:testpackage // tests unexported pretty helper
 
 import (
 	"testing"

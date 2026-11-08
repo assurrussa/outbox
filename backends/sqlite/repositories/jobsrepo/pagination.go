@@ -5,8 +5,9 @@ import (
 	"fmt"
 	stdstrings "strings"
 
-	"github.com/assurrussa/outbox/backends/sqlite"
 	"github.com/assurrussa/outbox/outbox/models"
+
+	"github.com/assurrussa/outbox/backends/sqlite"
 )
 
 // ListPage returns rows ordered by created_at DESC, canonical UUID DESC. Pass nil for the

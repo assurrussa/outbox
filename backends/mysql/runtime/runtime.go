@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+
 	"github.com/assurrussa/outbox/backends/mysql"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/mysql/storage"
 	mysqltx "github.com/assurrussa/outbox/backends/mysql/storage/transaction"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Config struct {
@@ -22,6 +23,8 @@ type Config struct {
 	IdleTime             time.Duration
 	ReserveFor           time.Duration
 	ReservationBatchSize int
+	RetryPolicy          coreoutbox.RetryPolicy
+	Observer             coreoutbox.Observer
 	Logger               logger.Logger
 }
 
@@ -56,12 +59,30 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 		return nil, fmt.Errorf("create outbox failed jobs repository: %w", err)
 	}
 	transactor := mysqltx.New(client.DB())
+	service, err := newService(config, jobs, jobs, failed, transactor)
+	if err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("create outbox service: %w", err)
+	}
+
+	return &Runtime{client: client, service: service, jobs: jobs, failed: failed, transactor: transactor}, nil
+}
+
+func newService(
+	config Config,
+	jobs coreoutbox.JobsRepository,
+	fanout coreoutbox.FanoutJobsRepository,
+	failed coreoutbox.JobsFailedRepository,
+	transactor coreoutbox.Transactor,
+) (*coreoutbox.Service, error) {
 	options := []coreoutbox.OptOptionsSetter{
 		coreoutbox.WithJobsRepo(jobs),
-		coreoutbox.WithFanoutJobsRepo(jobs),
 		coreoutbox.WithJobsFailedRepo(failed),
 		coreoutbox.WithTransactor(transactor),
 		coreoutbox.WithLogger(config.Logger),
+	}
+	if fanout != nil {
+		options = append(options, coreoutbox.WithFanoutJobsRepo(fanout))
 	}
 	if config.Workers != 0 {
 		options = append(options, coreoutbox.WithWorkers(config.Workers))
@@ -75,13 +96,13 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	if config.ReservationBatchSize != 0 {
 		options = append(options, coreoutbox.WithReservationBatchSize(config.ReservationBatchSize))
 	}
-	service, err := coreoutbox.New(options...)
-	if err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("create outbox service: %w", err)
+	if config.RetryPolicy != nil {
+		options = append(options, coreoutbox.WithRetryPolicy(config.RetryPolicy))
 	}
-
-	return &Runtime{client: client, service: service, jobs: jobs, failed: failed, transactor: transactor}, nil
+	if config.Observer != nil {
+		options = append(options, coreoutbox.WithObserver(config.Observer))
+	}
+	return coreoutbox.New(options...)
 }
 
 func (r *Runtime) Run(ctx context.Context) error { return r.service.Run(ctx) }

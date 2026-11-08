@@ -15,7 +15,7 @@ const immediateRollbackTimeout = 5 * time.Second
 
 type immediateConnection interface {
 	sqlExecutor
-	Raw(func(any) error) error
+	Raw(fn func(driverConn any) error) error
 	Close() error
 }
 

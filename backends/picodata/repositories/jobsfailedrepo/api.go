@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
-	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/strings"
 	"github.com/assurrussa/outbox/shared/types"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 )
 
 func (r *Repo) CreateFailedJobVersioned(
@@ -39,7 +39,7 @@ INSERT INTO %s (
 	queueName := "default"
 	connection := ""
 	exception := ""
-	now := time.Now()
+	now := time.Now().UTC()
 
 	exec := r.executor(ctx)
 	if _, err := exec.Exec(
@@ -173,7 +173,9 @@ func (r *Repo) ListPaged(ctx context.Context, limit int, before time.Time) ([]mo
 	}
 
 	query := strings.Concate(fmt.Sprintf(`
-SELECT id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason, failed_at, created_at, connection, exception FROM %%s
+SELECT id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason,
+    failed_at, created_at, connection, exception
+FROM %%s
 WHERE created_at < $1
 ORDER BY created_at DESC
 LIMIT %d;

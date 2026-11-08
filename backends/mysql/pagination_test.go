@@ -5,26 +5,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox/models"
+	"github.com/assurrussa/outbox/shared/types"
+
 	"github.com/assurrussa/outbox/backends/mysql"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsrepo"
-	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 type activePager interface {
-	ListPage(context.Context, int, *struct {
+	ListPage(ctx context.Context, limit int, before *struct {
 		CreatedAt time.Time
 		ID        types.JobID
 	}) ([]models.Job, error)
-	ListPaged(context.Context, int, time.Time) ([]models.Job, error)
+	ListPaged(ctx context.Context, limit int, before time.Time) ([]models.Job, error)
 }
 type failedPager interface {
-	ListPage(context.Context, int, *struct {
+	ListPage(ctx context.Context, limit int, before *struct {
 		CreatedAt time.Time
 		ID        types.JobID
 	}) ([]models.JobFailed, error)
-	ListPaged(context.Context, int, time.Time) ([]models.JobFailed, error)
+	ListPaged(ctx context.Context, limit int, before time.Time) ([]models.JobFailed, error)
 }
 
 var (

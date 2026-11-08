@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+	"github.com/assurrussa/outbox/shared/tests"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
@@ -17,9 +20,6 @@ import (
 	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/sqlite/storage/transaction"
 	sqlitetests "github.com/assurrussa/outbox/backends/sqlite/tests"
-	"github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
-	"github.com/assurrussa/outbox/shared/tests"
 )
 
 type TestSQLiteSuite struct {

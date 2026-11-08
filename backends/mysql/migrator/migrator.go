@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/pressly/goose/v3"
 
 	backendmigrations "github.com/assurrussa/outbox/backends/mysql/migrations"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Option func(o *Options)

@@ -17,11 +17,12 @@ var _ picodata.ClientTransaction = (*storage.ClientPicoData)(nil)
 func TestConstructionRequiresNonAtomicDLQOptIn(t *testing.T) {
 	// Construction validates capabilities without querying the zero-value client.
 	client := &storage.ClientPicoData{}
-	options := []outbox.OptOptionsSetter{
+	options := make([]outbox.OptOptionsSetter, 0, 4)
+	options = append(options,
 		outbox.WithJobsRepo(jobsrepo.Must(client)),
 		outbox.WithJobsFailedRepo(jobsfailedrepo.Must(client)),
 		outbox.WithTransactor(client.TxPool()),
-	}
+	)
 	_, err := outbox.New(options...)
 	require.ErrorIs(t, err, outbox.ErrNonAtomicDLQUnsupported)
 	options = append(options, outbox.WithAllowNonAtomicDLQ())

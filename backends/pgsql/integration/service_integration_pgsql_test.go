@@ -13,6 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+	outboxmodels "github.com/assurrussa/outbox/outbox/models"
+	"github.com/assurrussa/outbox/shared/tests"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/goleak"
@@ -25,11 +30,6 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlinit"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
-	"github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
-	outboxmodels "github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/tests"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 var (

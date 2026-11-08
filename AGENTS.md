@@ -177,17 +177,11 @@ make fmt
 make lint
 ```
 
-The Makefile exports ignored repository-local Go and linter caches. For ad hoc
-commands outside Make, use the same local build-cache principle:
-
-```sh
-mkdir -p tmp/gocache
-GOCACHE=$PWD/tmp/gocache go test ./...
-```
-
-If the module download cache is also restricted, keep `GOMODCACHE` outside the
-repository tree. Do not put `GOMODCACHE` under `tmp/`, because `go test ./...`
-will traverse downloaded dependency packages.
+The Makefile uses shared Go build/module/toolchain/lint caches outside the
+checkout, rooted at `$(HOME)/dev/projects/.cache/go`. Override
+`GO_SHARED_CACHE_ROOT` or individual cache variables for a specific check.
+Existing GOPATH and toolchain settings are preserved. Sandbox restrictions
+require permitted shared-cache access; do not create per-checkout cache copies.
 
 ## Environment
 

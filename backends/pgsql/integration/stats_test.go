@@ -7,10 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/shared/types"
+	"github.com/stretchr/testify/require"
 )
 
 func activeJobsCount(ctx context.Context, repo outbox.JobsStatRepository) (int64, error) {

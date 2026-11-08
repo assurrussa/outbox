@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	// Register MySQL driver for database/sql.
 	_ "github.com/go-sql-driver/mysql"
-
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Option func(o *Options)

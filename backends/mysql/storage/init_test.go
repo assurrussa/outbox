@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/mysql/storage"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 func TestCreate_InvalidOptions(t *testing.T) {

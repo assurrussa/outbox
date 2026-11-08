@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	picodatalogger "github.com/picodata/picodata-go/logger"
-
 	"github.com/assurrussa/outbox/outbox/logger"
+	picodatalogger "github.com/picodata/picodata-go/logger"
 )
 
 var _ picodatalogger.Logger = (*AdapterLog)(nil)

@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/assurrussa/outbox/backends/mysql/storage/transaction"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/strings"
 	"github.com/assurrussa/outbox/shared/types"
+
+	"github.com/assurrussa/outbox/backends/mysql/storage/transaction"
 )
 
 func (r *Repo) CreateFailedJobVersioned(
@@ -81,7 +82,8 @@ func (r *Repo) GetByID(ctx context.Context, jobID types.JobID) (models.JobFailed
 	}
 
 	query := strings.Concate(`
-SELECT id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception FROM %s WHERE id = ?;
+SELECT id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception
+FROM %s WHERE id = ?;
 `, r.tableName)
 
 	row := r.executor(ctx).QueryRowContext(ctx, query, jobID)

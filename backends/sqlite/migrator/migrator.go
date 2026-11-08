@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/pressly/goose/v3"
-	// Register SQLite driver for database/sql.
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Register SQLite driver for database/sql.
 
 	backendmigrations "github.com/assurrussa/outbox/backends/sqlite/migrations"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Option func(o *Options)

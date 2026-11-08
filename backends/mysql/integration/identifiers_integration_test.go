@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/mysql/migrations"
 	mysqltests "github.com/assurrussa/outbox/backends/mysql/tests"
-	"github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 func TestMySQLUniqueKeysUseExactBytes(t *testing.T) {

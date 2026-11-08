@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgxUUID "github.com/vgarvardt/pgx-google-uuid/v5"
 
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 // Client - postgres connection pool.

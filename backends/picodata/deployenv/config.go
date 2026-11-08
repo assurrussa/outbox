@@ -15,7 +15,7 @@ const (
 	envOutboxPicodataHost     = "OUTBOX_PICODATA_HOST"
 	envOutboxPicodataPort     = "OUTBOX_PICODATA_PORT"
 	envOutboxPicodataUser     = "OUTBOX_PICODATA_USER"
-	envOutboxPicodataPassword = "OUTBOX_PICODATA_PASSWORD"
+	envOutboxPicodataPassword = "OUTBOX_PICODATA_PASSWORD" //nolint:gosec // env variable name, not a credential
 	envOutboxPicodataSSLMode  = "OUTBOX_PICODATA_SSLMODE"
 
 	envPicodataListen          = "PICODATA_LISTEN"
@@ -104,13 +104,15 @@ func ValidateRuntimeEnv(lookup func(string) string) error {
 
 	if get(envPicodataListen) != "" && get(envPicodataIProtoListen) != "" {
 		return errors.New(
-			"picodata runtime env conflict: PICODATA_LISTEN and PICODATA_IPROTO_LISTEN are mutually exclusive; remove PICODATA_LISTEN and keep PICODATA_IPROTO_LISTEN",
+			"picodata runtime env conflict: PICODATA_LISTEN and PICODATA_IPROTO_LISTEN are mutually exclusive; " +
+				"remove PICODATA_LISTEN and keep PICODATA_IPROTO_LISTEN",
 		)
 	}
 
 	if get(envPicodataPGAdvertise) != "" && get(envPicodataIProtoAdvertise) != "" {
 		return errors.New(
-			"picodata runtime env conflict: PICODATA_PG_ADVERTISE and PICODATA_IPROTO_ADVERTISE are mutually exclusive; remove PICODATA_PG_ADVERTISE and keep PICODATA_IPROTO_ADVERTISE",
+			"picodata runtime env conflict: PICODATA_PG_ADVERTISE and PICODATA_IPROTO_ADVERTISE are mutually exclusive; " +
+				"remove PICODATA_PG_ADVERTISE and keep PICODATA_IPROTO_ADVERTISE",
 		)
 	}
 

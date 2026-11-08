@@ -11,12 +11,13 @@ import (
 	stdstrings "strings"
 	"time"
 
-	"github.com/assurrussa/outbox/backends/sqlite/storage/transaction"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	sharedstrings "github.com/assurrussa/outbox/shared/strings"
 	"github.com/assurrussa/outbox/shared/types"
+
+	"github.com/assurrussa/outbox/backends/sqlite/storage/transaction"
 )
 
 const defaultQueue = "queue"
@@ -152,7 +153,8 @@ func (r *Repo) findAndReserveBatchWithExecutor(
 	capabilities []coreoutbox.JobCapability,
 	limit int,
 ) ([]models.Job, error) {
-	args := []any{now.UTC().UnixMilli(), now.UTC().UnixMilli()}
+	args := make([]any, 0, 2+2*len(capabilities)+1)
+	args = append(args, now.UTC().UnixMilli(), now.UTC().UnixMilli())
 	clauses := make([]string, 0, len(capabilities))
 	for _, capability := range capabilities {
 		clauses = append(clauses, "(name = ? AND schema_version = ?)")
@@ -169,17 +171,16 @@ func (r *Repo) findAndReserveBatchWithExecutor(
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	jobs := make([]models.Job, 0, limit)
 	for rows.Next() {
 		job, scanErr := scanJob(rows)
 		if scanErr != nil {
-			_ = rows.Close()
 			return nil, scanErr
 		}
 		jobs = append(jobs, job)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
@@ -244,6 +245,7 @@ func (r *Repo) findAndReserveBatchBoundedWithExecutor(
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 
 	jobIDs := make([]types.JobID, 0, limits.MaxMessages)
 	usedBytes := int64(0)
@@ -252,7 +254,6 @@ func (r *Repo) findAndReserveBatchBoundedWithExecutor(
 		var jobID types.JobID
 		var payloadBytes int64
 		if err := rows.Scan(&jobID, &payloadBytes); err != nil {
-			_ = rows.Close()
 			return nil, err
 		}
 		if limitReached {
@@ -269,7 +270,6 @@ func (r *Repo) findAndReserveBatchBoundedWithExecutor(
 		limitReached = true
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
@@ -311,17 +311,16 @@ func (r *Repo) findAndReserveBatchBoundedWithExecutor(
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = claimedRows.Close() }()
 	jobs := make([]models.Job, 0, len(jobIDs))
 	for claimedRows.Next() {
 		job, scanErr := scanJob(claimedRows)
 		if scanErr != nil {
-			_ = claimedRows.Close()
 			return nil, scanErr
 		}
 		jobs = append(jobs, job)
 	}
 	if err := claimedRows.Err(); err != nil {
-		_ = claimedRows.Close()
 		return nil, err
 	}
 	if err := claimedRows.Close(); err != nil {

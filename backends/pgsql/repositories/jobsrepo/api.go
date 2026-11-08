@@ -8,16 +8,16 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/georgysavva/scany/v2/pgxscan"
-
-	"github.com/assurrussa/outbox/backends/pgsql/repositories"
-	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
-	pgsqltx "github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/types"
+	"github.com/georgysavva/scany/v2/pgxscan"
+
+	"github.com/assurrussa/outbox/backends/pgsql/repositories"
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
+	pgsqltx "github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 )
 
 const (
@@ -402,7 +402,8 @@ func (r *Repo) findAndReserveJobs(
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
-	args := []any{now.UTC(), until.UTC(), leaseToken, limit}
+	args := make([]any, 0, 6)
+	args = append(args, now.UTC(), until.UTC(), leaseToken, limit)
 	names := make([]string, 0, len(capabilities))
 	versions := make([]int32, 0, len(capabilities))
 	for _, capability := range capabilities {

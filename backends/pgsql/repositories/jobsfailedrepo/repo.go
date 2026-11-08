@@ -4,8 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	pgsql "github.com/assurrussa/outbox/backends/pgsql"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
+
+	pgsql "github.com/assurrussa/outbox/backends/pgsql"
 )
 
 type Options struct {

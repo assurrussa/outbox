@@ -32,11 +32,11 @@ func ValidateAndQuoteTableName(name string) (string, error) {
 		}
 		for i, r := range p {
 			if i == 0 {
-				if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && r != '_' {
+				if !isASCIIAlpha(r) && r != '_' {
 					return "", fmt.Errorf("mysql: invalid table name %q: must start with a letter or underscore", trimmed)
 				}
 			} else {
-				if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '_' {
+				if !isASCIIAlpha(r) && !isASCIIDigit(r) && r != '_' {
 					return "", fmt.Errorf("mysql: invalid table name %q: contains invalid character %c", trimmed, r)
 				}
 			}
@@ -45,4 +45,12 @@ func ValidateAndQuoteTableName(name string) (string, error) {
 	}
 
 	return stdstrings.Join(quotedParts, "."), nil
+}
+
+func isASCIIAlpha(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+func isASCIIDigit(r rune) bool {
+	return r >= '0' && r <= '9'
 }

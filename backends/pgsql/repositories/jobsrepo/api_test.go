@@ -8,6 +8,11 @@ import (
 	"testing"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/models"
+	"github.com/assurrussa/outbox/shared/sharederrors"
+	"github.com/assurrussa/outbox/shared/tests"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"golang.org/x/sync/errgroup"
@@ -15,11 +20,6 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/sharederrors"
-	"github.com/assurrussa/outbox/shared/tests"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 var (

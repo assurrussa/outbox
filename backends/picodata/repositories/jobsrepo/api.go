@@ -5,18 +5,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	stdstrings "strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
-	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/strings"
 	"github.com/assurrussa/outbox/shared/types"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 )
 
 func (r *Repo) CreateJobVersioned(
@@ -36,12 +37,12 @@ func (r *Repo) CreateJobVersioned(
 ) VALUES ($1, $2, $3, $4, $5, 0, NULL, $6, $7, $8);`, r.tableName)
 
 	id := types.NewJobID()
-	now := time.Now()
+	now := time.Now().UTC()
 	queueName := "default"
 
 	exec := r.executor(ctx)
 	if _, err := exec.Exec(
-		ctx, query, id, queueName, name, schemaVersion, payload, types.LeaseTokenNil, availableAt, now,
+		ctx, query, id, queueName, name, schemaVersion, payload, types.LeaseTokenNil, availableAt.UTC(), now,
 	); err != nil {
 		return types.JobIDNil, err
 	}
@@ -91,7 +92,10 @@ func (r *Repo) findAndReserveForCapabilities(
 	leaseToken types.LeaseToken,
 	capabilities []coreoutbox.JobCapability,
 ) (models.Job, error) {
-	args := []any{now}
+	now = now.UTC()
+	until = until.UTC()
+	args := make([]any, 0, 1+2*len(capabilities))
+	args = append(args, now)
 	clauses := make([]string, 0, len(capabilities))
 	for _, capability := range capabilities {
 		namePosition := len(args) + 1
@@ -234,7 +238,7 @@ func (r *Repo) DeleteJobWithLease(
 	}
 	query := strings.Concate(`DELETE FROM %s
 		WHERE id = $1 AND lease_token = $2 AND reserved_at > $3;`, r.tableName)
-	result, err := r.executor(ctx).Exec(ctx, query, jobID, leaseToken, now)
+	result, err := r.executor(ctx).Exec(ctx, query, jobID, leaseToken, now.UTC())
 	if err != nil {
 		return 0, err
 	}
@@ -390,6 +394,9 @@ ORDER BY name, schema_version;
 		}
 		group.SchemaVersion = coreoutbox.DefaultSchemaVersion
 		if schemaVersion.Valid && schemaVersion.Int64 > 0 {
+			if schemaVersion.Int64 > math.MaxInt32 {
+				return coreoutbox.QueueStats{}, fmt.Errorf("schema version %d overflows int32", schemaVersion.Int64)
+			}
 			group.SchemaVersion = coreoutbox.SchemaVersion(schemaVersion.Int64)
 		}
 		if oldest.Valid {
