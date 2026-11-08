@@ -65,6 +65,7 @@ release-readiness-backends: release-version-check
 			cp go.mod "$$tmp_mod" && \
 			{ test ! -f go.sum || cp go.sum "$$tmp_sum"; } && \
 			GOWORK=off go mod edit -dropreplace=github.com/assurrussa/outbox "$$tmp_mod" && \
+			GOWORK=off go mod download -modfile="$$tmp_mod" github.com/assurrussa/outbox >/dev/null && \
 			actual=$$(GOWORK=off go list -mod=mod -modfile="$$tmp_mod" -m -f '{{.Version}}{{if .Replace}} (replaced:{{.Replace.Path}}){{end}}' github.com/assurrussa/outbox) && \
 			if test "$$actual" != "$(CORE_VERSION)"; then \
 				echo "$$d resolves core $$actual, expected $(CORE_VERSION)"; \
