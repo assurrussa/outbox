@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+
 	"github.com/assurrussa/outbox/backends/mysql"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/mysql/storage"
 	mysqltx "github.com/assurrussa/outbox/backends/mysql/storage/transaction"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Config struct {
@@ -22,6 +23,8 @@ type Config struct {
 	IdleTime             time.Duration
 	ReserveFor           time.Duration
 	ReservationBatchSize int
+	RetryPolicy          coreoutbox.RetryPolicy
+	Observer             coreoutbox.Observer
 	Logger               logger.Logger
 }
 
@@ -74,6 +77,12 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	if config.ReservationBatchSize != 0 {
 		options = append(options, coreoutbox.WithReservationBatchSize(config.ReservationBatchSize))
+	}
+	if config.RetryPolicy != nil {
+		options = append(options, coreoutbox.WithRetryPolicy(config.RetryPolicy))
+	}
+	if config.Observer != nil {
+		options = append(options, coreoutbox.WithObserver(config.Observer))
 	}
 	service, err := coreoutbox.New(options...)
 	if err != nil {

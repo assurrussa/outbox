@@ -14,8 +14,6 @@ import (
 	"github.com/assurrussa/outbox/outbox"
 	outboxlogger "github.com/assurrussa/outbox/outbox/logger"
 	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/sharederrors"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 func main() {
@@ -160,11 +158,11 @@ func (j *stubRepo) CreateJobVersioned(
 	schemaVersion outbox.SchemaVersion,
 	payload string,
 	availableAt time.Time,
-) (types.JobID, error) {
+) (outbox.JobID, error) {
 	if err := (outbox.JobCapability{Name: name, SchemaVersion: schemaVersion}).Validate(); err != nil {
-		return types.JobIDNil, err
+		return outbox.JobID{}, err
 	}
-	jobID := types.NewJobID()
+	jobID := outbox.NewJobID()
 	now := time.Now().UTC()
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -176,7 +174,7 @@ func (j *stubRepo) CreateJobVersioned(
 		Payload:       payload,
 		Attempts:      0,
 		ReservedAt:    sql.NullTime{},
-		LeaseToken:    types.LeaseTokenNil,
+		LeaseToken:    outbox.LeaseToken{},
 		AvailableAt:   availableAt.UTC(),
 		CreatedAt:     now,
 	})
@@ -222,7 +220,7 @@ func (j *stubRepo) FindAndReserveJobsForCapabilities(
 		indices = append(indices, i)
 	}
 	if len(indices) == 0 {
-		return nil, sharederrors.ErrNoJobs
+		return nil, outbox.ErrNoJobs
 	}
 	sort.Slice(indices, func(a, b int) bool {
 		left, right := j.data[indices[a]], j.data[indices[b]]
@@ -247,7 +245,7 @@ func (j *stubRepo) FindAndReserveJobsForCapabilities(
 
 func (j *stubRepo) ExtendJobLeases(
 	_ context.Context,
-	jobIDs []types.JobID,
+	jobIDs []outbox.JobID,
 	leaseToken outbox.LeaseToken,
 	now time.Time,
 	until time.Time,
@@ -270,7 +268,7 @@ func (j *stubRepo) ExtendJobLeases(
 
 func (j *stubRepo) ReleaseUnstartedJobsWithLease(
 	_ context.Context,
-	jobIDs []types.JobID,
+	jobIDs []outbox.JobID,
 	leaseToken outbox.LeaseToken,
 	now time.Time,
 ) (int64, error) {
@@ -286,7 +284,7 @@ func (j *stubRepo) ReleaseUnstartedJobsWithLease(
 		}
 		j.data[i].Attempts--
 		j.data[i].ReservedAt = sql.NullTime{}
-		j.data[i].LeaseToken = types.LeaseTokenNil
+		j.data[i].LeaseToken = outbox.LeaseToken{}
 		affected++
 	}
 	return affected, nil
@@ -294,7 +292,7 @@ func (j *stubRepo) ReleaseUnstartedJobsWithLease(
 
 func (j *stubRepo) DeleteJobWithLease(
 	_ context.Context,
-	jobID types.JobID,
+	jobID outbox.JobID,
 	leaseToken outbox.LeaseToken,
 	now time.Time,
 ) (int64, error) {
@@ -312,7 +310,7 @@ func (j *stubRepo) DeleteJobWithLease(
 
 func (j *stubRepo) RescheduleJobWithLease(
 	_ context.Context,
-	jobID types.JobID,
+	jobID outbox.JobID,
 	leaseToken outbox.LeaseToken,
 	now time.Time,
 	availableAt time.Time,
@@ -325,7 +323,7 @@ func (j *stubRepo) RescheduleJobWithLease(
 			job.ReservedAt.Valid && job.ReservedAt.Time.After(now) {
 			j.data[i].AvailableAt = availableAt.UTC()
 			j.data[i].ReservedAt = sql.NullTime{}
-			j.data[i].LeaseToken = types.LeaseTokenNil
+			j.data[i].LeaseToken = outbox.LeaseToken{}
 			return 1, nil
 		}
 	}
@@ -336,13 +334,13 @@ func (*stubRepo) MaxReservationBatchSize() int { return outbox.MaxReservationBat
 
 func (j *stubRepo) CreateFailedJobVersioned(
 	_ context.Context,
-	jobID types.JobID,
+	jobID outbox.JobID,
 	name string,
 	schemaVersion outbox.SchemaVersion,
 	payload string,
 	reason string,
-) (types.JobID, error) {
-	failedJobID := types.NewJobID()
+) (outbox.JobID, error) {
+	failedJobID := outbox.NewJobID()
 	now := time.Now().UTC()
 
 	j.mu.Lock()
@@ -406,8 +404,8 @@ func (j *stubRepo) GetQueueStats(
 	return stats, nil
 }
 
-func jobIDSet(jobIDs []types.JobID) map[types.JobID]struct{} {
-	result := make(map[types.JobID]struct{}, len(jobIDs))
+func jobIDSet(jobIDs []outbox.JobID) map[outbox.JobID]struct{} {
+	result := make(map[outbox.JobID]struct{}, len(jobIDs))
 	for _, jobID := range jobIDs {
 		result[jobID] = struct{}{}
 	}

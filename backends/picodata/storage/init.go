@@ -77,7 +77,7 @@ func Create(ctx context.Context, dsn string, opts ...Option) (*ClientPicoData, e
 // checkPool retains ownership until initialization succeeds. Only a successful
 // return transfers the newly created pool to the caller's client.
 func checkPool(ctx context.Context, pool interface {
-	Ping(context.Context) error
+	Ping(ctx context.Context) error
 	Close()
 }, enabled bool,
 ) error {

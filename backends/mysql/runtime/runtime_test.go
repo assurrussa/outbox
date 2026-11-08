@@ -3,7 +3,9 @@ package runtime_test
 import (
 	"context"
 	"testing"
+	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/stretchr/testify/require"
 
 	mysqlruntime "github.com/assurrussa/outbox/backends/mysql/runtime"
@@ -11,7 +13,13 @@ import (
 
 func TestOpenRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
-	_, err := mysqlruntime.Open(context.Background(), mysqlruntime.Config{})
+	policy, err := coreoutbox.NewExponentialRetryPolicy(time.Second, time.Minute, nil)
+	require.NoError(t, err)
+	observer := make(chan coreoutbox.RuntimeOutcome, 1)
+	_, err = mysqlruntime.Open(context.Background(), mysqlruntime.Config{
+		RetryPolicy: policy,
+		Observer:    observer,
+	})
 	require.Error(t, err)
 }
 

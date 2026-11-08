@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+
 	"github.com/assurrussa/outbox/backends/picodata"
 	"github.com/assurrussa/outbox/backends/picodata/repositories"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
 )
 
 const defaultTableName = "outbox_jobs_failed"

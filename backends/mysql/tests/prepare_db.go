@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/assurrussa/outbox/outbox/logger"
+	sharedtests "github.com/assurrussa/outbox/shared/tests"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,8 +19,6 @@ import (
 	"github.com/assurrussa/outbox/backends/mysql"
 	"github.com/assurrussa/outbox/backends/mysql/migrator"
 	mysqlstorage "github.com/assurrussa/outbox/backends/mysql/storage"
-	"github.com/assurrussa/outbox/outbox/logger"
-	sharedtests "github.com/assurrussa/outbox/shared/tests"
 )
 
 var (

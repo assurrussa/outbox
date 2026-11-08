@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
-	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/types"
+	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 )
 
 func TestPostgreSQLBatchClaimFiltersAndFencesLifecycle(t *testing.T) {

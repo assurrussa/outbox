@@ -1,10 +1,12 @@
-package deployenv
+package deployenv //nolint:testpackage // tests unexported env constants
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+const testWildcardListenAddr = "0.0.0.0:3301"
 
 func TestLoadAppConnFromEnv_DSNPriority(t *testing.T) {
 	t.Parallel()
@@ -113,8 +115,8 @@ func TestValidateRuntimeEnv(t *testing.T) {
 		t.Parallel()
 
 		err := ValidateRuntimeEnv(mapLookup(map[string]string{
-			envPicodataListen:       "0.0.0.0:3301",
-			envPicodataIProtoListen: "0.0.0.0:3301",
+			envPicodataListen:       testWildcardListenAddr,
+			envPicodataIProtoListen: testWildcardListenAddr,
 		}))
 		require.ErrorContains(t, err, "PICODATA_LISTEN and PICODATA_IPROTO_LISTEN")
 		require.ErrorContains(t, err, "remove PICODATA_LISTEN")
@@ -135,7 +137,7 @@ func TestValidateRuntimeEnv(t *testing.T) {
 		t.Parallel()
 
 		err := ValidateRuntimeEnv(mapLookup(map[string]string{
-			envPicodataIProtoListen: "0.0.0.0:3301",
+			envPicodataIProtoListen: testWildcardListenAddr,
 		}))
 		require.NoError(t, err)
 	})

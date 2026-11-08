@@ -7,14 +7,15 @@ import (
 	"strings"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+
 	pgsql "github.com/assurrussa/outbox/backends/pgsql"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlclient"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlinit"
 	pgsqltx "github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Config struct {
@@ -25,6 +26,8 @@ type Config struct {
 	ReservationBatchSize int
 	MinConnectionsCount  int32
 	MaxConnectionsCount  int32
+	RetryPolicy          coreoutbox.RetryPolicy
+	Observer             coreoutbox.Observer
 	Logger               logger.Logger
 }
 
@@ -82,6 +85,12 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	if config.ReservationBatchSize != 0 {
 		options = append(options, coreoutbox.WithReservationBatchSize(config.ReservationBatchSize))
+	}
+	if config.RetryPolicy != nil {
+		options = append(options, coreoutbox.WithRetryPolicy(config.RetryPolicy))
+	}
+	if config.Observer != nil {
+		options = append(options, coreoutbox.WithObserver(config.Observer))
 	}
 	service, err := coreoutbox.New(options...)
 	if err != nil {

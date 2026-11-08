@@ -1,4 +1,4 @@
-package migrator
+package migrator //nolint:testpackage // tests unexported option and DDL retry helpers
 
 import (
 	"context"

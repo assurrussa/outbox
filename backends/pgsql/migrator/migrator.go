@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
 	backendmigrations "github.com/assurrussa/outbox/backends/pgsql/migrations"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type Option func(o *Options)

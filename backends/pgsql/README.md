@@ -35,6 +35,7 @@ runtime, err := pgsqlruntime.Open(ctx, pgsqlruntime.Config{
 	ReservationBatchSize: 32, // zero keeps the core default of 1
 	MinConnectionsCount:  1,
 	MaxConnectionsCount:  1,
+	// Optional: RetryPolicy and Observer are forwarded to outbox.New.
 })
 ```
 

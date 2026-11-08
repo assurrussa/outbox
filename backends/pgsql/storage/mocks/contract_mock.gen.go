@@ -13,11 +13,12 @@ import (
 	context "context"
 	reflect "reflect"
 
-	storage "github.com/assurrussa/outbox/backends/pgsql/storage"
 	pgx "github.com/jackc/pgx/v5"
 	pgconn "github.com/jackc/pgx/v5/pgconn"
 	pgxpool "github.com/jackc/pgx/v5/pgxpool"
 	gomock "go.uber.org/mock/gomock"
+
+	storage "github.com/assurrussa/outbox/backends/pgsql/storage"
 )
 
 // MockClient is a mock of Client interface.

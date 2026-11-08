@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/assurrussa/outbox/backends/picodata"
 	"github.com/assurrussa/outbox/outbox/models"
+
+	"github.com/assurrussa/outbox/backends/picodata"
 )
 
 // ListPage returns rows ordered by created_at DESC, id DESC. Pass nil for the
@@ -20,7 +21,9 @@ func (r *Repo) ListPage(ctx context.Context, limit int, before *picodata.PageCur
 	if limit > picodata.MaxPageSize {
 		return nil, fmt.Errorf("page limit must not exceed %d", picodata.MaxPageSize)
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s", "id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason, failed_at, created_at, connection, exception", r.tableName)
+	const cols = "id, job_id, queue, name, COALESCE(schema_version, 1), payload, reason, " +
+		"failed_at, created_at, connection, exception"
+	query := fmt.Sprintf("SELECT %s FROM %s", cols, r.tableName)
 	var args []any
 	if before != nil {
 		query += " WHERE created_at < $1 OR (created_at = $1 AND id < $2)"

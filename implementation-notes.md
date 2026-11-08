@@ -1390,3 +1390,27 @@ race execution require that existing hosted lane because local build temporary
 creation is blocked. Preserve prior unchanged coverage and report exact runtime
 results separately. See docs/postgresql-connection-recovery.md for the command
 and interpretation.
+
+## 2026-09-30: Shared Go cache defaults
+
+Ordinary local Go build/test/lint commands reuse shared caches outside checkout
+and worktree. `GO_SHARED_CACHE_ROOT` and individual cache overrides remain
+configurable; intentional disposable consumer/release caches retain isolation.
+Verified cache defaults, alternate root and explicit build-cache override with
+Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
+
+## 2026-11-08: v0.17.0 example/release alignment, runtime config parity, and backend lint
+
+- Aligned all `examples/base-app*/go.mod` and `go.sum` files to `github.com/assurrussa/outbox v0.17.0`
+  and included `EXAMPLE_DIRS` in `release-ready-backends` and `release-readiness-backends`
+  so standalone example builds (`GOWORK=off`) stay synchronized on core version bumps.
+- Updated remaining `v0.16.0` references in `RELEASING.md` and `docs/development.md`
+  to `v0.17.0`, replaced `types.NewMessageID()` with `outbox.NewMessageID()` in
+  `README.md`, and switched `examples/base-app/main.go` from `shared/types` and
+  `shared/sharederrors` to exported `outbox` identifiers and sentinels.
+- Exposed optional `RetryPolicy` and `Observer` fields on `backends/{mysql,sqlite,pgsql}/runtime.Config`
+  and updated `docs/contracts.md` plus backend READMEs and unit tests.
+- Wired `gci` and `golangci-lint` across all four backend modules in `Makefile`
+  (`fmt-backends`, `fmt-check-backends`, `lint-backends`, `lint-fix-backends`),
+  bounded `SchemaVersion` int64-to-int32 conversion in Picodata queue stats,
+  normalized repository timestamps to `.UTC()`, and resolved all backend lint findings.

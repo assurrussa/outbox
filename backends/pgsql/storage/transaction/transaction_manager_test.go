@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/assurrussa/outbox/shared/tests"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/assurrussa/outbox/backends/pgsql"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	pgsqltests "github.com/assurrussa/outbox/backends/pgsql/tests"
-	"github.com/assurrussa/outbox/shared/tests"
 )
 
 type TestSuite struct {

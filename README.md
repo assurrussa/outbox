@@ -450,7 +450,7 @@ per target in a transaction.
 
 ```go
 event := outbox.FanoutEvent{
-	ID:            types.NewMessageID(),
+	ID:            outbox.NewMessageID(),
 	Topic:         "cms.entry.published",
 	SchemaVersion: 1,
 	Payload:       json.RawMessage(`{"entryId":"1"}`),

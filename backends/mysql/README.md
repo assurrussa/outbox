@@ -66,7 +66,8 @@ capability claim implementation targets MySQL 8.0; the canonical integration
 image is `mysql:8.0`.
 
 For the standard facade, set
-`runtime.Config.ReservationBatchSize` (`0` keeps the default `1`). Batch claims
+`runtime.Config.ReservationBatchSize` (`0` keeps the default `1`), and optionally
+`runtime.Config.RetryPolicy` or `runtime.Config.Observer`. Batch claims
 first select at most the requested limit per exact capability through
 `jobs_capability_claim_index`, merge those bounded candidates in queue order,
 then conditionally reserve and reload the winners in a short read-committed

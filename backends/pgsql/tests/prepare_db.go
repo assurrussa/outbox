@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/assurrussa/outbox/outbox/logger"
+	sharedtests "github.com/assurrussa/outbox/shared/tests"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -21,8 +23,6 @@ import (
 	pgsqlpgx "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlclient"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlinit"
-	"github.com/assurrussa/outbox/outbox/logger"
-	sharedtests "github.com/assurrussa/outbox/shared/tests"
 )
 
 var (

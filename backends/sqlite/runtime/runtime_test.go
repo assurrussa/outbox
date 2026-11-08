@@ -4,7 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/stretchr/testify/require"
 
 	sqliteruntime "github.com/assurrussa/outbox/backends/sqlite/runtime"
@@ -18,9 +20,15 @@ func TestOpenRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestOpenSynchronousMode(t *testing.T) {
+	policy, err := coreoutbox.NewExponentialRetryPolicy(time.Second, time.Minute, nil)
+	require.NoError(t, err)
+	observer := make(chan coreoutbox.RuntimeOutcome, 1)
 	for _, mode := range []storage.SynchronousMode{"", storage.SynchronousNormal, storage.SynchronousFull} {
 		runtime, err := sqliteruntime.Open(t.Context(), sqliteruntime.Config{
-			DSN: filepath.Join(t.TempDir(), "runtime.db"), SynchronousMode: mode,
+			DSN:             filepath.Join(t.TempDir(), "runtime.db"),
+			SynchronousMode: mode,
+			RetryPolicy:     policy,
+			Observer:        observer,
 		})
 		require.NoError(t, err)
 		var actual int
@@ -32,7 +40,7 @@ func TestOpenSynchronousMode(t *testing.T) {
 		require.Equal(t, want, actual)
 		require.NoError(t, runtime.Close())
 	}
-	_, err := sqliteruntime.Open(t.Context(), sqliteruntime.Config{
+	_, err = sqliteruntime.Open(t.Context(), sqliteruntime.Config{
 		DSN: filepath.Join(t.TempDir(), "invalid.db"), SynchronousMode: "OFF",
 	})
 	require.ErrorContains(t, err, "synchronous mode must be NORMAL or FULL")

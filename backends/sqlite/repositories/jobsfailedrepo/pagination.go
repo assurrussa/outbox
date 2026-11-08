@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/assurrussa/outbox/backends/sqlite"
 	"github.com/assurrussa/outbox/outbox/models"
+
+	"github.com/assurrussa/outbox/backends/sqlite"
 )
 
 // ListPage returns rows ordered by created_at DESC, canonical UUID DESC. Pass nil for the
@@ -20,7 +21,8 @@ func (r *Repo) ListPage(ctx context.Context, limit int, before *sqlite.PageCurso
 	if limit > sqlite.MaxPageSize {
 		return nil, fmt.Errorf("page limit must not exceed %d", sqlite.MaxPageSize)
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s", "id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception", r.tableName)
+	const cols = "id, job_id, queue, name, schema_version, payload, reason, failed_at, created_at, connection, exception"
+	query := fmt.Sprintf("SELECT %s FROM %s", cols, r.tableName)
 	var args []any
 	if before != nil {
 		query += " WHERE created_at < ? OR (created_at = ? AND LOWER(id) < ?)"

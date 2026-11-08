@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+	sharedtests "github.com/assurrussa/outbox/shared/tests"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/pgsql/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
-	"github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
-	sharedtests "github.com/assurrussa/outbox/shared/tests"
 )
 
 // Only the unique database created by NewTestRepoSuite becomes unavailable.

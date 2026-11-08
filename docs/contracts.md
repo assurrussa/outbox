@@ -98,15 +98,17 @@ options = append(options, outbox.WithRetryPolicy(policy))
 svc, err := outbox.New(options...)
 ```
 
-Backend facade configuration remains unchanged; configure this option through
-core service construction. Atomic enqueue and retry scheduling do not guarantee
+Backend runtime facades (`backends/{mysql,sqlite,pgsql}/runtime`) also accept
+`Config.RetryPolicy` and forward a non-nil policy to `outbox.WithRetryPolicy`.
+Atomic enqueue and retry scheduling do not guarantee
 exactly once external effects; handlers still own effect idempotency.
 
 ## Optional Persisted-Outcome Observer
 
 `WithObserver(events)` accepts a send-only `Observer` channel of `RuntimeOutcome`
-values. Nil is the default no-op. Configure it during core service construction;
-backend facade configuration is unchanged. Notifications describe successful
+values. Nil is the default no-op. Configure it during core service construction
+or through `runtime.Config.Observer` on the PostgreSQL, MySQL, and SQLite
+runtime facades. Notifications describe successful
 configured storage/transaction returns, rather than handler completion:
 
 - `OutcomeACKConfirmed`: fenced delete returned exactly one affected row;

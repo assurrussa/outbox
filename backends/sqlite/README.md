@@ -65,7 +65,8 @@ the embedded migrations. The runtime does not migrate automatically and pins
 the pool to one connection because SQLite is a single-writer database.
 
 For the standard facade, set
-`runtime.Config.ReservationBatchSize` (`0` keeps the default `1`). A batch uses
+`runtime.Config.ReservationBatchSize` (`0` keeps the default `1`), and optionally
+`runtime.Config.RetryPolicy` or `runtime.Config.Observer`. A batch uses
 a short `BEGIN IMMEDIATE` write transaction and commits before handlers run.
 Concurrent direct repository users serialize at SQLite's writer boundary; the
 repository applies the busy timeout to every batch connection rather than only

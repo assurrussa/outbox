@@ -6,11 +6,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/assurrussa/outbox/shared/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/picodata/tests"
-	"github.com/assurrussa/outbox/shared/tools"
 )
 
 func TestInitDB(t *testing.T) {

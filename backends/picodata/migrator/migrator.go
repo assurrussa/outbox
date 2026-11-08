@@ -15,15 +15,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox/logger"
+
 	"github.com/assurrussa/outbox/backends/picodata"
 	backendmigrations "github.com/assurrussa/outbox/backends/picodata/migrations"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 const (
 	upMarker                   = "-- pico.UP"
 	downMarker                 = "-- pico.DOWN"
 	defaultMigrationsTableName = "picodata_db_version"
+	commandStatus              = "status"
 	ddlRetryAttempts           = 5
 	ddlRetryInitialDelay       = 100 * time.Millisecond
 )
@@ -41,7 +43,7 @@ type Options struct {
 
 func newDefaultOptions(directory string) Options {
 	return Options{
-		command:                   "status",
+		command:                   commandStatus,
 		directory:                 directory,
 		tableName:                 defaultMigrationsTableName,
 		args:                      nil,
@@ -132,7 +134,7 @@ func Run(ctx context.Context, picoPool picodata.Client, log logger.Logger, opts 
 	)
 
 	switch strings.ToLower(options.command) {
-	case "status":
+	case commandStatus:
 		maxAppliedVersion := findMaxAppliedVersion(appliedMigrations)
 		return printMigrationsStatus(ctx, migrations, appliedMigrations, maxAppliedVersion, log)
 	case "up":
@@ -188,7 +190,7 @@ func RunEmbedded(ctx context.Context, picoPool picodata.Client, log logger.Logge
 	)
 
 	switch strings.ToLower(options.command) {
-	case "status":
+	case commandStatus:
 		maxAppliedVersion := findMaxAppliedVersion(appliedMigrations)
 		return printMigrationsStatus(ctx, migrations, appliedMigrations, maxAppliedVersion, log)
 	case "up":

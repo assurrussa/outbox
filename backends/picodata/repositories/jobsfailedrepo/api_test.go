@@ -8,6 +8,10 @@ import (
 	"testing"
 	"time"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/models"
+	"github.com/assurrussa/outbox/shared/tests"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
@@ -15,10 +19,6 @@ import (
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsrepo"
 	picodatatests "github.com/assurrussa/outbox/backends/picodata/tests"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/tests"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 var (

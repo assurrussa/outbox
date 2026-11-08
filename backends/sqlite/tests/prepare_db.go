@@ -8,14 +8,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/assurrussa/outbox/outbox/logger"
+	"github.com/assurrussa/outbox/shared/tests/utilst"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/sqlite"
 	"github.com/assurrussa/outbox/backends/sqlite/migrator"
 	sqlitestorage "github.com/assurrussa/outbox/backends/sqlite/storage"
-	"github.com/assurrussa/outbox/outbox/logger"
-	"github.com/assurrussa/outbox/shared/tests/utilst"
 )
 
 type OptionDatabase func(*OptionsDatabase)

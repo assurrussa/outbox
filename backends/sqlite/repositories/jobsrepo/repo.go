@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 
+	coreoutbox "github.com/assurrussa/outbox/outbox"
+
 	"github.com/assurrussa/outbox/backends/sqlite"
 	"github.com/assurrussa/outbox/backends/sqlite/repositories"
-	coreoutbox "github.com/assurrussa/outbox/outbox"
 )
 
 const (

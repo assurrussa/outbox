@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/assurrussa/outbox/outbox/logger"
+	tests3 "github.com/assurrussa/outbox/shared/tests"
 	"github.com/google/uuid"
 	strats "github.com/picodata/picodata-go/strategies"
 	"github.com/stretchr/testify/require"
@@ -19,8 +21,6 @@ import (
 	"github.com/assurrussa/outbox/backends/picodata"
 	"github.com/assurrussa/outbox/backends/picodata/migrator"
 	picodatastorage "github.com/assurrussa/outbox/backends/picodata/storage"
-	"github.com/assurrussa/outbox/outbox/logger"
-	tests3 "github.com/assurrussa/outbox/shared/tests"
 )
 
 var (

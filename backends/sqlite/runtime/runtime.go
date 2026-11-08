@@ -23,6 +23,8 @@ type Config struct {
 	IdleTime             time.Duration
 	ReserveFor           time.Duration
 	ReservationBatchSize int
+	RetryPolicy          coreoutbox.RetryPolicy
+	Observer             coreoutbox.Observer
 	Logger               logger.Logger
 	SynchronousMode      storage.SynchronousMode
 }
@@ -83,6 +85,12 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	if config.ReservationBatchSize != 0 {
 		options = append(options, coreoutbox.WithReservationBatchSize(config.ReservationBatchSize))
+	}
+	if config.RetryPolicy != nil {
+		options = append(options, coreoutbox.WithRetryPolicy(config.RetryPolicy))
+	}
+	if config.Observer != nil {
+		options = append(options, coreoutbox.WithObserver(config.Observer))
 	}
 	service, err := coreoutbox.New(options...)
 	if err != nil {

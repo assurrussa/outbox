@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox/models"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/mysql"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/mysql/repositories/jobsrepo"
-	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 func TestMySQLListPage(t *testing.T) {

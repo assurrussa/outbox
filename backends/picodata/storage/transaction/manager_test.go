@@ -14,7 +14,7 @@ import (
 func TestBestEffortCallbackDoesNotInstallTransaction(t *testing.T) {
 	// RunInTx only checks that a pool exists; no network method is called.
 	runner := transaction.New(&picogo.Pool{})
-	var legacy *transaction.Manager = runner
+	legacy := runner
 	require.False(t, legacy.SupportsAtomicDLQ())
 	callbackErr := errors.New("owned callback failure")
 	calls := 0

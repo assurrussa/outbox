@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/sqlite/migrator"
@@ -22,8 +24,6 @@ import (
 	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/sqlite/storage"
 	"github.com/assurrussa/outbox/backends/sqlite/storage/transaction"
-	"github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 const sqliteRecipientProcessEnv = "OUTBOX_TEST_SQLITE_RECIPIENT_PROCESS_ROOT"

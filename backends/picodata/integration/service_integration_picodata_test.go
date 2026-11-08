@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox"
+	"github.com/assurrussa/outbox/outbox/logger"
+	"github.com/assurrussa/outbox/shared/tests"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
@@ -18,9 +21,6 @@ import (
 	"github.com/assurrussa/outbox/backends/picodata/repositories/jobsrepo"
 	"github.com/assurrussa/outbox/backends/picodata/storage/transaction"
 	picodatatests "github.com/assurrussa/outbox/backends/picodata/tests"
-	"github.com/assurrussa/outbox/outbox"
-	"github.com/assurrussa/outbox/outbox/logger"
-	"github.com/assurrussa/outbox/shared/tests"
 )
 
 type TestPicodataSuite struct {

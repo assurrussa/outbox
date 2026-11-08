@@ -11,12 +11,13 @@ import (
 	stdstrings "strings"
 	"time"
 
-	"github.com/assurrussa/outbox/backends/mysql/storage/transaction"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	sharedstrings "github.com/assurrussa/outbox/shared/strings"
 	"github.com/assurrussa/outbox/shared/types"
+
+	"github.com/assurrussa/outbox/backends/mysql/storage/transaction"
 )
 
 const (
@@ -236,18 +237,17 @@ func (r *Repo) findBatchCandidateIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select batch claim candidates: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 
 	jobIDs := make([]types.JobID, 0, limit)
 	for rows.Next() {
 		var jobID types.JobID
 		if err := rows.Scan(&jobID); err != nil {
-			_ = rows.Close()
 			return nil, fmt.Errorf("scan batch claim candidate: %w", err)
 		}
 		jobIDs = append(jobIDs, jobID)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, fmt.Errorf("iterate batch claim candidates: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -267,6 +267,7 @@ func (r *Repo) findBoundedBatchCandidateIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select bounded batch claim candidates: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 
 	jobIDs := make([]types.JobID, 0, limits.MaxMessages)
 	usedBytes := int64(0)
@@ -275,7 +276,6 @@ func (r *Repo) findBoundedBatchCandidateIDs(
 		var jobID types.JobID
 		var payloadBytes int64
 		if err := rows.Scan(&jobID, &payloadBytes); err != nil {
-			_ = rows.Close()
 			return nil, fmt.Errorf("scan bounded batch claim candidate: %w", err)
 		}
 		if limitReached {
@@ -292,7 +292,6 @@ func (r *Repo) findBoundedBatchCandidateIDs(
 		limitReached = true
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, fmt.Errorf("iterate bounded batch claim candidates: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -315,6 +314,7 @@ func (r *Repo) reserveBatchCandidates(
 	}
 	rollback := func() { _ = tx.Rollback() }
 
+	//nolint:gosec // tableName is validated/quoted at construction; placeholders are ? literals
 	queryUpdate := fmt.Sprintf(`UPDATE %s FORCE INDEX (PRIMARY)
 		SET attempts = attempts + 1, reserved_at = ?, lease_token = ?
 		WHERE id IN (%s)
@@ -349,6 +349,7 @@ func (r *Repo) reserveBatchCandidates(
 		)
 	}
 
+	//nolint:gosec // tableName and column names are trusted; placeholders are ? literals
 	queryClaimed := fmt.Sprintf(`SELECT %s FROM %s
 		WHERE id IN (%s) AND lease_token = ?
 		ORDER BY available_at, created_at, id;`,
@@ -363,19 +364,18 @@ func (r *Repo) reserveBatchCandidates(
 		rollback()
 		return nil, false, fmt.Errorf("load reserved batch claim candidates: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 
 	jobs := make([]models.Job, 0, updated)
 	for rows.Next() {
 		job, scanErr := scanJob(rows)
 		if scanErr != nil {
-			_ = rows.Close()
 			rollback()
 			return nil, false, fmt.Errorf("scan reserved batch claim candidate: %w", scanErr)
 		}
 		jobs = append(jobs, job)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		rollback()
 		return nil, false, fmt.Errorf("iterate reserved batch claim candidates: %w", err)
 	}

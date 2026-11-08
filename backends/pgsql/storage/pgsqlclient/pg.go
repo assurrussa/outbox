@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/assurrussa/outbox/outbox/logger"
 	"github.com/georgysavva/scany/v2/pgxscan"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -11,7 +12,6 @@ import (
 
 	pgsqlstorage "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/prettier"
-	"github.com/assurrussa/outbox/outbox/logger"
 )
 
 type clientPG struct {

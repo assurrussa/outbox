@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/assurrussa/outbox/outbox/models"
+	"github.com/assurrussa/outbox/shared/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/outbox/backends/sqlite"
 	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsfailedrepo"
 	"github.com/assurrussa/outbox/backends/sqlite/repositories/jobsrepo"
-	"github.com/assurrussa/outbox/outbox/models"
-	"github.com/assurrussa/outbox/shared/types"
 )
 
 func TestSQLiteListPage(t *testing.T) {

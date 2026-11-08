@@ -7,23 +7,24 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/georgysavva/scany/v2/pgxscan"
-
-	"github.com/assurrussa/outbox/backends/pgsql/repositories"
-	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	coreoutbox "github.com/assurrussa/outbox/outbox"
 	"github.com/assurrussa/outbox/outbox/models"
 	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	"github.com/assurrussa/outbox/shared/sharederrors"
 	"github.com/assurrussa/outbox/shared/types"
+	"github.com/georgysavva/scany/v2/pgxscan"
+
+	"github.com/assurrussa/outbox/backends/pgsql/repositories"
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 )
 
 const (
-	tableName = "jobs_failed"
+	tableName    = "jobs_failed"
+	defaultQueue = "queue"
 )
 
 var columns = []string{
-	"id", "job_id", "connection", "queue", "name", "schema_version", "payload", "reason", "exception",
+	"id", "job_id", "connection", defaultQueue, "name", "schema_version", "payload", "reason", "exception",
 	"failed_at", "created_at",
 }
 
@@ -40,17 +41,18 @@ func (r *Repo) CreateFailedJobVersioned(
 		return types.JobIDNil, fmt.Errorf("validate capability: %w", err)
 	}
 
+	now := time.Now().UTC()
 	return r.Create(ctx, models.JobFailed{
 		ID:            types.NewJobID(),
 		JobID:         jobID,
 		Connection:    "",
-		Queue:         "queue",
+		Queue:         defaultQueue,
 		Name:          name,
 		SchemaVersion: schemaVersion,
 		Payload:       payload,
 		Reason:        reason,
-		FailedAt:      time.Now(),
-		CreatedAt:     time.Now(),
+		FailedAt:      now,
+		CreatedAt:     now,
 	})
 }
 
@@ -67,7 +69,7 @@ func (r *Repo) Create(ctx context.Context, job models.JobFailed) (types.JobID, e
 			"id":             job.ID,
 			"job_id":         job.JobID,
 			"connection":     job.Connection,
-			"queue":          job.Queue,
+			defaultQueue:     job.Queue,
 			"name":           job.Name,
 			"schema_version": job.SchemaVersion,
 			"payload":        job.Payload,

@@ -1,4 +1,4 @@
-package transaction
+package transaction_test
 
 import (
 	"context"
@@ -8,6 +8,16 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/assurrussa/outbox/backends/mysql/storage/transaction"
+)
+
+const (
+	modeSuccess      = "success"
+	modeError        = "error"
+	modePanic        = "panic"
+	modeGoexit       = "goexit"
+	modeNestedGoexit = "nested goexit"
 )
 
 type auditTx struct {
@@ -20,12 +30,12 @@ func (tx *auditTx) Rollback() error { tx.rollbacks++; return tx.rollbackErr }
 
 type auditConnector struct{ tx *auditTx }
 
-func (c auditConnector) Connect(context.Context) (driver.Conn, error) { return auditConn{c.tx}, nil }
-func (c auditConnector) Driver() driver.Driver                        { return auditDriver{c.tx} }
+func (c auditConnector) Connect(context.Context) (driver.Conn, error) { return auditConn(c), nil }
+func (c auditConnector) Driver() driver.Driver                        { return auditDriver(c) }
 
 type auditDriver struct{ tx *auditTx }
 
-func (d auditDriver) Open(string) (driver.Conn, error) { return auditConn{d.tx}, nil }
+func (d auditDriver) Open(string) (driver.Conn, error) { return auditConn(d), nil }
 
 type auditConn struct{ tx *auditTx }
 
@@ -36,12 +46,12 @@ func (c auditConn) Begin() (driver.Tx, error)           { return c.tx, nil }
 func (c auditConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) { return c.tx, nil }
 
 func TestTransactionCallbackExit(t *testing.T) {
-	for _, mode := range []string{"success", "error", "panic", "goexit", "nested goexit"} {
+	for _, mode := range []string{modeSuccess, modeError, modePanic, modeGoexit, modeNestedGoexit} {
 		t.Run(mode, func(t *testing.T) {
 			tx := &auditTx{}
 			db := sql.OpenDB(auditConnector{tx})
 			defer db.Close()
-			manager := New(db)
+			manager := transaction.New(db)
 			done := make(chan struct{})
 			var err error
 			callbackErr := errors.New("callback failed")
@@ -49,13 +59,13 @@ func TestTransactionCallbackExit(t *testing.T) {
 				defer close(done)
 				err = manager.RunInTx(context.Background(), func(ctx context.Context) error {
 					switch mode {
-					case "error":
+					case modeError:
 						return callbackErr
-					case "panic":
+					case modePanic:
 						panic("callback panicked")
-					case "goexit":
+					case modeGoexit:
 						runtime.Goexit()
-					case "nested goexit":
+					case modeNestedGoexit:
 						return manager.RunInTx(ctx, func(context.Context) error { runtime.Goexit(); return nil })
 					}
 					return nil
@@ -66,22 +76,27 @@ func TestTransactionCallbackExit(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("transaction callback did not unwind")
 			}
-			if mode == "success" {
-				if err != nil || tx.commits != 1 || tx.rollbacks != 0 {
-					t.Fatalf("success: err=%v commits=%d rollbacks=%d", err, tx.commits, tx.rollbacks)
-				}
-			} else {
-				if tx.commits != 0 || tx.rollbacks != 1 {
-					t.Fatalf("aborted callback committed: commits=%d rollbacks=%d", tx.commits, tx.rollbacks)
-				}
-				if mode == "error" && !errors.Is(err, callbackErr) {
-					t.Fatalf("callback error lost: %v", err)
-				}
-				if (mode == "error" || mode == "panic") && err == nil {
-					t.Fatal("missing callback error")
-				}
-			}
+			assertCallbackExitOutcome(t, mode, tx, err, callbackErr)
 		})
+	}
+}
+
+func assertCallbackExitOutcome(t *testing.T, mode string, tx *auditTx, err, callbackErr error) {
+	t.Helper()
+	if mode == modeSuccess {
+		if err != nil || tx.commits != 1 || tx.rollbacks != 0 {
+			t.Fatalf("success: err=%v commits=%d rollbacks=%d", err, tx.commits, tx.rollbacks)
+		}
+		return
+	}
+	if tx.commits != 0 || tx.rollbacks != 1 {
+		t.Fatalf("aborted callback committed: commits=%d rollbacks=%d", tx.commits, tx.rollbacks)
+	}
+	if mode == modeError && !errors.Is(err, callbackErr) {
+		t.Fatalf("callback error lost: %v", err)
+	}
+	if (mode == modeError || mode == modePanic) && err == nil {
+		t.Fatal("missing callback error")
 	}
 }
 
@@ -93,9 +108,10 @@ func TestBorrowedTransactionRemainsCallerOwned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	callbackErr := errors.New("borrowed callback failed")
-	err = New(db).RunInTx(WithTx(context.Background(), tx), func(context.Context) error { return callbackErr })
+	txCtx := transaction.WithTx(context.Background(), tx)
+	err = transaction.New(db).RunInTx(txCtx, func(context.Context) error { return callbackErr })
 	if !errors.Is(err, callbackErr) {
 		t.Fatalf("callback error lost: %v", err)
 	}
@@ -113,7 +129,7 @@ func TestTransactionFinalizationErrors(t *testing.T) {
 			tx.commitErr = primaryErr
 		}
 		db := sql.OpenDB(auditConnector{tx})
-		err := New(db).RunInTx(context.Background(), func(context.Context) error {
+		err := transaction.New(db).RunInTx(context.Background(), func(context.Context) error {
 			if commitFailure {
 				return nil
 			}

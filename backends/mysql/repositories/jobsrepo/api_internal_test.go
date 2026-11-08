@@ -5,18 +5,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	coreoutbox "github.com/assurrussa/outbox/outbox"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildBatchCandidateQueryUsesCapabilityIndexAndDeduplicates(t *testing.T) {
 	t.Parallel()
 
+	const publishCapability = "publish"
 	now := time.Date(2026, time.August, 28, 10, 30, 0, 0, time.UTC)
 	capabilities := []coreoutbox.JobCapability{
-		{Name: "publish", SchemaVersion: 1},
-		{Name: "publish", SchemaVersion: 1},
+		{Name: publishCapability, SchemaVersion: 1},
+		{Name: publishCapability, SchemaVersion: 1},
 		{Name: "deliver", SchemaVersion: 2},
 	}
 
@@ -27,7 +27,7 @@ func TestBuildBatchCandidateQueryUsesCapabilityIndexAndDeduplicates(t *testing.T
 	require.NotContains(t, query, "jobs_batch_claim_index")
 	require.Contains(t, query, "ORDER BY available_at, created_at, id")
 	require.Equal(t, []any{
-		"publish", coreoutbox.SchemaVersion(1), now, now, 3,
+		publishCapability, coreoutbox.SchemaVersion(1), now, now, 3,
 		"deliver", coreoutbox.SchemaVersion(2), now, now, 3,
 		3,
 	}, args)
