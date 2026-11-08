@@ -1402,15 +1402,20 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
 ## 2026-11-08: v0.17.0 example/release alignment, runtime config parity, and backend lint
 
 - Aligned all `examples/base-app*/go.mod` and `go.sum` files to `github.com/assurrussa/outbox v0.17.0`
-  and included `EXAMPLE_DIRS` in `release-ready-backends` and `release-readiness-backends`
-  so standalone example builds (`GOWORK=off`) stay synchronized on core version bumps.
+  and included `EXAMPLE_DIRS` in `release-ready-backends` and `release-readiness-backends`.
+  In `release-readiness-backends`, example modules retain their committed `replace`
+  for local development, while the release gate evaluates a temporary `-modfile`
+  with `replace github.com/assurrussa/outbox` dropped so resolution and compilation
+  verify the published core tag in module cache rather than the local checkout.
 - Updated remaining `v0.16.0` references in `RELEASING.md` and `docs/development.md`
   to `v0.17.0`, replaced `types.NewMessageID()` with `outbox.NewMessageID()` in
   `README.md`, and switched `examples/base-app/main.go` from `shared/types` and
   `shared/sharederrors` to exported `outbox` identifiers and sentinels.
 - Exposed optional `RetryPolicy` and `Observer` fields on `backends/{mysql,sqlite,pgsql}/runtime.Config`
-  and updated `docs/contracts.md` plus backend READMEs and unit tests.
+  and updated `docs/contracts.md` plus backend READMEs and behavioral runtime tests
+  verifying retry scheduling and `OutcomeRetry`/`OutcomeSuccess` observer events.
 - Wired `gci` and `golangci-lint` across all four backend modules in `Makefile`
-  (`fmt-backends`, `fmt-check-backends`, `lint-backends`, `lint-fix-backends`),
-  bounded `SchemaVersion` int64-to-int32 conversion in Picodata queue stats,
-  normalized repository timestamps to `.UTC()`, and resolved all backend lint findings.
+  (`fmt-backends`, `fmt-check-backends`, `lint-backends`, `lint-fix-backends`)
+  with explicit non-zero exit status propagation in `fmt-check-*`, bounded
+  `SchemaVersion` int64-to-int32 conversion in Picodata queue stats, normalized
+  repository timestamps to `.UTC()`, and resolved all backend lint findings.

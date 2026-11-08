@@ -37,7 +37,7 @@ release-readiness-core: release-version-check prepare check
 	@git diff --exit-code -- . ':!.cache'
 
 release-readiness-pgsql: release-version-check
-	@actual=$$(cd backends/pgsql && GOWORK=off go list -m -f '{{.Version}}' github.com/assurrussa/outbox); \
+	@actual=$$(cd backends/pgsql && GOWORK=off go list -m -f '{{.Version}}{{if .Replace}} (replaced:{{.Replace.Path}}){{end}}' github.com/assurrussa/outbox); \
 		test "$$actual" = "$(CORE_VERSION)" || \
 		(echo "pgsql backend resolves core $$actual, expected $(CORE_VERSION)" && exit 2)
 	@cd backends/pgsql && GOWORK=off go mod tidy -diff
@@ -46,21 +46,37 @@ release-readiness-pgsql: release-version-check
 release-readiness-backends: release-version-check
 	@for d in $(BACKEND_DIRS); do \
 		echo "==> verify $$d uses core $(CORE_VERSION)"; \
-		actual=$$(cd $$d && GOWORK=off go list -m -f '{{.Version}}' github.com/assurrussa/outbox); \
+		actual=$$(cd $$d && GOWORK=off go list -m -f '{{.Version}}{{if .Replace}} (replaced:{{.Replace.Path}}){{end}}' github.com/assurrussa/outbox); \
 		if test "$$actual" != "$(CORE_VERSION)"; then \
 			echo "$$d resolves core $$actual, expected $(CORE_VERSION)"; \
 			exit 2; \
 		fi; \
 		(cd $$d && GOWORK=off go mod tidy -diff && GOWORK=off go test ./...) || exit 1; \
 	done
-	@for d in $(EXAMPLE_DIRS); do \
+	@repo_root="$$(pwd)"; \
+	for d in $(EXAMPLE_DIRS); do \
 		echo "==> verify $$d uses core $(CORE_VERSION)"; \
-		actual=$$(cd $$d && GOWORK=off go list -m -f '{{.Version}}' github.com/assurrussa/outbox); \
-		if test "$$actual" != "$(CORE_VERSION)"; then \
-			echo "$$d resolves core $$actual, expected $(CORE_VERSION)"; \
-			exit 2; \
-		fi; \
-		(cd $$d && GOWORK=off go mod tidy -diff && GOWORK=off go build ./...) || exit 1; \
+		( \
+			cd $$d && \
+			GOWORK=off go mod tidy -diff && \
+			tmp_mod=".go.release-check.mod" && \
+			tmp_sum=".go.release-check.sum" && \
+			trap 'rm -f "$$tmp_mod" "$$tmp_sum"' EXIT INT TERM && \
+			cp go.mod "$$tmp_mod" && \
+			{ test ! -f go.sum || cp go.sum "$$tmp_sum"; } && \
+			GOWORK=off go mod edit -dropreplace=github.com/assurrussa/outbox "$$tmp_mod" && \
+			actual=$$(GOWORK=off go list -mod=mod -modfile="$$tmp_mod" -m -f '{{.Version}}{{if .Replace}} (replaced:{{.Replace.Path}}){{end}}' github.com/assurrussa/outbox) && \
+			if test "$$actual" != "$(CORE_VERSION)"; then \
+				echo "$$d resolves core $$actual, expected $(CORE_VERSION)"; \
+				exit 2; \
+			fi && \
+			mod_dir=$$(GOWORK=off go list -mod=mod -modfile="$$tmp_mod" -m -f '{{.Dir}}' github.com/assurrussa/outbox) && \
+			if test -z "$$mod_dir" || test "$$mod_dir" = "$$repo_root"; then \
+				echo "$$d resolved core directory '$$mod_dir' instead of published module cache"; \
+				exit 2; \
+			fi && \
+			GOWORK=off go build -mod=mod -modfile="$$tmp_mod" ./... \
+		) || exit $$?; \
 	done
 
 full: prepare check
@@ -90,8 +106,12 @@ fmt-core:
 
 fmt-check-core:
 	@unformatted="$$(gofumpt -l $(CORE_GO_FILES))"; \
+		status=$$?; \
+		test $$status -eq 0 || exit $$status; \
 		test -z "$$unformatted" || { printf 'gofumpt changes are required:\n%s\nRun: make prepare\n' "$$unformatted" >&2; exit 1; }
 	@import_diff="$$(gci diff -s standard -s default -s "prefix(github.com/assurrussa/outbox)" $(CORE_GO_FILES) < /dev/null)"; \
+		status=$$?; \
+		test $$status -eq 0 || exit $$status; \
 		test -z "$$import_diff" || { printf 'gci changes are required:\n%s\nRun: make prepare\n' "$$import_diff" >&2; exit 1; }
 
 fmt-backends:
@@ -102,9 +122,16 @@ fmt-backends:
 
 fmt-check-backends:
 	@unformatted="$$(gofumpt -l $(BACKEND_GO_FILES))"; \
+		status=$$?; \
+		test $$status -eq 0 || exit $$status; \
 		test -z "$$unformatted" || { printf 'gofumpt changes are required:\n%s\nRun: make prepare\n' "$$unformatted" >&2; exit 1; }
 	@for d in $(BACKEND_DIRS); do \
-		import_diff="$$(gci diff -s standard -s default -s "prefix(github.com/assurrussa/outbox/$$d)" $$(find $$d -type f -name '*.go') < /dev/null)"; \
+		files="$$(find $$d -type f -name '*.go')"; \
+		status=$$?; \
+		test $$status -eq 0 || exit $$status; \
+		import_diff="$$(gci diff -s standard -s default -s "prefix(github.com/assurrussa/outbox/$$d)" $$files < /dev/null)"; \
+		status=$$?; \
+		test $$status -eq 0 || exit $$status; \
 		test -z "$$import_diff" || { printf 'gci changes are required in %s:\n%s\nRun: make prepare\n' "$$d" "$$import_diff" >&2; exit 1; }; \
 	done
 

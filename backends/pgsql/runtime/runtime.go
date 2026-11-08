@@ -67,12 +67,29 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 		return nil, fmt.Errorf("create outbox failed jobs repository: %w", err)
 	}
 	transactor := pgsqltx.New(client.DB())
+	service, err := newService(config, jobs, jobs, failed, transactor)
+	if err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("create outbox service: %w", err)
+	}
+	return &Runtime{client: client, service: service, jobs: jobs, failed: failed, transactor: transactor}, nil
+}
+
+func newService(
+	config Config,
+	jobs coreoutbox.JobsRepository,
+	fanout coreoutbox.FanoutJobsRepository,
+	failed coreoutbox.JobsFailedRepository,
+	transactor coreoutbox.Transactor,
+) (*coreoutbox.Service, error) {
 	options := []coreoutbox.OptOptionsSetter{
 		coreoutbox.WithJobsRepo(jobs),
-		coreoutbox.WithFanoutJobsRepo(jobs),
 		coreoutbox.WithJobsFailedRepo(failed),
 		coreoutbox.WithTransactor(transactor),
 		coreoutbox.WithLogger(config.Logger),
+	}
+	if fanout != nil {
+		options = append(options, coreoutbox.WithFanoutJobsRepo(fanout))
 	}
 	if config.Workers != 0 {
 		options = append(options, coreoutbox.WithWorkers(config.Workers))
@@ -92,12 +109,7 @@ func Open(ctx context.Context, config Config) (*Runtime, error) {
 	if config.Observer != nil {
 		options = append(options, coreoutbox.WithObserver(config.Observer))
 	}
-	service, err := coreoutbox.New(options...)
-	if err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("create outbox service: %w", err)
-	}
-	return &Runtime{client: client, service: service, jobs: jobs, failed: failed, transactor: transactor}, nil
+	return coreoutbox.New(options...)
 }
 
 func runtimePoolOptions(minConnectionsCount, maxConnectionsCount int32) ([]pgsqlclient.OptPoolOptionsSetter, error) {
