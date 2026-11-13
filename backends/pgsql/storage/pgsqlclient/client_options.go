@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/assurrussa/outbox/outbox/logger"
+	"github.com/jackc/pgx/v5"
 )
 
 var ErrOption = errors.New("pgsql client invalid option")
@@ -30,6 +31,7 @@ type PoolOptions struct {
 	check               bool
 	logger              logger.Logger
 	runtimeParams       map[string]string
+	queryTracer         pgx.QueryTracer
 }
 
 func NewOptions(
@@ -162,4 +164,17 @@ func WithRuntimeParams(params map[string]string) OptPoolOptionsSetter {
 			o.runtimeParams[key] = value
 		}
 	}
+}
+
+// WithQueryTracer installs an optional pgx tracer before connections are created.
+// The default is nil: no observer, logs, or request state are added. The caller
+// owns the tracer and must make it concurrency-safe and avoid retaining SQL
+// arguments or secrets. Other pgx tracer interfaces implemented by the supplied
+// value (batch, copy, prepare, connect) are also detected by pgx.
+//
+// Compose multiple observers with pgx/multitracer.New before passing them here.
+// Repeated options use the last value, including nil to disable. Existing SQL
+// logging and OpenTracing spans are independent and unchanged.
+func WithQueryTracer(tracer pgx.QueryTracer) OptPoolOptionsSetter {
+	return func(o *PoolOptions) { o.queryTracer = tracer }
 }
