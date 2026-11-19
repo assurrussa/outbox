@@ -135,7 +135,9 @@ func TestTransactionFinalizationErrors(t *testing.T) {
 			}
 			return primaryErr
 		})
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("close test database: %v", closeErr)
+		}
 		if !errors.Is(err, primaryErr) {
 			t.Fatalf("primary failure lost: %v", err)
 		}
