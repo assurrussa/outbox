@@ -206,3 +206,10 @@ _ = pgmigrator.Run(ctx, db, log,
 	pgmigrator.WithDirectory("/path/to/migrations"),
 )
 ```
+
+## Optional SQL observation
+
+The low-level PostgreSQL client accepts `pgsqlclient.WithQueryTracer(tracer)` at
+construction. It is disabled by default, preserves existing logging, and uses
+standard pgx tracing rather than duplicating query wrappers. See
+[tracing scope and privacy requirements](storage/pgsqlclient/TRACING.md).

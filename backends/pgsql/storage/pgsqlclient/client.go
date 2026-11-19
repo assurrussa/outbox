@@ -42,6 +42,7 @@ func NewPool(ctx context.Context, opts PoolOptions) (*Client, error) {
 	connConfig.MinConns = opts.minConnectionsCount
 	connConfig.MaxConns = opts.maxConnectionsCount
 	connConfig.ConnConfig.TLSConfig = tlsConfig
+	connConfig.ConnConfig.Tracer = opts.queryTracer
 	for key, value := range opts.runtimeParams {
 		connConfig.ConnConfig.RuntimeParams[key] = value
 	}
